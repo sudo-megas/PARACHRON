@@ -25,7 +25,7 @@ Single source of truth for the Parachron project. Every Chron milestone file bui
 |---|---|---|
 | Language | Rust (stable) | edition 2021+ |
 | GUI | Slint | UI in `.slint` files; logic in Rust |
-| PDF render | MuPDF (`mupdf` crate) | pages rasterized to images for the preview pane |
+| PDF render | MuPDF (`mupdf` crate) | pages rasterized to images for the preview pane; built with `default-features = false` plus `base14-fonts`, `system-fonts`, `brotli`, `img` — no OCR, no ebook formats, and **no PDF JavaScript execution** |
 | PDF export | MuPDF (reused) | generates summary page + merges product PDFs |
 | Data format | TOML (`toml` + `serde`) | one file per product |
 | Dates | `time` crate | Stored as native TOML dates (ISO `YYYY-MM-DD`); displayed as `DD-MM-YYYY`; days-left computed at runtime |
@@ -85,14 +85,15 @@ Window: resizable, minimum **1000×700**. Three fixed columns — **25 / 50 / 25
 │               │  │                         │  │                   │
 │               │  │                         │  │  Warranty start   │
 │               │  └─────────────────────────┘  │  14-03-2026       │
-│───────────────│  Serial number: ABC123XYZ     │                   │
+│               │  ‹ ›  2 / 12      Zoom ──●──   │                   │
+│───────────────│  Serial number: ABC123XYZ  ⧉  │                   │
 │ [ⓘ About]     │                               │  **658 days**     │
 └───────────────┴───────────────────────────────┴───────────────────┘
 ```
 
 Column 1 — product list. Default order: as added (`added` field). Two sort toggles: alphabetical (by `name`) and purchase date (oldest first, newest at bottom). Bottom strip: a fixed **About** entry (JADEITE-style sidebar footer) that opens the About view.
 
-Column 2 — document viewer. Workspace-style tabs switch between the selected product's PDFs (`pdfs` order). The preview takes the full remaining height. Below it, a fixed serial-number strip (size ratio per the project sketch — not exact).
+Column 2 — document viewer. Workspace-style tabs switch between the selected product's PDFs (`pdfs` order); each tab is labelled with the file-name stem, so `invoice.pdf` reads `Invoice`. The preview takes the full remaining height and shows **one page at a time, fitted whole** inside the pane. Under it a control row carries `‹` / `›`, a `2 / 12` page counter, and a **zoom slider** — zoom is a multiplier of the fit scale (`1×`–`4×`), so `1×` always means the whole page is visible whatever the window size; above `1×` the page pans. Page and zoom reset whenever the tab or product changes. Below that, a fixed **44px** serial-number strip: click it to copy the serial to the clipboard with a brief "copied" confirmation, the same gesture the purchase link uses in column 3.
 
 Column 3 — details + actions. Top: THEME and EXPORT buttons. Then purchase link (click = **copy to clipboard** with a brief "copied" confirmation — never opens a browser), purchase date, warranty start, and the warranty-left counter in days — bold, largest text in the column, its visual anchor.
 
@@ -194,5 +195,5 @@ One line of planned scope per milestone. Each Chron file is written in detail on
 ## 10. Open items
 
 - About subtitle and footer motto: wording to be chosen, in both EN and TR (JADEITE's: "Ekonomi Defteri" / "Built with Reason and Passion").
-- Serial-number strip exact size ratio: eyeballed from the project sketch, tune during Chron work.
-- Theme palettes: exact hex sets per theme to be pinned in the first UI milestone.
+- ~~Serial-number strip exact size ratio~~ — settled in Chron2: a fixed **44px**, not a proportion. It holds one line of text, and a proportional strip would grow absurd on a tall window.
+- Theme palettes: exact hex sets per theme to be pinned in the first UI milestone. Every colour already lives in the `Palette` global in `ui/palette.slint`, so Chron5 is a contained change.

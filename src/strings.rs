@@ -49,9 +49,23 @@ pub enum Key {
     BrokenPrefix,
     WarnPrefix,
 
-    // Placeholders (fleshed out in Chron2 and Chron4)
+    // Placeholders (the details column is fleshed out in Chron4)
     SelectPrompt,
     DetailsPlaceholder,
+
+    // Document viewer
+    NoDocuments,
+    Rendering,
+    PrevPage,
+    NextPage,
+    ZoomLabel,
+    SerialLabel,
+    Copied,
+    // Glyphs. They carry no words, but they are on screen, so they live here
+    // with everything else the user can see — same rule as Chron1's ⚠ prefix.
+    PrevGlyph,
+    NextGlyph,
+    CopyGlyph,
 
     // Broken and incomplete entries
     BrokenTitle,
@@ -62,6 +76,58 @@ pub enum Key {
     ErrMalformed,
     ErrInvalidDate,
     ErrConfigSave,
+
+    // Documents that will not open
+    ErrPdfMissing,
+    ErrNotAPdf,
+    ErrEncrypted,
+    ErrNoPages,
+    ErrRenderFailed,
+}
+
+impl Key {
+    /// Every key, in declaration order.
+    ///
+    /// Single source of truth so the exhaustiveness test below cannot drift
+    /// away from the enum — adding a key without adding it here is the one
+    /// mistake this table invites. Only the tests walk it; that is the point.
+    #[allow(dead_code)]
+    pub const ALL: &'static [Key] = &[
+        Key::AppTitle,
+        Key::MenuDocument,
+        Key::ActionAddDocument,
+        Key::ActionTheme,
+        Key::ActionExport,
+        Key::NavAbout,
+        Key::ListEmpty,
+        Key::BrokenPrefix,
+        Key::WarnPrefix,
+        Key::SelectPrompt,
+        Key::DetailsPlaceholder,
+        Key::NoDocuments,
+        Key::Rendering,
+        Key::PrevPage,
+        Key::NextPage,
+        Key::ZoomLabel,
+        Key::SerialLabel,
+        Key::Copied,
+        Key::PrevGlyph,
+        Key::NextGlyph,
+        Key::CopyGlyph,
+        Key::BrokenTitle,
+        Key::MissingFiles,
+        Key::ErrNoHome,
+        Key::ErrUnreadable,
+        Key::ErrMissingToml,
+        Key::ErrMalformed,
+        Key::ErrInvalidDate,
+        Key::ErrConfigSave,
+        Key::ErrPdfMissing,
+        Key::ErrNotAPdf,
+        Key::ErrEncrypted,
+        Key::ErrNoPages,
+        Key::ErrRenderFailed,
+    ];
 }
 
 /// Look up `key` in `lang`.
@@ -94,6 +160,20 @@ fn table(key: Key) -> (&'static str, &'static str) {
         ),
         DetailsPlaceholder => ("Details appear here.", "Detaylar burada görünür."),
 
+        NoDocuments => (
+            "This product has no documents yet.",
+            "Bu ürüne henüz belge eklenmemiş.",
+        ),
+        Rendering => ("Opening…", "Açılıyor…"),
+        PrevPage => ("Previous page", "Önceki sayfa"),
+        NextPage => ("Next page", "Sonraki sayfa"),
+        ZoomLabel => ("Zoom", "Yakınlaştırma"),
+        SerialLabel => ("Serial number", "Seri numarası"),
+        Copied => ("copied", "kopyalandı"),
+        PrevGlyph => ("‹", "‹"),
+        NextGlyph => ("›", "›"),
+        CopyGlyph => ("⧉", "⧉"),
+
         BrokenTitle => ("Broken entry", "Bozuk kayıt"),
         MissingFiles => ("Missing files", "Eksik dosyalar"),
         ErrNoHome => (
@@ -105,6 +185,18 @@ fn table(key: Key) -> (&'static str, &'static str) {
         ErrMalformed => ("product.toml is not valid", "product.toml geçerli değil"),
         ErrInvalidDate => ("Not a valid date", "Geçerli bir tarih değil"),
         ErrConfigSave => ("Could not save config.toml", "config.toml kaydedilemedi"),
+
+        ErrPdfMissing => (
+            "This file is not in the product folder",
+            "Bu dosya ürün klasöründe yok",
+        ),
+        ErrNotAPdf => ("Not a readable PDF", "Okunabilir bir PDF değil"),
+        ErrEncrypted => (
+            "This PDF is password-protected",
+            "Bu PDF parola korumalı",
+        ),
+        ErrNoPages => ("This PDF has no pages", "Bu PDF hiç sayfa içermiyor"),
+        ErrRenderFailed => ("This page could not be shown", "Bu sayfa görüntülenemedi"),
     }
 }
 
@@ -123,30 +215,24 @@ mod tests {
 
     #[test]
     fn every_key_has_both_languages() {
-        let keys = [
-            Key::AppTitle,
-            Key::MenuDocument,
-            Key::ActionAddDocument,
-            Key::ActionTheme,
-            Key::ActionExport,
-            Key::NavAbout,
-            Key::ListEmpty,
-            Key::BrokenPrefix,
-            Key::WarnPrefix,
-            Key::SelectPrompt,
-            Key::DetailsPlaceholder,
-            Key::BrokenTitle,
-            Key::MissingFiles,
-            Key::ErrNoHome,
-            Key::ErrUnreadable,
-            Key::ErrMissingToml,
-            Key::ErrMalformed,
-            Key::ErrInvalidDate,
-            Key::ErrConfigSave,
-        ];
-        for key in keys {
+        for &key in Key::ALL {
             assert!(!get(Lang::En, key).is_empty(), "empty EN string for {key:?}");
             assert!(!get(Lang::Tr, key).is_empty(), "empty TR string for {key:?}");
         }
+    }
+
+    #[test]
+    fn the_key_list_covers_the_whole_enum() {
+        // `table()` matches exhaustively, so a key missing from `Key::ALL` is
+        // the only way a string can go untested. Catch it by counting.
+        let mut seen: Vec<Key> = Key::ALL.to_vec();
+        let before = seen.len();
+        seen.dedup();
+        assert_eq!(before, seen.len(), "Key::ALL contains a duplicate");
+        assert_eq!(
+            Key::ALL.len(),
+            34,
+            "Key::ALL is out of step with the enum — add the new key to it"
+        );
     }
 }

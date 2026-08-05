@@ -9,7 +9,9 @@ repository = "https://github.com/sudo-megas/PARACHRON"
 readme = "README.md"
 
 [dependencies]
+arboard = { version = "3.6.1", features = ["wayland-data-control"], default-features = false }
 directories = "6.0.0"
+mupdf = { version = "0.8.0", default-features = false, features = ["base14-fonts", "system-fonts", "brotli", "img"] }
 serde = { version = "1.0.229", features = ["derive"] }
 slint = "1.17.1"
 time = { version = "0.3.55", features = ["macros", "formatting"] }

@@ -8,7 +8,9 @@
 
 mod config;
 mod data;
+mod render;
 mod strings;
+mod viewer;
 
 use slint::{ModelRc, VecModel};
 
@@ -32,6 +34,14 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let rows: Vec<ProductItem> = entries.iter().map(|entry| row(entry, lang)).collect();
     app.set_products(ModelRc::new(VecModel::from(rows)));
+
+    // Column 2. Kept alive for the life of the window — dropping it stops the
+    // render thread.
+    let products_root = paths
+        .as_ref()
+        .map(|paths| paths.products.clone())
+        .unwrap_or_default();
+    let _viewer = viewer::install(&app, products_root, entries, lang);
 
     // Logical pixels throughout: `min-width`/`min-height` in the `.slint` file
     // are logical too, so a HiDPI display cannot make the stored size mean
@@ -114,6 +124,16 @@ fn apply_strings(app: &AppWindow, lang: Lang) {
     table.set_list_empty(tr(lang, Key::ListEmpty).into());
     table.set_select_prompt(tr(lang, Key::SelectPrompt).into());
     table.set_details_placeholder(tr(lang, Key::DetailsPlaceholder).into());
+    table.set_no_documents(tr(lang, Key::NoDocuments).into());
+    table.set_rendering(tr(lang, Key::Rendering).into());
+    table.set_prev_page(tr(lang, Key::PrevPage).into());
+    table.set_next_page(tr(lang, Key::NextPage).into());
+    table.set_zoom_label(tr(lang, Key::ZoomLabel).into());
+    table.set_serial_label(tr(lang, Key::SerialLabel).into());
+    table.set_copied(tr(lang, Key::Copied).into());
+    table.set_prev_glyph(tr(lang, Key::PrevGlyph).into());
+    table.set_next_glyph(tr(lang, Key::NextGlyph).into());
+    table.set_copy_glyph(tr(lang, Key::CopyGlyph).into());
 }
 
 /// Turn one vault entry into a list row.

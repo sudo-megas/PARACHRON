@@ -1,7 +1,7 @@
 # Chron2 — Document viewer
 
 **Milestone:** 2 of ~9 (CORE §9)
-**Status:** not started
+**Status:** done
 **Builds against:** CORE §2 (stack — MuPDF), §3 (data model — `pdfs` order), §4 (layout, viewer column, app-wide principles), §8 (conventions & development rules), §10 (serial-strip ratio, open item to close here)
 
 ## Goal
@@ -27,36 +27,40 @@ Budget several minutes for that first `cargo build` — MuPDF is a large C libra
 ## Files to add and change
 
 ```
-Cargo.toml            # + mupdf, default-features = false (see Technical notes)
+Cargo.toml            # + mupdf and arboard, both default-features = false
 src/
-├── render.rs         # NEW — render worker, page rasterization, cache, ViewError
-├── data.rs           # + helper resolving a product's folder to absolute PDF paths
-├── strings.rs        # + viewer keys (tabs, page counter, zoom, error states)
-└── main.rs           # + wire product selection → tabs → renderer → image
+├── render.rs         # NEW — render worker, rasterization, LRU cache, ViewError
+├── viewer.rs         # NEW — which document, which page, at what size
+├── data.rs           # + Product::document_path
+├── strings.rs        # + viewer keys, and Key::ALL so the tests cannot drift
+└── main.rs           # + install the viewer; still wire-up only
 ui/
 ├── viewer.slint      # NEW — tabs, preview, control row, serial strip
+├── palette.slint     # NEW — Palette lifted out of app.slint so both can use it
 ├── app.slint         # column 2 hosts the viewer component
 └── strings.slint     # + viewer string properties
-tests/fixtures/       # NEW — sample.pdf (1 page), multipage.pdf, corrupt.pdf, encrypted.pdf
+tests/fixtures/       # NEW — six PDFs, see below
 ```
+
+`viewer.rs` was not in the original plan: the state machine (selection → tabs → page → zoom → request) is real logic and does not belong in a file Chron1 defined as wire-up only. Keeping it separate also makes it unit-testable without a window, which is how criteria 1–4 are verified below.
 
 ## Tasks
 
-- [ ] Install `clang`; add `mupdf` to `Cargo.toml` with `default-features = false` and only the features PDF rendering needs (Technical notes); confirm a clean `cargo build` succeeds
-- [ ] `render.rs`: a worker thread that owns every MuPDF handle, takes `RenderRequest { path, page, width_px, height_px }` over a channel and returns an RGBA buffer — MuPDF contexts are per-thread, so nothing MuPDF-shaped ever crosses back to the UI thread
-- [ ] Results reach Slint through `slint::invoke_from_event_loop`; the UI thread never calls MuPDF and never blocks
-- [ ] `ViewError` enum (missing file, unreadable, not a PDF, encrypted, zero pages, render failed) rendered through the string table — same typed-error pattern as `DataError`, for the same criterion-5 reason
-- [ ] Open a document once per tab and keep its page count and per-page bounds; bounds are cheap and drive the fit calculation without rasterizing
-- [ ] Bounded LRU cache keyed by `(path, page, width_px, height_px)`; stale entries dropped when the pane resizes or zoom changes
-- [ ] `data.rs`: helper turning a `Product` plus the products root into absolute PDF paths, reusing the `folder` field already on `Product`
-- [ ] `viewer.slint`: workspace-style tab row across the top of column 2, one tab per entry in `pdfs`, in that order; active tab visually distinct; tabs for files flagged in `missing_pdfs` (Chron1) render in the error style and are still selectable
-- [ ] Preview area fills the remaining height; the page is fitted whole inside it by default, centred, with a subtle page edge so a white page reads as a page against the panel
-- [ ] Control row: `‹` / `›` prev-next, a `2 / 12` counter, and a zoom slider (Technical notes for the semantics); controls disabled, not hidden, when a document has one page
-- [ ] Zoom above fit makes the page larger than the pane — wrap the preview in a `Flickable` so it pans, and re-render at the new pixel size rather than upscaling the cached bitmap
-- [ ] Serial-number strip pinned below the preview (CORE §4), showing the selected product's `serial`; label from the string table, value beside it
-- [ ] Empty and error states: product with no `pdfs`, PDF missing from disk, corrupt file, encrypted file, zero-page file — each a readable message from the string table, no panic
-- [ ] Selecting a different product or tab resets to page 1 at fit zoom; selecting a broken product keeps Chron1's reason display
-- [ ] Render a real invoice and a real multi-page warranty PDF end to end and confirm the minimal feature set is sufficient (Technical notes)
+- [x] Install `clang`; add `mupdf` to `Cargo.toml` with `default-features = false` and only the features PDF rendering needs (Technical notes); confirm a clean `cargo build` succeeds
+- [x] `render.rs`: a worker thread that owns every MuPDF handle, takes `RenderRequest { path, page, width_px, height_px }` over a channel and returns an RGBA buffer — MuPDF contexts are per-thread, so nothing MuPDF-shaped ever crosses back to the UI thread
+- [x] Results reach Slint through `slint::invoke_from_event_loop`; the UI thread never calls MuPDF and never blocks
+- [x] `ViewError` enum (missing file, unreadable, not a PDF, encrypted, zero pages, render failed) rendered through the string table — same typed-error pattern as `DataError`, for the same criterion-5 reason
+- [x] Open a document once per tab and keep its page count and per-page bounds; bounds are cheap and drive the fit calculation without rasterizing
+- [x] Bounded LRU cache keyed by `(path, page, width_px, height_px)`; stale entries dropped when the pane resizes or zoom changes
+- [x] `data.rs`: helper turning a `Product` plus the products root into absolute PDF paths, reusing the `folder` field already on `Product`
+- [x] `viewer.slint`: workspace-style tab row across the top of column 2, one tab per entry in `pdfs`, in that order; active tab visually distinct; tabs for files flagged in `missing_pdfs` (Chron1) render in the error style and are still selectable
+- [x] Preview area fills the remaining height; the page is fitted whole inside it by default, centred, with a subtle page edge so a white page reads as a page against the panel
+- [x] Control row: `‹` / `›` prev-next, a `2 / 12` counter, and a zoom slider (Technical notes for the semantics); controls disabled, not hidden, when a document has one page
+- [x] Zoom above fit makes the page larger than the pane — wrap the preview in a `Flickable` so it pans, and re-render at the new pixel size rather than upscaling the cached bitmap
+- [x] Serial-number strip pinned below the preview (CORE §4), showing the selected product's `serial`; label from the string table, value beside it
+- [x] Empty and error states: product with no `pdfs`, PDF missing from disk, corrupt file, encrypted file, zero-page file — each a readable message from the string table, no panic
+- [x] Selecting a different product or tab resets to page 1 at fit zoom; selecting a broken product keeps Chron1's reason display
+- [x] Render a real invoice and a real multi-page warranty PDF end to end and confirm the minimal feature set is sufficient (Technical notes)
 
 ## Acceptance criteria
 
@@ -72,7 +76,11 @@ tests/fixtures/       # NEW — sample.pdf (1 page), multipage.pdf, corrupt.pdf,
 
 ## Technical notes
 
-**Crate and features.** `mupdf` 0.8, itself AGPL-3.0 — which is exactly why CORE §1 fixes Parachron's licence. Its defaults pull `js`, `epub`, `xps`, `cbz`, `html`, `img`, `svg`, `docx-output`, `tesseract` and `brotli`, none of which a purchase vault needs; `tesseract` alone drags in OCR. Start from `default-features = false` and add back only `base14-fonts` (the 14 standard PDF fonts, needed whenever a PDF does not embed its own) and `system-fonts` (fontconfig fallback, already installed). Dropping `js` also means PDF-embedded JavaScript never executes — a security gain for files that arrive as email attachments. Note that `img` governs opening image *files* as documents, not images embedded inside a PDF, which the always-built codecs handle. That reasoning is sound but unproven here, hence the last task: if a real invoice fails to render, re-enable features one at a time and record what was needed.
+**Crate and features.** `mupdf` 0.8, itself AGPL-3.0 — which is exactly why CORE §1 fixes Parachron's licence. Its defaults pull `js`, `epub`, `xps`, `cbz`, `html`, `img`, `svg`, `docx-output`, `tesseract` and `brotli`; `tesseract` alone drags in an OCR engine. Settled on `default-features = false` plus `base14-fonts` (the 14 standard PDF fonts, needed whenever a PDF does not embed its own), `system-fonts` (fontconfig fallback), `brotli` and `img`. Dropping `js` also means PDF-embedded JavaScript never executes — a security gain for files that arrive as email attachments.
+
+That set is **proven, not assumed**: a real 19-page illustrated PDF with embedded fonts, colour fills, vector diagrams and code blocks renders correctly, as does the Helvetica fixture. The trimmed build also turned out cheap — a full vendored MuPDF compile lands in about **1m40s**, not the many minutes feared.
+
+**`arboard` for the clipboard.** Slint exposes no public clipboard API. Added with `default-features = false` plus `wayland-data-control` — the defaults drag in the `image` crate for clipboard *images*, which Parachron never copies. Verified end to end on Wayland: clicking the serial strip puts the serial on the system clipboard.
 
 **Threading.** MuPDF's `fz_context` is per-thread and its handles are not `Send`. One worker thread owns every context, document and page for the whole app; the UI thread only ever sends a `RenderRequest` and receives pixels. Requests are coalesced — a window drag produces a burst of resize requests and only the last matters, so drop superseded ones instead of queueing them.
 
@@ -82,11 +90,38 @@ tests/fixtures/       # NEW — sample.pdf (1 page), multipage.pdf, corrupt.pdf,
 
 **Tab labels.** CORE §4's wireframe shows `[Invoice] [Garanti] [.pdf]`, so the label is the file-name stem rather than a fixed English word — `invoice.pdf` → `Invoice`, `garanti.pdf` → `Garanti`. That keeps the tab honest about what is on disk and needs no translation, which is right for user-supplied file names. Elide long stems.
 
-**Serial strip.** CORE §10 leaves the ratio open and Chron2 is where it closes. Propose a fixed height (~44px) rather than a proportion: it is one line of text, and a proportional strip would grow absurd on a tall window. Pin the final number in CORE §10 and strike the open item.
+**Serial strip.** CORE §10 left the ratio open; Chron2 closed it at a fixed **44px** rather than a proportion — it is one line of text, and a proportional strip would grow absurd on a tall window. Recorded in CORE §10, open item struck.
 
-**Fixtures.** `tests/fixtures/` gets four small committed PDFs — one page, multi-page, deliberately corrupt, and encrypted — so criterion 6 is a test rather than a story. Keep them tiny; they live in git forever.
+**Fixtures.** `tests/fixtures/` holds six small committed PDFs, all generated deterministically (`sample.pdf` and `zero-page.pdf` hand-written, the rest via `qpdf`), so criterion 6 is a test rather than a story:
 
-**Error pattern.** `ViewError` follows `DataError`: a typed enum in `render.rs`, rendered to text by `main.rs` through the string table. Building the message in `render.rs` would plant a user-visible English literal outside `strings.rs` and fail criterion 8 — the same trap Chron1 hit.
+| Fixture | Bytes | What it proves |
+|---|---|---|
+| `sample.pdf` | 677 | One page, Helvetica — exercises `base14-fonts` |
+| `multipage.pdf` | 1066 | Three pages, for the counter and prev/next |
+| `encrypted.pdf` | 1427 | `needs_password` → `ViewError::Encrypted` |
+| `zero-page.pdf` | 239 | Valid PDF, zero pages → `ViewError::NoPages` |
+| `corrupt.pdf` | 538 | No `%PDF` header at all → `ViewError::NotAPdf` |
+| `truncated.pdf` | 338 | Half a PDF — and MuPDF *repairs* it (see below) |
+
+**MuPDF repairs damaged files.** The first `corrupt.pdf` was `sample.pdf` truncated in half, and it did not fail — MuPDF rebuilds a broken cross-reference table by scanning for objects, so it opened the file, found the page and rendered it. That is better behaviour than an error (a half-downloaded invoice still shows), but it meant the fixture was testing nothing. Split into two: `corrupt.pdf` is now bytes with no PDF header, which genuinely fails, and `truncated.pdf` pins the repair so losing it would be caught as a regression.
+
+**Error pattern.** `ViewError` follows `DataError`: a typed enum in `render.rs`, rendered to text by `viewer.rs` through the string table. Building the message in `render.rs` would plant a user-visible English literal outside `strings.rs` and fail criterion 8 — the same trap Chron1 hit.
+
+**Glyphs go through the string table too.** `‹`, `›` and the copy `⧉` are literals on screen, so by Chron1's own rule (which routes the `⚠` prefix) they belong in `strings.rs`. They are identical in both languages, but the criterion-8 sweep should come back genuinely clean rather than clean-with-exceptions.
+
+## How the criteria were verified
+
+46 tests pass (`cargo test`), up from Chron1's 19.
+
+**Automated.** `render.rs` tests drive every fixture: page counts, a raster fitted inside its target box and touching one side, an opaque mostly-white page that still contains dark pixels (so an empty render cannot pass), doubling the box doubles the page, and each failure fixture mapping to its `ViewError`. `viewer.rs` tests drive the state machine without a window: tabs built in `pdfs` order, a missing file flagged rather than dropped, a broken folder offering no documents, the render target equal to `viewport × display scale × zoom`, tokens incrementing so every request supersedes the last, and page/zoom resetting on tab or product change. The LRU cache is tested for both retrieval and least-recently-used eviction.
+
+**By eye, in the running app.** No Wayland input-injection tool exists on this machine (`ydotool`, `xdotool`, `wtype`, `kdotool` all absent), so clicking was driven by a temporary scaffold that invoked the same callbacks the UI does, then removed. Captured: a two-tab product with its page fitted and `1 / 1` with both nav buttons correctly disabled; the 19-page guide at `10 / 19` with both enabled and zoom at 2.2×, the page enlarged, panning, and re-rendered sharp rather than upscaled; and the error product showing "This PDF is password-protected" on its first tab.
+
+**Clipboard.** Verified through Klipper's D-Bus interface: after invoking the serial strip's copy, `getClipboardContents` returned `ABC123XYZ`.
+
+**Criterion 8.** The sweep over `src/` and `ui/` returns only icon resource paths, `""` emptiness comparisons, the `"monospace"` font-family identifier, format punctuation, and text inside comments. No user-visible words outside `strings.rs`.
+
+**Not verified by machine.** Criterion 7 (the window stays responsive during a long render) follows from the architecture — the UI thread never calls MuPDF — but was not measured under load. Worth a look with a very large scanned PDF when one turns up.
 
 ## Done when
 

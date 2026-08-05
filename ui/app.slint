@@ -5,24 +5,12 @@
 // placeholders that later Chrons fill in.
 
 import { ListView } from "std-widgets.slint";
+import { Palette } from "palette.slint";
 import { Strings } from "strings.slint";
+import { Viewer, DocTab } from "viewer.slint";
 
-// Re-exported so Rust can reach the global and fill it at startup.
-export { Strings }
-
-// The one hardcoded palette Chron1 allows. Chron5 replaces this with the
-// eleven themes from CORE §5, switchable at runtime.
-export global Palette {
-    out property <color> bg: #1b1b1d;
-    out property <color> panel: #232326;
-    out property <color> raised: #2c2c31;
-    out property <color> border: #3a3a40;
-    out property <color> text: #e6e6e8;
-    out property <color> muted: #9a9aa2;
-    out property <color> accent: #6fb2d2;
-    out property <color> danger: #e0736d;
-    out property <color> selection: #34343b;
-}
+// Re-exported so Rust can reach the global and the struct.
+export { Strings, DocTab }
 
 // One row of the product list. Assembled in Rust so that every string it
 // carries — including the broken/warning prefixes — comes from the string table.
@@ -81,6 +69,28 @@ export component AppWindow inherits Window {
     in-out property <string> selected-name;
     in-out property <string> selected-detail;
     in-out property <bool> selected-broken;
+
+    // Viewer state, driven from Rust (Chron2).
+    in property <[DocTab]> doc-tabs;
+    in-out property <int> active-tab: 0;
+    in property <image> page;
+    in property <length> page-width;
+    in property <length> page-height;
+    in property <int> page-index;
+    in property <int> page-count;
+    in property <string> page-label;
+    in property <bool> viewer-busy;
+    in property <string> viewer-error;
+    in property <string> selected-serial;
+    in property <bool> serial-copied;
+    in-out property <float> zoom: 1.0;
+
+    callback product-selected(int);
+    callback tab-selected(int);
+    callback page-requested(int);
+    callback zoom-changed(float);
+    callback copy-serial();
+    callback viewport-resized(length, length);
 
     title: Strings.app-title;
     icon: @image-url("../build/icons/parachron-256.png");
@@ -204,6 +214,7 @@ export component AppWindow inherits Window {
                                         root.selected-name = item.name;
                                         root.selected-detail = item.detail;
                                         root.selected-broken = item.broken;
+                                        root.product-selected(idx);
                                     }
                                 }
                             }
@@ -264,7 +275,9 @@ export component AppWindow inherits Window {
                     background: Palette.border;
                 }
 
-                VerticalLayout {
+                // Nothing selected, or a folder that would not parse — the
+                // viewer has nothing to open, so Chron1's reason display stays.
+                if root.selected-index < 0 || root.selected-broken: VerticalLayout {
                     padding: 20px;
                     spacing: 12px;
 
@@ -283,6 +296,42 @@ export component AppWindow inherits Window {
                     }
 
                     Rectangle { vertical-stretch: 1; }
+                }
+
+                if root.selected-index >= 0 && !root.selected-broken: viewer := Viewer {
+                    x: 1px;
+                    width: parent.width - 1px;
+                    height: parent.height;
+
+                    tabs: root.doc-tabs;
+                    active-tab: root.active-tab;
+                    page: root.page;
+                    page-width: root.page-width;
+                    page-height: root.page-height;
+                    page-index: root.page-index;
+                    page-count: root.page-count;
+                    page-label: root.page-label;
+                    busy: root.viewer-busy;
+                    error-text: root.viewer-error;
+                    serial: root.selected-serial;
+                    serial-copied: root.serial-copied;
+                    zoom: root.zoom;
+
+                    tab-selected(index) => {
+                        root.tab-selected(index);
+                    }
+                    page-requested(page) => {
+                        root.page-requested(page);
+                    }
+                    zoom-changed(value) => {
+                        root.zoom-changed(value);
+                    }
+                    copy-serial => {
+                        root.copy-serial();
+                    }
+                    viewport-resized(w, h) => {
+                        root.viewport-resized(w, h);
+                    }
                 }
             }
 

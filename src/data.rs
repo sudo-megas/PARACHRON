@@ -112,6 +112,16 @@ pub struct Product {
     pub missing_pdfs: Vec<String>,
 }
 
+impl Product {
+    /// Absolute path to one of this product's documents.
+    ///
+    /// Product folders are addressed by `folder`, not by `name` — the display
+    /// name is free to change or repeat, the folder is the identity.
+    pub fn document_path(&self, products_root: &Path, file: &str) -> PathBuf {
+        products_root.join(&self.folder).join(file)
+    }
+}
+
 /// A product folder, valid or not.
 ///
 /// Broken folders are surfaced, never hidden (CORE §3). This enum carries
