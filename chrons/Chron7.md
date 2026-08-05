@@ -1,0 +1,119 @@
+# Chron7 — Export
+
+**Milestone:** 7 of ~9 (CORE §9)
+**Status:** planned
+**Builds against:** CORE §6 (export, in full), §2 (MuPDF is reused for this — no second PDF library), §3 (data model — the fields the summary page reads; dates), §4 (column 3's EXPORT button, app-wide principles), §7 (packaging — no new build dependency on any target), §8 (conventions & development rules)
+
+## Goal
+
+EXPORT stops being a disabled stub. Selecting a product and pressing it produces one PDF containing a generated summary page followed by every one of that product's documents, in tab order, saved wherever the user chooses. The summary page is real text — searchable, selectable, printable — not a picture of text, and it carries the warranty countdown as it stood at the moment of export.
+
+This is the last milestone that adds a feature; Chron8 is polish and Chron9 is packaging. It is also the only one that makes Parachron *write* a PDF rather than read one.
+
+## Scope
+
+**In:** the summary page, generated from the product's data · appending the product's PDFs in tab order · one output file, at a path the user picks · export off the UI thread · documents that cannot be included, skipped and named on the summary page itself · EXPORT gated on a selection that can actually be exported · new string keys.
+
+**Out (explicitly):** exporting the whole vault at once — CORE §6 says this is a product-level action, and a vault-wide export is a different feature with a different summary page · exporting a subset of a product's documents · page ranges · a print dialog: Parachron writes a file and the user's PDF viewer prints it, which is also the only reading of CORE §4's no-external-opens rule that holds · encryption or password-protecting the output · embedding the product's images or the app's icon · a progress bar (see the note on why) · About (Chron8) · packaging (Chron9).
+
+## Prerequisites
+
+Chron5 and Chron6 complete: the summary page's labels come from the string table and are written in the language the app is in, so a Turkish session exports a Turkish summary. Nothing new to install, and **no new dependency** — CORE §2 says MuPDF is reused for export and it is. `rfd` is already in the tree from Chron3 and gains one more call.
+
+## The spike, and what it settled
+
+Chron3 established that a hard question gets spiked before the milestone's notes are written. This one had four, and all four are now answered against the real crate rather than assumed. The spike verified by *reading text back out of the saved file* with `Page::search`, never by absence of an error — a glyph the font cannot supply renders as nothing at all and raises nothing.
+
+**1. A base-14 font in its default encoding silently drops Turkish.** `TextOptions` defaults to `simple: true` with `SimpleFontEncoding::Latin`, and the three encodings the crate offers are Latin, Greek and Cyrillic. `ğ ş ı İ` are Latin Extended-A and are not in WinAnsi. Drawn that way, `Şarj Cihazı`, `Öğrenci` and `İphone` came back from the saved PDF with **zero** search hits each. `Ürün` came back with one, because `Ü` *is* in Latin-1 — which is exactly the trap: a careless check on a word like `Ürün` passes and the feature looks fine.
+
+**This was never a Turkish-mode question.** Product names and serial numbers are user data. Somebody running the app in English with a product called `Şarj Cihazı` — the app's own folder-slug test fixture — has to get a correct summary page. There was no version of this that could be deferred to a language setting.
+
+**2. `simple: false` fixes it completely, and costs nothing.** Registering the same `helv` as a composite font instead of a simple one gave **all five** words back, one hit each. The bundled base-14 face has the glyphs; only the encoding was in the way. So the fix is one field on `TextOptions`, and neither of the fallbacks the spike was prepared to fall back to is needed: no `bundled-fonts-noto` (binary size on all three of CORE §7's targets) and no `font-kit` system-font lookup (fragile on the Windows target there is no local machine to test). Every text run on the summary page is composite, unconditionally — not "when the string looks non-Latin", because deciding that per string is how the `Ürün` trap gets reintroduced.
+
+**3. The whole export is one in-memory document, with no temporary file.** `PdfDocument::new()`, a `new_page(Size::A4)`, a `Shape` committed onto it, then `insert_pdf` once per source, then write. The spike built a five-page file this way — summary plus a one-page and a three-page source — and the summary page's Turkish text was still searchable in the reopened output. An earlier sketch wrote the summary to a temporary file and reopened it to merge into; that step does not exist.
+
+**4. `PdfDocument::open` does *not* refuse an encrypted file, and this one matters.** `render::open_document` catches encryption because it explicitly asks `needs_password()` after opening — the comment there calls that "the honest test". `PdfDocument::open` on the same `encrypted.pdf` fixture returned `Ok`, and the document then reported `needs_password() == Ok(true)` and `page_count() == Ok(1)`. Merging that would append a page whose content stream cannot be decrypted. So export asks the same question in the same order, and it asks it through `render.rs` rather than in `export.rs`: a new `render::open_pdf` mirrors `open_document`'s three checks and returns a `PdfDocument`. `PdfDocument` dereferences to `Document`, so `render::page_count` is reused unchanged and there is still exactly one place in the app that decides what is wrong with a PDF and what it is called. A file that is not a PDF at all came back as an error already (`no objects found`), which maps onto `NotAPdf` like any other.
+
+## Files to add and change
+
+```
+src/
+├── export.rs         # NEW — the summary page, the merge, the thread
+├── render.rs         # + open_pdf, beside open_document and sharing its checks
+├── details.rs        # EXPORT becomes live; the status line
+├── main.rs           # + install export
+└── strings.rs        # + summary-page and export keys
+ui/
+├── details.slint     # EXPORT loses `enabled: false`; + a status line under the buttons
+└── strings.slint     # + export chrome
+```
+
+`export.rs` mirrors `import.rs` deliberately, down to the shape of its types: a `Job` that can cross to a thread, an `Outcome` that comes back, a `commit` that spawns and rings the window, and a `run` that is a plain function of a `Job` and is where all the tests point. The two modules are the same kind of thing — file I/O plus MuPDF, off the UI thread, reporting to a slot — and making the second one look like the first is cheaper to read than a second invention.
+
+## Tasks
+
+- [ ] `render.rs`: `open_pdf(path) -> Result<PdfDocument, ViewError>` — `is_file`, open, `needs_password`, mapped exactly as `open_document` maps them
+- [ ] `export.rs`: `Job` — the product's folder, its `Draft`-shaped data, the documents in tab order, the language, today's date, the output path
+- [ ] `export.rs`: inspect every source *before* drawing anything, so the summary page can name what it had to leave out
+- [ ] `export.rs`: `summary(doc, job)` — the page, laid out top-down on A4, every run composite
+- [ ] `export.rs`: labels and values through the string table, dates through `fmt_date`, the counter through the same `countdown` the details column uses
+- [ ] `export.rs`: append each usable source with `insert_pdf`, in tab order
+- [ ] `export.rs`: write with `write_to` into a `File`, not `save(&str)`
+- [ ] `export.rs`: `suggested_name(product, today)` — `Parachron-<name>-<DD-MM-YYYY>.pdf`, sanitised but not slugged
+- [ ] `export.rs`: `pick_destination` — `rfd` save dialog behind `spawn_local`, the same thin edge `import::pick` is
+- [ ] `export.rs`: `commit` — thread, slot, `invoke_export_finished`
+- [ ] `details.rs`: `on_export`, gated on a selection with a parsed manifest; busy, done and failed states
+- [ ] `details.slint`: EXPORT live, with a status line that does not reflow the column when it appears
+- [ ] `strings.slint` / `strings.rs`: every summary-page label, notice and error through the table, both languages
+- [ ] Delete `tests/glyph_spike.rs`; its four findings live on as tests in `export.rs` and `render.rs`
+
+## Acceptance criteria
+
+1. Exporting a product with two documents produces one PDF whose first page is the summary and whose remaining pages are those two documents' pages, in tab order.
+2. The summary page carries the product's name, serial number, purchase date, warranty start, warranty end, days left at the moment of export, and the purchase link — every one of CORE §6's fields.
+3. The summary page's text is selectable and searchable in an external PDF viewer, not an image: searching the output for the product's name finds it on page one.
+4. A product named `Şarj Cihazı` with a serial containing `İ` exports with those characters intact and findable, with the app in **English**.
+5. With the app in Turkish, the summary page's labels are Turkish and the countdown reads `658 gün`.
+6. The days-left figure on the page equals what column 3 showed at the moment EXPORT was pressed, and reads as expired rather than negative for a warranty that has run out.
+7. A product with a document listed in `product.toml` but absent from disk exports the rest, and the summary page names the one it could not include.
+8. A product with an encrypted or unreadable PDF does the same: the output is a valid PDF, the bad file is named on the summary page, and nothing crashes.
+9. A product with no documents at all exports a one-page PDF that is just the summary.
+10. The save dialog opens with `Parachron-<product-name>-<date>.pdf` suggested, and a product name containing `/` or a control character does not produce an unwritable suggestion.
+11. Cancelling the save dialog writes nothing and leaves the window as it was.
+12. The window keeps repainting while the dialog is open and while a large export is being written; the UI thread never calls MuPDF.
+13. EXPORT does nothing and looks inert when nothing is selected or the selection is a folder whose manifest will not parse.
+14. Exporting does not disturb the viewer: the same product stays selected, on the same page, at the same zoom.
+15. `grep -rn` for user-visible literals in `.slint`/`.rs` still finds none outside `strings.rs`.
+16. `git log` shows only `sudo-megas` as author and no AI attribution anywhere.
+
+## Technical notes
+
+**The summary page is drawn last of the decisions and first of the pages.** Sources are inspected before anything is drawn, because the page has to be able to say `Not included: warranty.pdf`, and it cannot say that if it was drawn before anybody tried to open the file. So the order is: open every source and sort them into usable and refused; draw the summary, refusals included; append the usable ones; write. This is also why a refused document does not fail the export — CORE §6 says the output covers the product, and a product with one broken invoice still has a warranty worth carrying. Refusing to export at all would be the app deciding the user does not get their summary because one file is bad.
+
+**Skipping is recorded in the artefact, not just in the window.** A notice in column 3 is gone the moment the app closes; the exported PDF is the thing that gets emailed to a shop six months later. Naming the missing file on the page itself means the file explains its own gaps, which is the same principle that keeps broken folders visible in the list with a readable reason instead of hiding them.
+
+**Why `write_to` and not `save`.** `PdfDocument::save` and `save_with_options` both take `&str`, so a destination path that is not valid UTF-8 cannot be expressed — and on Linux a path is bytes, so that is a real file the user could have picked, not a hypothetical. `write_to` takes any `io::Write`, so the output goes into a `File` opened from the `PathBuf` the dialog returned and the question never arises. The spike confirmed it returns the byte count and produces a file that reopens.
+
+**Not the render worker.** Export runs on a thread of its own, spawned per export, for the same two reasons `import.rs` gives. MuPDF contexts are per-thread and Chron2's rule that the UI thread never calls MuPDF is worth keeping; and the render worker's queue deliberately drops all but the newest job, which is right for pixels and would be silent data loss for a file the user asked to be written. The outcome travels in an `Arc<Mutex<Option<Outcome>>>` slot rather than in the closure, because `details`/`vault` are full of `Rc`s and cannot cross a thread boundary — the same reason `import::commit` does it that way.
+
+**Nothing is invalidated.** The output goes to a path the user chose, outside the vault, and export reads the product's files without changing them. So no `Renderer::invalidate` call belongs anywhere in this milestone. Chron3 added that message because imports write over paths the viewer may already have cached; export writes nowhere the render worker has ever heard of. Stated so that a later reading of "export touches PDFs" does not add one for symmetry.
+
+**The counter is the one in the window, computed the same way.** `days_left` and `countdown` already exist and already handle the expired case and Turkish's lack of plural agreement after a numeral. Export calls them rather than reimplementing the arithmetic, so the number on the page and the number in column 3 cannot disagree — which is the whole reason CORE §6 says "days left at time of export" rather than "days left". `today` is read at the moment the job is built, on the UI thread, from the offset `main` captured before any thread existed.
+
+**The suggested filename is sanitised, not slugged.** `data::folder_slug` exists and is the wrong tool: it lowercases and folds to ASCII, so `Şarj Cihazı` would be suggested as `sarj-cihazi` — correct for a directory that has to survive being rsynced to Windows, and a downgrade for a filename a person is about to read in a save dialog. The suggestion keeps the name as written and strips only what makes a filename invalid, which is what `import::destination_name` already does for picked files. It is only a suggestion in any case: the dialog lets the user type whatever they want, and the app writes where it is told.
+
+**No progress bar.** The window stays responsive because the work is on another thread, and the status line says the export is running. A percentage would need `insert_pdf` to report progress per page, which it does not, so it would be a number invented from the source count — and for an export that is typically a summary page plus a dozen invoice pages, the honest answer is that it finishes before a progress bar would have finished animating in. If a hundred-page manual ever makes this feel slow, the fix is a real page-level callback, not a fake bar now.
+
+**The dialog is a thin edge, again.** `rfd::AsyncFileDialog::save_file` behind `slint::spawn_local`, exactly as `import::pick` wraps `pick_files`, and for exactly the reason Chron3 wrote down: a portal dialog is drawn by the desktop's own portal service in the user's session, so it appears on the real display whatever `DISPLAY` says and cannot be driven under `Xvfb`. Everything past the dialog takes a `PathBuf`, so the whole of `export::run` is testable by handing it a path and only the click that opens the dialog needs a person. The blocking `FileDialog` is not an option here either — it parks the calling thread inside a D-Bus read with no timeout.
+
+**`Shape` borrows its page, and `commit` wants the document.** `Shape::new` takes `&mut PdfPage` and holds it; `commit` takes `&mut PdfDocument`. Since `new_page` returns an owned `PdfPage`, the borrow of the page and the borrow of the document do not overlap in the crate's own example order — but the shape has to be dropped or the page scoped before the document is used again, which is why the summary-page code puts the drawing in a block. Worth stating because the compiler error it produces otherwise points at the wrong line.
+
+**A4, not the source page size.** The summary page is A4 (`595×842`) regardless of what the appended documents are, because it is a document Parachron authored and CORE §6 asks for it to be print-friendly. Appended pages keep their own sizes — `insert_pdf` grafts them as they are, and rescaling somebody's invoice to match a summary page would be the export quietly altering their evidence.
+
+## How the criteria were verified
+
+*(Filled in when the milestone lands.)*
+
+## Done when
+
+All acceptance criteria pass on the laptop. Then: note in CORE §2 that composite font registration is required for export and why, confirm CORE §6 still describes what shipped, mark this file's status `done`, and move on to Chron8.
