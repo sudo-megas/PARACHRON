@@ -1,0 +1,10 @@
+# Rust build output
+/target/
+
+# Release artifacts (built by CI, never committed — CORE §7)
+*.pkg.tar.zst
+*.deb
+*.exe
+
+# Local tooling state
+.claude/settings.local.json

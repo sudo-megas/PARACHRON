@@ -1,0 +1,23 @@
+// The UI half of the string table.
+//
+// CORE §4: no hardcoded strings in `.slint` or Rust — every user-visible piece
+// of text is a property here, filled from `src/strings.rs` at startup and
+// refilled whenever the language changes (Chron6). One property per
+// `strings::Key`.
+
+export global Strings {
+    // Identity and chrome
+    in property <string> app-title;
+    in property <string> menu-document;
+    in property <string> action-add-document;
+    in property <string> action-theme;
+    in property <string> action-export;
+    in property <string> nav-about;
+
+    // Product list
+    in property <string> list-empty;
+
+    // Placeholders (fleshed out in Chron2 and Chron4)
+    in property <string> select-prompt;
+    in property <string> details-placeholder;
+}

@@ -1,0 +1,334 @@
+// Parachron — main window (CORE §4).
+//
+// Three fixed columns at 25 / 50 / 25, minimum 1000×700. This milestone builds
+// the skeleton only: the list is live, the viewer and details panes are
+// placeholders that later Chrons fill in.
+
+import { ListView } from "std-widgets.slint";
+import { Strings } from "strings.slint";
+
+// Re-exported so Rust can reach the global and fill it at startup.
+export { Strings }
+
+// The one hardcoded palette Chron1 allows. Chron5 replaces this with the
+// eleven themes from CORE §5, switchable at runtime.
+export global Palette {
+    out property <color> bg: #1b1b1d;
+    out property <color> panel: #232326;
+    out property <color> raised: #2c2c31;
+    out property <color> border: #3a3a40;
+    out property <color> text: #e6e6e8;
+    out property <color> muted: #9a9aa2;
+    out property <color> accent: #6fb2d2;
+    out property <color> danger: #e0736d;
+    out property <color> selection: #34343b;
+}
+
+// One row of the product list. Assembled in Rust so that every string it
+// carries — including the broken/warning prefixes — comes from the string table.
+export struct ProductItem {
+    label: string,
+    name: string,
+    detail: string,
+    // The manifest could not be parsed at all.
+    broken: bool,
+    // The manifest parsed, but files it lists are not on disk.
+    warning: bool,
+}
+
+// Title-bar affordance that does not do anything yet. `Document ▾` and
+// `Add Document` are stubs until Chron3.
+component StubButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: true;
+
+    height: 28px;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: root.active && touch.has-hover ? Palette.accent : Palette.border;
+    background: root.active && touch.has-hover ? Palette.raised : Palette.panel;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        Text {
+            text: root.label;
+            color: root.active ? Palette.text : Palette.muted;
+            vertical-alignment: center;
+            font-size: 13px;
+        }
+    }
+
+    touch := TouchArea {
+        // Inert by design this milestone.
+        mouse-cursor: root.active ? MouseCursor.pointer : MouseCursor.default;
+    }
+}
+
+// Column heading used above each placeholder pane.
+component PaneLabel inherits Text {
+    color: Palette.muted;
+    font-size: 12px;
+    letter-spacing: 1px;
+}
+
+export component AppWindow inherits Window {
+    // Filled from Rust at startup.
+    in property <[ProductItem]> products;
+
+    // Selection state. -1 means nothing is selected yet.
+    in-out property <int> selected-index: -1;
+    in-out property <string> selected-name;
+    in-out property <string> selected-detail;
+    in-out property <bool> selected-broken;
+
+    title: Strings.app-title;
+    icon: @image-url("../build/icons/parachron-256.png");
+    background: Palette.bg;
+
+    // CORE §4: the window never shrinks below this.
+    min-width: 1000px;
+    min-height: 700px;
+    preferred-width: 1280px;
+    preferred-height: 800px;
+
+    VerticalLayout {
+        spacing: 0px;
+        padding: 0px;
+
+        // ── Title bar ────────────────────────────────────────────────────
+        Rectangle {
+            height: 48px;
+            background: Palette.panel;
+
+            // Bottom hairline.
+            Rectangle {
+                x: 0;
+                y: parent.height - 1px;
+                width: parent.width;
+                height: 1px;
+                background: Palette.border;
+            }
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 10px;
+
+                Image {
+                    source: @image-url("../build/icons/parachron-64.png");
+                    width: 26px;
+                    height: 26px;
+                    image-fit: contain;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                StubButton {
+                    label: Strings.menu-document;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                StubButton {
+                    label: Strings.action-add-document;
+                    active: false;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                // Pushes the wordmark to the centre of the remaining space.
+                Rectangle { horizontal-stretch: 1; }
+
+                Text {
+                    text: Strings.app-title;
+                    color: Palette.text;
+                    font-size: 16px;
+                    font-weight: 700;
+                    letter-spacing: 3px;
+                    vertical-alignment: center;
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
+
+        // ── Body: three fixed columns, 25 / 50 / 25 ──────────────────────
+        //
+        // Positioned explicitly rather than by layout stretch so the ratio is
+        // exact at every window size (CORE §4). Column 3 takes the remainder,
+        // so rounding can never leave a seam.
+        body := Rectangle {
+            vertical-stretch: 1;
+
+            // Column 1 — product list.
+            col1 := Rectangle {
+                x: 0;
+                y: 0;
+                width: body.width / 4;
+                height: body.height;
+                background: Palette.panel;
+                clip: true;
+
+                VerticalLayout {
+                    spacing: 0px;
+                    padding: 0px;
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        clip: true;
+
+                        ListView {
+                            width: parent.width;
+                            height: parent.height;
+
+                            for item[idx] in root.products: Rectangle {
+                                height: 38px;
+                                background: idx == root.selected-index ? Palette.selection : transparent;
+
+                                HorizontalLayout {
+                                    padding-left: 14px;
+                                    padding-right: 14px;
+                                    Text {
+                                        text: item.label;
+                                        color: item.broken
+                                            ? Palette.danger
+                                            : item.warning ? Palette.accent : Palette.text;
+                                        font-size: 14px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                row-touch := TouchArea {
+                                    mouse-cursor: MouseCursor.pointer;
+                                    clicked => {
+                                        root.selected-index = idx;
+                                        root.selected-name = item.name;
+                                        root.selected-detail = item.detail;
+                                        root.selected-broken = item.broken;
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.products.length == 0: Text {
+                            x: 14px;
+                            y: 18px;
+                            width: parent.width - 28px;
+                            text: Strings.list-empty;
+                            color: Palette.muted;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    // Fixed About strip (CORE §4). Inert until Chron8.
+                    Rectangle {
+                        height: 42px;
+                        background: Palette.panel;
+
+                        Rectangle {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: 1px;
+                            background: Palette.border;
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            Text {
+                                text: Strings.nav-about;
+                                color: Palette.muted;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Column 2 — document viewer (Chron2).
+            col2 := Rectangle {
+                x: col1.width;
+                y: 0;
+                width: body.width / 2;
+                height: body.height;
+                background: Palette.bg;
+                clip: true;
+
+                Rectangle {
+                    x: 0;
+                    y: 0;
+                    width: 1px;
+                    height: parent.height;
+                    background: Palette.border;
+                }
+
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 12px;
+
+                    Text {
+                        text: root.selected-index >= 0 ? root.selected-name : Strings.select-prompt;
+                        color: root.selected-broken ? Palette.danger : Palette.text;
+                        font-size: 20px;
+                        wrap: word-wrap;
+                    }
+
+                    Text {
+                        text: root.selected-detail;
+                        color: Palette.muted;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+
+            // Column 3 — details and actions (Chron4). Takes the remainder so
+            // the three widths always sum to exactly the window width.
+            col3 := Rectangle {
+                x: col1.width + col2.width;
+                y: 0;
+                width: body.width - col1.width - col2.width;
+                height: body.height;
+                background: Palette.panel;
+                clip: true;
+
+                Rectangle {
+                    x: 0;
+                    y: 0;
+                    width: 1px;
+                    height: parent.height;
+                    background: Palette.border;
+                }
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 16px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        StubButton {
+                            label: Strings.action-theme;
+                            active: false;
+                        }
+                        StubButton {
+                            label: Strings.action-export;
+                            active: false;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+
+                    PaneLabel {
+                        text: Strings.details-placeholder;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+        }
+    }
+}

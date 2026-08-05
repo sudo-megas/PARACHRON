@@ -1,0 +1,22 @@
+[package]
+name = "parachron"
+version = "0.1.0"
+edition = "2024"
+authors = ["sudo-megas"]
+description = "A desktop vault for purchases: invoices, warranty documents, serial numbers and a warranty countdown, kept together."
+license = "AGPL-3.0-only"
+repository = "https://github.com/sudo-megas/PARACHRON"
+readme = "README.md"
+
+[dependencies]
+directories = "6.0.0"
+serde = { version = "1.0.229", features = ["derive"] }
+slint = "1.17.1"
+time = { version = "0.3.55", features = ["macros", "formatting"] }
+toml = "1.1.4"
+
+[build-dependencies]
+slint-build = "1.17.1"
+
+[dev-dependencies]
+i-slint-backend-testing = "1.17.1"
