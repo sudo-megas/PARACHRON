@@ -73,6 +73,9 @@ struct Job {
 
 enum Message {
     Render(Job),
+    /// Forget everything remembered about this path, because the bytes behind
+    /// it have changed (Chron3 imports and deletes files).
+    Invalidate(PathBuf),
     Shutdown,
 }
 
@@ -109,19 +112,28 @@ impl Renderer {
                 let mut cache = Cache::default();
 
                 while let Ok(message) = rx.recv() {
-                    let job = match message {
+                    let mut job = match message {
                         Message::Shutdown => break,
+                        Message::Invalidate(path) => {
+                            forget(&mut open, &mut cache, &path);
+                            continue;
+                        }
                         Message::Render(job) => job,
                     };
 
                     // Anything already queued supersedes this job: the user has
                     // moved on. A window drag emits a burst of resize requests
                     // and only the last one is worth the work.
-                    let mut job = job;
+                    //
+                    // Invalidations are never superseded. They are statements
+                    // about the disk rather than about what to draw, so every
+                    // one that turns up is applied — dropping one would leave
+                    // the worker serving bytes that no longer exist.
                     let mut stop = false;
                     for queued in rx.try_iter() {
                         match queued {
                             Message::Shutdown => stop = true,
+                            Message::Invalidate(path) => forget(&mut open, &mut cache, &path),
                             Message::Render(newer) => job = newer,
                         }
                     }
@@ -147,6 +159,16 @@ impl Renderer {
             target_width: target.0,
             target_height: target.1,
         }));
+    }
+
+    /// Tell the worker the file at `path` is not what it used to be.
+    ///
+    /// Nothing here notices a file changing by itself: the cache is keyed by
+    /// path and size with no modification time, and `ensure_open` reuses the
+    /// open document whenever the path matches. Chron3 writes files into paths
+    /// the viewer may already have seen, so it says so.
+    pub fn invalidate(&self, path: &Path) {
+        let _ = self.tx.send(Message::Invalidate(path.to_path_buf()));
     }
 }
 
@@ -211,6 +233,18 @@ fn serve(open: &mut Option<OpenDocument>, cache: &mut Cache, job: Job) -> Respon
             error,
         },
     }
+}
+
+/// Drop everything the worker remembers about `path`.
+///
+/// Both halves matter. The cached rasters would keep serving the old pixels,
+/// and the open document is a handle onto bytes that have since been replaced —
+/// which is worse, because it also carries a stale page count.
+fn forget(open: &mut Option<OpenDocument>, cache: &mut Cache, path: &Path) {
+    if open.as_ref().is_some_and(|current| current.path == path) {
+        *open = None;
+    }
+    cache.forget(path);
 }
 
 /// Make `open` hold `path`, reusing it when it already does. Returns the page
@@ -367,6 +401,19 @@ impl Cache {
                 None => break,
             }
         }
+    }
+
+    /// Drop every page cached for one document.
+    fn forget(&mut self, path: &Path) {
+        let mut freed = 0;
+        self.entries.retain(|(key, raster)| {
+            let stale = key.path == path;
+            if stale {
+                freed += raster.bytes();
+            }
+            !stale
+        });
+        self.bytes = self.bytes.saturating_sub(freed);
     }
 }
 

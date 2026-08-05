@@ -12,13 +12,24 @@ readme = "README.md"
 arboard = { version = "3.6.1", features = ["wayland-data-control"], default-features = false }
 directories = "6.0.0"
 mupdf = { version = "0.8.0", default-features = false, features = ["base14-fonts", "system-fonts", "brotli", "img"] }
+# `xdg-portal` only. The default set also pulls `wayland`, whose window
+# identifier roundtrips a second event queue on Slint's own display from a
+# foreign thread — a deadlock risk bought for cosmetic dialog parenting. The
+# `gtk3` backend is the other alternative and would make GTK development
+# headers a build dependency on all three of CORE §7's targets.
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 serde = { version = "1.0.229", features = ["derive"] }
-slint = "1.17.1"
-time = { version = "0.3.55", features = ["macros", "formatting"] }
-toml = "1.1.4"
+# `raw-window-handle-06` exposes `Window::window_handle`, which is what parents
+# the file dialog to the window on X11 and Windows.
+slint = { version = "1.17.1", features = ["raw-window-handle-06"] }
+time = { version = "0.3.55", features = ["macros", "formatting", "parsing"] }
+# `preserve_order` keeps hand-added keys in the order they were written rather
+# than alphabetising somebody's file for them (CORE §3).
+toml = { version = "1.1.4", features = ["preserve_order"] }
 
 [build-dependencies]
 slint-build = "1.17.1"
 
 [dev-dependencies]
 i-slint-backend-testing = "1.17.1"
+tempfile = "3"

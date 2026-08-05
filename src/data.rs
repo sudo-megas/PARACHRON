@@ -9,13 +9,18 @@
 //! becomes an [`Entry::Broken`] and stays visible in the list with a readable
 //! reason attached.
 
-use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use time::{Date, Month};
+
+/// Longest folder name `folder_slug` will produce.
+const SLUG_MAX: usize = 64;
+/// Folder name for a product whose name has no usable characters at all.
+/// An identifier on disk, not a label anyone reads in the UI.
+const SLUG_FALLBACK: &str = "product";
 
 /// Why a product folder could not be turned into a [`Product`].
 ///
@@ -75,25 +80,37 @@ impl Paths {
 /// Dates arrive as [`toml::value::Datetime`] because that is what native TOML
 /// dates deserialize into; [`to_date`] turns them into calendar dates and
 /// rejects anything that is not one.
-#[derive(Debug, Deserialize)]
-struct RawProduct {
-    name: String,
-    serial: String,
-    link: String,
-    purchase_date: toml::value::Datetime,
-    warranty_start: toml::value::Datetime,
-    warranty_end: toml::value::Datetime,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Manifest {
+    pub name: String,
+    pub serial: String,
+    pub link: String,
+    pub purchase_date: toml::value::Datetime,
+    pub warranty_start: toml::value::Datetime,
+    pub warranty_end: toml::value::Datetime,
     /// A product may legitimately have no documents attached yet.
     #[serde(default)]
-    pdfs: Vec<String>,
-    added: toml::value::Datetime,
+    pub pdfs: Vec<String>,
+    pub added: toml::value::Datetime,
+    /// Everything in the file that Parachron does not have a field for.
+    ///
+    /// CORE §3 promises the vault outlives the app, which has to mean the app
+    /// does not quietly delete what it did not put there: somebody's
+    /// hand-added `notes = "..."` survives being edited in the form.
+    ///
+    /// Declared last on purpose — serde emits fields in declaration order, so
+    /// anywhere else would shuffle unknown keys above `name` and rewrite the
+    /// documented shape of the file. Never insert a *known* key here: the file
+    /// would gain a duplicate and stop parsing.
+    #[serde(flatten, default, skip_serializing_if = "toml::Table::is_empty")]
+    pub extra: toml::Table,
 }
 
 /// A validated product (CORE §3 schema).
 ///
-/// The struct mirrors the schema in full even though this milestone only
-/// renders `name`: the viewer reads `pdfs` in Chron2 and the details column
-/// reads the rest in Chron4.
+/// The struct mirrors the schema in full. `link`, `warranty_start` and
+/// `warranty_end` have no reader until the details column in Chron4, which is
+/// what the allowance below is for; it comes off there.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Product {
@@ -108,8 +125,11 @@ pub struct Product {
     /// Order here is tab order in the viewer (Chron2).
     pub pdfs: Vec<String>,
     pub added: Date,
-    /// Files listed in `pdfs` that are not on disk — groundwork for Chron2 tabs.
+    /// Files listed in `pdfs` that are not on disk (Chron2 tabs).
     pub missing_pdfs: Vec<String>,
+    /// Keys the manifest carried that Parachron has no field for, kept so
+    /// editing the product writes them back (see [`Manifest::extra`]).
+    pub extra: toml::Table,
 }
 
 impl Product {
@@ -149,7 +169,12 @@ impl Entry {
     }
 }
 
-/// Read every product folder under `products`.
+/// Read every product folder under `products`, in whatever order the
+/// filesystem hands them over.
+///
+/// Ordering is not this module's business: `vault` owns list order because it
+/// owns the sort mode, and sorting here as well would be work always thrown
+/// away and a second answer to "why is this product here".
 ///
 /// Never fails: an unreadable `products/` directory comes back as a single
 /// broken entry rather than an error the caller has to handle at startup.
@@ -177,19 +202,7 @@ pub fn scan(products: &Path) -> Vec<Entry> {
         });
     }
 
-    sort_by_added(&mut entries);
     entries
-}
-
-/// CORE §4 default order: as added. Folders that failed to parse have no
-/// readable `added`, so they settle at the end, ordered by folder name.
-fn sort_by_added(entries: &mut [Entry]) {
-    entries.sort_by(|a, b| match (a.added(), b.added()) {
-        (Some(x), Some(y)) => x.cmp(&y).then_with(|| a.folder().cmp(b.folder())),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => a.folder().cmp(b.folder()),
-    });
 }
 
 /// Parse and validate one product folder.
@@ -200,7 +213,7 @@ fn load(dir: &Path, folder: &str) -> Result<Product, DataError> {
     }
 
     let text = fs::read_to_string(&manifest).map_err(|e| DataError::Unreadable(e.to_string()))?;
-    let raw: RawProduct =
+    let raw: Manifest =
         toml::from_str(&text).map_err(|e| DataError::Malformed(first_line(&e.to_string())))?;
 
     // Files the manifest promises but the folder does not hold.
@@ -222,6 +235,7 @@ fn load(dir: &Path, folder: &str) -> Result<Product, DataError> {
         added: to_date(&raw.added, "added")?,
         pdfs: raw.pdfs,
         missing_pdfs,
+        extra: raw.extra,
     })
 }
 
@@ -255,6 +269,198 @@ pub fn fmt_date(date: Date) -> String {
     date.format(&format).unwrap_or_default()
 }
 
+/// Read a date typed the way Parachron displays them: `DD-MM-YYYY`.
+///
+/// The inverse of [`fmt_date`], and the only place typed dates are understood.
+/// `.` and `/` are accepted as separators and normalised first, because those
+/// are what people actually type; refusing them would be pedantry with no
+/// upside. A single-digit day or month is accepted for the same reason.
+pub fn parse_date(text: &str) -> Option<Date> {
+    let normalised: String = text
+        .trim()
+        .chars()
+        .map(|ch| if ch == '.' || ch == '/' { '-' } else { ch })
+        .collect();
+
+    let padded = time::macros::format_description!("[day]-[month]-[year]");
+    if let Ok(date) = Date::parse(&normalised, &padded) {
+        return Some(date);
+    }
+    let loose =
+        time::macros::format_description!("[day padding:none]-[month padding:none]-[year]");
+    Date::parse(&normalised, &loose).ok()
+}
+
+/// The inverse of [`to_date`]: a calendar date the way TOML stores one.
+///
+/// CORE §3 is explicit that storage is ISO `YYYY-MM-DD` and `DD-MM-YYYY` is a
+/// display format that must never reach a `.toml` file. Going through
+/// [`toml::value::Datetime`] rather than formatting a string by hand is what
+/// makes that structural rather than a rule to remember.
+pub fn to_datetime(date: Date) -> toml::value::Datetime {
+    toml::value::Datetime {
+        date: Some(toml::value::Date {
+            year: date.year().clamp(0, i32::from(u16::MAX)) as u16,
+            month: date.month() as u8,
+            day: date.day(),
+        }),
+        time: None,
+        offset: None,
+    }
+}
+
+/// Replace a file's contents without ever leaving it half-written.
+///
+/// The temporary lives in the target's own directory because a rename across
+/// filesystems fails, and the rename is what makes this atomic: a crash leaves
+/// either the whole old file or the whole new one. CORE §3 says a malformed
+/// manifest must never crash the app; not writing one in the first place is the
+/// better half of that promise.
+pub fn write_atomic(path: &Path, contents: &str) -> Result<(), DataError> {
+    let unreadable = |e: std::io::Error| DataError::Unreadable(e.to_string());
+
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = dir.join(format!(".{name}.tmp"));
+
+    fs::write(&tmp, contents).map_err(unreadable)?;
+    fs::rename(&tmp, path).map_err(|e| {
+        // Leaving the temporary behind would look like a product folder's
+        // business next time somebody opened the directory.
+        let _ = fs::remove_file(&tmp);
+        unreadable(e)
+    })
+}
+
+/// Write one product's manifest.
+pub fn write_manifest(dir: &Path, manifest: &Manifest) -> Result<(), DataError> {
+    let text = toml::to_string_pretty(manifest)
+        .map_err(|e| DataError::Malformed(first_line(&e.to_string())))?;
+    write_atomic(&dir.join("product.toml"), &text)
+}
+
+/// Fold a letter to its ASCII shape before it is lowercased.
+///
+/// Rust's `to_lowercase` turns `İ` into `i` followed by a combining dot above.
+/// A combining mark inside a directory name is mojibake in a file manager and
+/// normalises differently on other platforms, so the Turkish letters are mapped
+/// explicitly — the language is first-class here (CORE §4) and its users should
+/// not get worse folder names than English ones. The common Latin-1 accents
+/// come along for the same price.
+fn fold(ch: char) -> Option<char> {
+    Some(match ch {
+        'ç' | 'Ç' => 'c',
+        'ğ' | 'Ğ' => 'g',
+        'ı' | 'İ' => 'i',
+        'ö' | 'Ö' => 'o',
+        'ş' | 'Ş' => 's',
+        'ü' | 'Ü' => 'u',
+        'á' | 'Á' | 'à' | 'À' | 'â' | 'Â' | 'ä' | 'Ä' | 'å' | 'Å' | 'ã' | 'Ã' => 'a',
+        'é' | 'É' | 'è' | 'È' | 'ê' | 'Ê' | 'ë' | 'Ë' => 'e',
+        'í' | 'Í' | 'ì' | 'Ì' | 'î' | 'Î' | 'ï' | 'Ï' => 'i',
+        'ó' | 'Ó' | 'ò' | 'Ò' | 'ô' | 'Ô' | 'õ' | 'Õ' => 'o',
+        'ú' | 'Ú' | 'ù' | 'Ù' | 'û' | 'Û' => 'u',
+        'ñ' | 'Ñ' => 'n',
+        'ß' => 's',
+        _ => return None,
+    })
+}
+
+/// Windows reserves these as device names and refuses to create a directory
+/// using one. CORE §7 ships a Windows binary, so a vault that syncs onto one
+/// must not contain a folder it cannot open.
+fn is_reserved(slug: &str) -> bool {
+    const RESERVED: [&str; 22] = [
+        "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+        "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+    ];
+    RESERVED.contains(&slug)
+}
+
+/// Turn a product name into a folder name.
+///
+/// The result is ASCII alphanumerics and single hyphens, which sidesteps
+/// Windows' illegal characters and its refusal of trailing dots and spaces by
+/// construction rather than by checking for them.
+pub fn folder_slug(name: &str) -> String {
+    let mut slug = String::with_capacity(name.len());
+    for ch in name.chars() {
+        let mapped = fold(ch).unwrap_or(ch);
+        if mapped.is_ascii_alphanumeric() {
+            slug.push(mapped.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+
+    // ASCII by construction, so truncating cannot split a character.
+    slug.truncate(SLUG_MAX);
+    let slug = slug.trim_matches('-');
+
+    if slug.is_empty() {
+        SLUG_FALLBACK.to_string()
+    } else if is_reserved(slug) {
+        format!("{slug}-{SLUG_FALLBACK}")
+    } else {
+        slug.to_string()
+    }
+}
+
+/// A folder name under `products_root` that nothing else has taken.
+///
+/// Two products may legitimately share a name — a spare of the same monitor —
+/// so a collision is numbered rather than refused.
+pub fn unique_folder(products_root: &Path, slug: &str) -> String {
+    if !products_root.join(slug).exists() {
+        return slug.to_string();
+    }
+    for n in 2..=9999 {
+        let candidate = format!("{slug}-{n}");
+        if !products_root.join(&candidate).exists() {
+            return candidate;
+        }
+    }
+    // Ten thousand products of the same name. Hand back the last candidate and
+    // let the failure to create it speak for itself, in the OS's own words.
+    format!("{slug}-9999")
+}
+
+/// A product that has passed validation and is ready to be written.
+///
+/// The form produces one of these, so nothing half-typed ever reaches the
+/// writer, and the writer needs no opinion about what a valid date looks like.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Draft {
+    pub name: String,
+    pub serial: String,
+    pub link: String,
+    pub purchase_date: Date,
+    pub warranty_start: Date,
+    pub warranty_end: Date,
+    pub pdfs: Vec<String>,
+    pub added: Date,
+    /// Carried through from the manifest that was read, so editing a product
+    /// does not drop keys the app has no field for.
+    pub extra: toml::Table,
+}
+
+impl Draft {
+    /// The on-disk shape of this draft.
+    pub fn manifest(&self) -> Manifest {
+        Manifest {
+            name: self.name.clone(),
+            serial: self.serial.clone(),
+            link: self.link.clone(),
+            purchase_date: to_datetime(self.purchase_date),
+            warranty_start: to_datetime(self.warranty_start),
+            warranty_end: to_datetime(self.warranty_end),
+            pdfs: self.pdfs.clone(),
+            added: to_datetime(self.added),
+            extra: self.extra.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,7 +481,7 @@ mod tests {
     #[test]
     fn iso_dates_from_toml_round_trip_to_the_display_format() {
         // The exact schema CORE §3 documents.
-        let raw: RawProduct = toml::from_str(
+        let raw: Manifest = toml::from_str(
             r#"
             name = "QD-OLED Monitor"
             serial = "ABC123XYZ"
@@ -303,7 +509,7 @@ mod tests {
         // stays as the second line of defence.
         assert!("2026-02-30".parse::<toml::value::Datetime>().is_err());
 
-        let manifest = toml::from_str::<RawProduct>(
+        let manifest = toml::from_str::<Manifest>(
             r#"
             name = "Broken"
             serial = "X"
@@ -345,6 +551,248 @@ mod tests {
                 reason: DataError::Unreadable(_),
                 ..
             }
+        ));
+    }
+
+    // ── The write half (Chron3) ──────────────────────────────────────────
+
+    fn draft(name: &str) -> Draft {
+        let date = Date::from_calendar_date(2026, Month::March, 14).unwrap();
+        Draft {
+            name: name.to_string(),
+            serial: "ABC123XYZ".to_string(),
+            link: "https://store.example/p".to_string(),
+            purchase_date: date,
+            warranty_start: date,
+            warranty_end: Date::from_calendar_date(2029, Month::March, 14).unwrap(),
+            pdfs: vec!["invoice.pdf".to_string()],
+            added: Date::from_calendar_date(2026, Month::August, 5).unwrap(),
+            extra: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_slug_is_lowercase_ascii_with_single_hyphens() {
+        assert_eq!(folder_slug("QD-OLED Monitor"), "qd-oled-monitor");
+        assert_eq!(folder_slug("IronWolf Pro 6TB"), "ironwolf-pro-6tb");
+        assert_eq!(folder_slug("  spaced   out  "), "spaced-out");
+        assert_eq!(folder_slug("Dell // U2724D!!"), "dell-u2724d");
+    }
+
+    /// Turkish is a first-class language here (CORE §4), so its letters have to
+    /// produce folder names as good as English ones.
+    #[test]
+    fn turkish_letters_fold_to_ascii_without_combining_marks() {
+        assert_eq!(folder_slug("Şarj Cihazı"), "sarj-cihazi");
+        assert_eq!(folder_slug("Ürün Güncesi"), "urun-guncesi");
+        assert_eq!(folder_slug("Öğrenci"), "ogrenci");
+
+        // The trap: `"İ".to_lowercase()` is `i` plus U+0307, a combining dot
+        // that would end up inside a directory name.
+        let slug = folder_slug("İphone");
+        assert_eq!(slug, "iphone");
+        assert!(
+            slug.is_ascii(),
+            "a slug must be pure ASCII, got {slug:?} which contains {:?}",
+            slug.chars().filter(|c| !c.is_ascii()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_name_with_nothing_usable_still_yields_a_folder() {
+        assert_eq!(folder_slug(""), SLUG_FALLBACK);
+        assert_eq!(folder_slug("!!! ???"), SLUG_FALLBACK);
+        assert_eq!(folder_slug("---"), SLUG_FALLBACK);
+        // Non-Latin scripts have no ASCII fold here, so they land on the
+        // fallback rather than on an empty path.
+        assert_eq!(folder_slug("日本語"), SLUG_FALLBACK);
+    }
+
+    /// CORE §7 ships a Windows binary, and Windows will not create a directory
+    /// named after one of its devices.
+    #[test]
+    fn windows_reserved_names_are_not_used_as_folders() {
+        for reserved in ["CON", "nul", "COM1", "lpt9", "AUX", "prn"] {
+            let slug = folder_slug(reserved);
+            assert!(
+                !is_reserved(&slug),
+                "{reserved} slugged to {slug}, which Windows reserves"
+            );
+        }
+        assert_eq!(folder_slug("CON"), "con-product");
+    }
+
+    #[test]
+    fn a_slug_is_bounded_and_never_ends_in_a_hyphen() {
+        let slug = folder_slug(&"very long name ".repeat(40));
+        assert!(slug.len() <= SLUG_MAX, "{} chars", slug.len());
+        assert!(!slug.ends_with('-'));
+        assert!(!slug.starts_with('-'));
+        // Trailing dots and spaces are impossible by construction, which is
+        // the other thing Windows refuses.
+        assert!(slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    }
+
+    #[test]
+    fn colliding_folder_names_are_numbered_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        assert_eq!(unique_folder(root, "monitor"), "monitor");
+        fs::create_dir(root.join("monitor")).unwrap();
+        assert_eq!(unique_folder(root, "monitor"), "monitor-2");
+        fs::create_dir(root.join("monitor-2")).unwrap();
+        assert_eq!(unique_folder(root, "monitor-3"), "monitor-3");
+        assert_eq!(unique_folder(root, "monitor"), "monitor-3");
+    }
+
+    #[test]
+    fn typed_dates_round_trip_through_the_display_format() {
+        let date = Date::from_calendar_date(2026, Month::March, 14).unwrap();
+        assert_eq!(parse_date("14-03-2026"), Some(date));
+        assert_eq!(parse_date(&fmt_date(date)), Some(date));
+
+        // What people actually type.
+        assert_eq!(parse_date("14.03.2026"), Some(date));
+        assert_eq!(parse_date("14/03/2026"), Some(date));
+        assert_eq!(parse_date("  14-03-2026 "), Some(date));
+        assert_eq!(parse_date("1-3-2026"), parse_date("01-03-2026"));
+    }
+
+    #[test]
+    fn a_date_that_is_not_a_date_is_refused_rather_than_guessed_at() {
+        for text in [
+            "", "tomorrow", "2026-03-14", // ISO is the storage format, not the input one
+            "31-02-2026", // no such day
+            "14-13-2026", // no such month
+            "14-03",
+        ] {
+            assert_eq!(parse_date(text), None, "{text:?} should not parse");
+        }
+    }
+
+    #[test]
+    fn manifests_are_written_as_iso_dates_never_as_display_dates() {
+        let text = toml::to_string_pretty(&draft("QD-OLED Monitor").manifest()).unwrap();
+        assert!(text.contains("purchase_date = 2026-03-14"), "{text}");
+        assert!(text.contains("warranty_end = 2029-03-14"), "{text}");
+        assert!(
+            !text.contains("14-03-2026"),
+            "CORE §3: a display date must never reach a .toml file\n{text}"
+        );
+    }
+
+    /// CORE §3 promises the vault outlives the app, so a key somebody added by
+    /// hand has to survive the app rewriting the file.
+    #[test]
+    fn unknown_keys_survive_a_rewrite() {
+        let original = r#"
+name = "QD-OLED Monitor"
+serial = "ABC123XYZ"
+link = "https://store.example/p"
+purchase_date = 2026-03-14
+warranty_start = 2026-03-14
+warranty_end = 2029-03-14
+pdfs = ["invoice.pdf"]
+added = 2026-08-05
+notes = "extended warranty claim ref #4471"
+last_checked = 2026-07-01
+"#;
+        let mut manifest: Manifest = toml::from_str(original).unwrap();
+        assert_eq!(manifest.extra.len(), 2, "unknown keys are kept, not dropped");
+
+        // Edit something the app does own, then write it back.
+        manifest.pdfs.push("warranty.pdf".to_string());
+        let rewritten = toml::to_string_pretty(&manifest).unwrap();
+
+        let reloaded: Manifest = toml::from_str(&rewritten).unwrap();
+        assert_eq!(reloaded.pdfs.len(), 2);
+        assert_eq!(
+            reloaded.extra.get("notes").and_then(|v| v.as_str()),
+            Some("extended warranty claim ref #4471"),
+        );
+        // A date among the unknown keys is still a date, not a stringified one.
+        assert!(
+            reloaded.extra.get("last_checked").is_some_and(|v| v.is_datetime()),
+            "an unknown date key must stay a TOML date: {:?}",
+            reloaded.extra.get("last_checked")
+        );
+        // Known keys keep their documented order ahead of the extras.
+        let name_at = rewritten.find("name =").unwrap();
+        let notes_at = rewritten.find("notes =").unwrap();
+        assert!(name_at < notes_at, "extras must not shuffle above the schema");
+    }
+
+    #[test]
+    fn an_atomic_write_replaces_the_file_and_leaves_no_leftovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("product.toml");
+
+        write_atomic(&path, "first").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "first");
+
+        write_atomic(&path, "second").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "second");
+
+        let leftovers: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "product.toml")
+            .collect();
+        assert!(leftovers.is_empty(), "temporary files left behind: {leftovers:?}");
+    }
+
+    /// The round trip that matters: what the form writes is what the list reads.
+    #[test]
+    fn a_written_product_scans_back_as_the_same_product() {
+        let dir = tempfile::tempdir().unwrap();
+        let products = dir.path().join("products");
+        let folder = folder_slug("QD-OLED Monitor");
+        let home = products.join(&folder);
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("invoice.pdf"), b"%PDF-1.4\n").unwrap();
+
+        let draft = draft("QD-OLED Monitor");
+        write_manifest(&home, &draft.manifest()).unwrap();
+
+        let entries = scan(&products);
+        assert_eq!(entries.len(), 1);
+        let Entry::Ok(product) = &entries[0] else {
+            panic!("a manifest we just wrote must parse: {:?}", entries[0]);
+        };
+
+        assert_eq!(product.folder, folder);
+        assert_eq!(product.name, draft.name);
+        assert_eq!(product.serial, draft.serial);
+        assert_eq!(product.link, draft.link);
+        assert_eq!(product.purchase_date, draft.purchase_date);
+        assert_eq!(product.warranty_end, draft.warranty_end);
+        assert_eq!(product.added, draft.added);
+        assert_eq!(product.pdfs, draft.pdfs);
+        assert!(
+            product.missing_pdfs.is_empty(),
+            "the file is on disk, so nothing is missing"
+        );
+    }
+
+    /// A crash between copying the PDFs and writing the manifest has to leave
+    /// something visible and repairable, not a silent half-product.
+    #[test]
+    fn a_folder_written_without_its_manifest_shows_up_broken() {
+        let dir = tempfile::tempdir().unwrap();
+        let products = dir.path().join("products");
+        let home = products.join("interrupted");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("invoice.pdf"), b"%PDF-1.4\n").unwrap();
+
+        let entries = scan(&products);
+        assert!(matches!(
+            entries.as_slice(),
+            [Entry::Broken {
+                reason: DataError::MissingToml,
+                ..
+            }]
         ));
     }
 }

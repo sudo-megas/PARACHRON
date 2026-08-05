@@ -3,7 +3,7 @@
 //! Holds no MuPDF types — it decides *what* to draw and hands the request to
 //! [`crate::render`], which owns everything MuPDF on its own thread.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,7 +12,7 @@ use slint::{
     ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, Timer, TimerMode, VecModel,
 };
 
-use crate::data::Entry;
+use crate::data::Product;
 use crate::render::{Renderer, Response, ViewError};
 use crate::strings::{self, Key, Lang};
 use crate::{AppWindow, DocTab};
@@ -45,11 +45,39 @@ struct Tab {
     missing: bool,
 }
 
+/// The documents of one product, as the viewer needs them.
+///
+/// The viewer used to hold the whole entry list plus an index into it, purely
+/// to reach these four fields. Passing them in instead removes the second copy
+/// of the list — and with it the question of how to re-index a selection when
+/// the vault re-sorts, because there is no index into a list the viewer does
+/// not own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DocSet {
+    /// Folder name, which is how document paths are built (CORE §3).
+    pub folder: String,
+    pub serial: String,
+    pub pdfs: Vec<String>,
+    pub missing: Vec<String>,
+}
+
+impl DocSet {
+    pub fn of(product: &Product) -> Self {
+        Self {
+            folder: product.folder.clone(),
+            serial: product.serial.clone(),
+            pdfs: product.pdfs.clone(),
+            missing: product.missing_pdfs.clone(),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct State {
     products_root: PathBuf,
-    entries: Vec<Entry>,
-    selected: Option<usize>,
+    /// Folder of the product on show. `None` means nothing is selected, or the
+    /// selection is a folder that would not parse.
+    folder: Option<String>,
     tabs: Vec<Tab>,
     active_tab: usize,
     page: usize,
@@ -58,8 +86,13 @@ struct State {
     /// Preview area in logical pixels, as reported by the layout.
     viewport: (f32, f32),
     serial: String,
-    /// Every request carries one; responses below the current value are stale.
+    /// Bumped on every state change; responses carrying an older one are stale.
     token: u64,
+    /// State rather than a value captured into each closure, so Chron6 can
+    /// change it. Re-registering handlers is not an alternative — Slint allows
+    /// one handler per callback, and setting one from inside that callback's
+    /// own handler panics.
+    lang: Lang,
 }
 
 /// What the UI should be told after a state change.
@@ -89,11 +122,10 @@ enum Plan {
 }
 
 impl State {
-    fn new(products_root: PathBuf, entries: Vec<Entry>) -> Self {
+    fn new(products_root: PathBuf, lang: Lang) -> Self {
         Self {
             products_root,
-            entries,
-            selected: None,
+            folder: None,
             tabs: Vec::new(),
             active_tab: 0,
             page: 0,
@@ -102,32 +134,52 @@ impl State {
             viewport: (0.0, 0.0),
             serial: String::new(),
             token: 0,
+            lang,
         }
     }
 
-    /// Point the viewer at a product, resetting everything about the view.
-    fn select(&mut self, index: usize) {
-        self.selected = Some(index);
-        self.tabs.clear();
-        self.serial.clear();
-        self.reset_view();
+    /// Point the viewer at a product's documents.
+    ///
+    /// `keep_view` asks to stay on the same *file* if it is still there, which
+    /// is what a re-sort and a save both want — neither of those is a change of
+    /// tab or of product, so CORE §4's reset rule does not apply to them. A
+    /// fresh click passes `false` and starts at page one, fitted.
+    fn show(&mut self, doc: Option<DocSet>, keep_view: bool) {
+        let showing = if keep_view {
+            self.tabs.get(self.active_tab).map(|tab| tab.file.clone())
+        } else {
+            None
+        };
 
-        let Some(Entry::Ok(product)) = self.entries.get(index) else {
-            // A broken folder has no documents to show; column 2 keeps
-            // Chron1's reason display instead of the viewer.
+        let Some(doc) = doc else {
+            // Nothing selected, or a broken folder: column 2 keeps Chron1's
+            // reason display instead of the viewer.
+            self.folder = None;
+            self.serial.clear();
+            self.tabs.clear();
+            self.reset_view();
             return;
         };
 
-        self.serial = product.serial.clone();
-        self.tabs = product
+        self.folder = Some(doc.folder);
+        self.serial = doc.serial;
+        // Tabs are always rebuilt, even when the view is kept: the whole point
+        // of re-scanning after an import is that `missing` changed, and a
+        // preserved tab would still claim its file is absent.
+        self.tabs = doc
             .pdfs
             .iter()
             .map(|file| Tab {
                 file: file.clone(),
                 label: tab_label(file),
-                missing: product.missing_pdfs.contains(file),
+                missing: doc.missing.contains(file),
             })
             .collect();
+
+        match showing.and_then(|file| self.tabs.iter().position(|tab| tab.file == file)) {
+            Some(index) => self.active_tab = index,
+            None => self.reset_view(),
+        }
     }
 
     /// Back to the first page, fitted.
@@ -162,22 +214,28 @@ impl State {
         }
     }
 
-    /// Decide what to draw next, claiming a fresh token if it needs pixels.
+    /// Decide what to draw next, claiming a fresh generation as it goes.
+    ///
+    /// The token is bumped first and unconditionally. Chron2 bumped it only on
+    /// the path that asks for pixels, which meant every other transition — no
+    /// tabs, no product, a tab whose file is missing — carried on sharing the
+    /// previous request's token. A response for the document the user had just
+    /// moved away from then still matched, and `receive` applied it over the
+    /// top of the new state.
     fn plan(&mut self, scale: f32) -> Plan {
-        let Some(tab) = self.tabs.get(self.active_tab).cloned() else {
+        self.token += 1;
+
+        let Some(tab) = self.tabs.get(self.active_tab) else {
             return Plan::Idle;
         };
         if tab.missing {
             return Plan::Show(ViewError::Missing);
         }
-
-        // Scoped so the borrow of `entries` ends before `token` is bumped.
-        let path = {
-            let Some(Entry::Ok(product)) = self.selected.and_then(|i| self.entries.get(i)) else {
-                return Plan::Idle;
-            };
-            product.document_path(&self.products_root, &tab.file)
+        let Some(folder) = &self.folder else {
+            return Plan::Idle;
         };
+        // Addressed by folder, never by name (CORE §3).
+        let path = self.products_root.join(folder).join(&tab.file);
 
         let (width, height) = self.viewport;
         if width < 1.0 || height < 1.0 {
@@ -193,7 +251,6 @@ impl State {
             ((height * scale * self.zoom).round() as u32).max(1),
         );
 
-        self.token += 1;
         Plan::Render {
             token: self.token,
             path,
@@ -240,21 +297,35 @@ fn describe(lang: Lang, error: &ViewError) -> String {
     }
 }
 
-/// Everything the viewer needs kept alive for the life of the window.
+/// Everything the viewer needs kept alive for the life of the window, plus the
+/// handles the vault reaches it through.
 pub struct Viewer {
-    _renderer: Rc<Renderer>,
+    state: Arc<Mutex<State>>,
+    renderer: Rc<Renderer>,
     _resize: Rc<Timer>,
     _copied: Rc<Timer>,
 }
 
+impl Viewer {
+    /// Show one product's documents, or nothing at all.
+    ///
+    /// The vault decides what is selected and calls this; the viewer no longer
+    /// listens for the click itself, because a Slint callback holds exactly one
+    /// handler and the vault needs that one.
+    pub fn show(&self, app: &AppWindow, doc: Option<DocSet>, keep_view: bool) {
+        self.state.lock().unwrap().show(doc, keep_view);
+        apply(app, &self.state, &self.renderer);
+    }
+
+    /// Forget what the render worker remembers about a file that has changed.
+    pub fn invalidate(&self, path: &Path) {
+        self.renderer.invalidate(path);
+    }
+}
+
 /// Wire the viewer into the window: callbacks in, rendered pages out.
-pub fn install(
-    app: &AppWindow,
-    products_root: PathBuf,
-    entries: Vec<Entry>,
-    lang: Lang,
-) -> Viewer {
-    let state = Arc::new(Mutex::new(State::new(products_root, entries)));
+pub fn install(app: &AppWindow, products_root: PathBuf, lang: Lang) -> Viewer {
+    let state = Arc::new(Mutex::new(State::new(products_root, lang)));
 
     // Responses arrive on the worker thread; hop to the UI before touching it.
     let renderer = Rc::new(Renderer::spawn({
@@ -265,7 +336,7 @@ pub fn install(
             let state = Arc::clone(&state);
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(app) = weak.upgrade() {
-                    receive(&app, &state, response, lang);
+                    receive(&app, &state, response);
                 }
             });
         }
@@ -274,18 +345,9 @@ pub fn install(
     let resize = Rc::new(Timer::default());
     let copied = Rc::new(Timer::default());
 
-    app.on_product_selected({
-        let state = Arc::clone(&state);
-        let renderer = Rc::clone(&renderer);
-        let weak = app.as_weak();
-        move |index| {
-            let Some(app) = weak.upgrade() else { return };
-            if index >= 0 {
-                state.lock().unwrap().select(index as usize);
-            }
-            apply(&app, &state, &renderer, lang);
-        }
-    });
+    // `on_product_selected` is deliberately absent: the vault owns the
+    // selection and registers it. A Slint callback holds one handler, so a
+    // second registration here would silently replace the vault's.
 
     app.on_tab_selected({
         let state = Arc::clone(&state);
@@ -302,7 +364,7 @@ pub fn install(
                 state.reset_view();
                 state.active_tab = index as usize;
             }
-            apply(&app, &state, &renderer, lang);
+            apply(&app, &state, &renderer);
         }
     });
 
@@ -319,7 +381,7 @@ pub fn install(
                 }
                 state.page = page as usize;
             }
-            apply(&app, &state, &renderer, lang);
+            apply(&app, &state, &renderer);
         }
     });
 
@@ -345,7 +407,7 @@ pub fn install(
             let weak = app.as_weak();
             resize.start(TimerMode::SingleShot, RESIZE_SETTLE, move || {
                 if let Some(app) = weak.upgrade() {
-                    apply(&app, &state, &renderer, lang);
+                    apply(&app, &state, &renderer);
                 }
             });
         }
@@ -369,7 +431,7 @@ pub fn install(
             let weak = weak.clone();
             let run = move || {
                 if let Some(app) = weak.upgrade() {
-                    apply(&app, &state, &renderer, lang);
+                    apply(&app, &state, &renderer);
                 }
             };
 
@@ -414,24 +476,25 @@ pub fn install(
     });
 
     Viewer {
-        _renderer: renderer,
+        state,
+        renderer,
         _resize: resize,
         _copied: copied,
     }
 }
 
 /// Push state to the window, then act on what it needs drawn.
-fn apply(app: &AppWindow, state: &Arc<Mutex<State>>, renderer: &Renderer, lang: Lang) {
+fn apply(app: &AppWindow, state: &Arc<Mutex<State>>, renderer: &Renderer) {
     let scale = app.window().scale_factor();
 
     // Take the lock only long enough to decide; Slint setters below can run
     // bindings that call straight back into these callbacks.
-    let (snapshot, plan) = {
+    let (snapshot, plan, lang) = {
         let mut state = state.lock().unwrap();
         if state.viewport.0 < 1.0 || state.viewport.1 < 1.0 {
             state.viewport = fallback_viewport(app);
         }
-        (state.snapshot(), state.plan(scale))
+        (state.snapshot(), state.plan(scale), state.lang)
     };
 
     app.set_doc_tabs(ModelRc::new(VecModel::from(snapshot.tabs)));
@@ -476,8 +539,11 @@ fn fallback_viewport(app: &AppWindow) -> (f32, f32) {
 }
 
 /// Apply one render result, ignoring anything the user has already moved past.
-fn receive(app: &AppWindow, state: &Arc<Mutex<State>>, response: Response, lang: Lang) {
-    let current = state.lock().unwrap().token;
+fn receive(app: &AppWindow, state: &Arc<Mutex<State>>, response: Response) {
+    let (current, lang) = {
+        let state = state.lock().unwrap();
+        (state.token, state.lang)
+    };
 
     match response {
         Response::Ready {
@@ -528,7 +594,7 @@ fn receive(app: &AppWindow, state: &Arc<Mutex<State>>, response: Response, lang:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{DataError, Product};
+    use crate::data::Product;
     use time::{Date, Month};
 
     fn product(folder: &str, pdfs: &[&str], missing: &[&str]) -> Product {
@@ -544,31 +610,40 @@ mod tests {
             pdfs: pdfs.iter().map(|s| s.to_string()).collect(),
             added: date,
             missing_pdfs: missing.iter().map(|s| s.to_string()).collect(),
+            extra: Default::default(),
         }
     }
 
-    /// A state with one two-document product, one broken folder, and a laid-out
-    /// viewport — the shape most of these tests want.
+    /// A viewer showing nothing, with a laid-out viewport — the shape most of
+    /// these tests want.
     fn state() -> State {
-        let mut state = State::new(
-            PathBuf::from("/vault/products"),
-            vec![
-                Entry::Ok(product("test-monitor", &["invoice.pdf", "garanti.pdf"], &[])),
-                Entry::Ok(product("test-drive", &["invoice.pdf", "gone.pdf"], &["gone.pdf"])),
-                Entry::Broken {
-                    folder: "test-broken".to_string(),
-                    reason: DataError::MissingToml,
-                },
-            ],
-        );
+        let mut state = State::new(PathBuf::from("/vault/products"), Lang::En);
         state.viewport = (600.0, 800.0);
         state
     }
 
+    /// A two-document product, both files present.
+    fn monitor() -> DocSet {
+        DocSet::of(&product(
+            "test-monitor",
+            &["invoice.pdf", "garanti.pdf"],
+            &[],
+        ))
+    }
+
+    /// A two-document product whose second file is not on disk.
+    fn drive() -> DocSet {
+        DocSet::of(&product(
+            "test-drive",
+            &["invoice.pdf", "gone.pdf"],
+            &["gone.pdf"],
+        ))
+    }
+
     #[test]
-    fn selecting_a_product_builds_a_tab_per_document_in_order() {
+    fn showing_a_product_builds_a_tab_per_document_in_order() {
         let mut state = state();
-        state.select(0);
+        state.show(Some(monitor()), false);
 
         assert_eq!(state.tabs.len(), 2);
         assert_eq!(state.tabs[0].label, "Invoice");
@@ -580,7 +655,7 @@ mod tests {
     #[test]
     fn a_document_listed_but_absent_is_flagged_not_dropped() {
         let mut state = state();
-        state.select(1);
+        state.show(Some(drive()), false);
 
         assert_eq!(state.tabs.len(), 2, "the missing file still gets a tab");
         assert!(!state.tabs[0].missing);
@@ -590,7 +665,7 @@ mod tests {
     #[test]
     fn a_broken_folder_offers_no_documents() {
         let mut state = state();
-        state.select(2);
+        state.show(None, false);
 
         assert!(state.tabs.is_empty());
         assert!(state.serial.is_empty());
@@ -598,9 +673,9 @@ mod tests {
     }
 
     #[test]
-    fn selecting_a_missing_document_shows_why_instead_of_rendering() {
+    fn showing_a_missing_document_says_why_instead_of_rendering() {
         let mut state = state();
-        state.select(1);
+        state.show(Some(drive()), false);
         state.active_tab = 1;
 
         assert_eq!(state.plan(1.0), Plan::Show(ViewError::Missing));
@@ -609,12 +684,21 @@ mod tests {
     #[test]
     fn a_render_targets_the_viewport_scaled_by_zoom_and_display() {
         let mut state = state();
-        state.select(0);
+        state.show(Some(monitor()), false);
 
-        let Plan::Render { path, target, page, token } = state.plan(2.0) else {
+        let Plan::Render {
+            path,
+            target,
+            page,
+            token,
+        } = state.plan(2.0)
+        else {
             panic!("a present document must render");
         };
-        assert_eq!(path, PathBuf::from("/vault/products/test-monitor/invoice.pdf"));
+        assert_eq!(
+            path,
+            PathBuf::from("/vault/products/test-monitor/invoice.pdf")
+        );
         assert_eq!(page, 0);
         assert_eq!(token, 1);
         // 600×800 logical at 2× display scale, 1× zoom.
@@ -628,10 +712,43 @@ mod tests {
         assert_eq!(token, 2, "every request supersedes the last");
     }
 
+    /// The Chron2 defect this milestone fixes.
+    ///
+    /// A transition that does not ask for pixels used to leave the token alone,
+    /// so a response already in flight for the previous document still matched
+    /// and was applied over the top of the new state.
+    #[test]
+    fn every_transition_supersedes_an_in_flight_render_not_just_another_render() {
+        let mut state = state();
+        state.show(Some(monitor()), false);
+
+        let Plan::Render { token: flying, .. } = state.plan(1.0) else {
+            panic!("a present document must render");
+        };
+
+        // Move to a product whose first tab is missing: this shows a message
+        // rather than asking for pixels, and must still supersede.
+        state.show(Some(drive()), false);
+        state.active_tab = 1;
+        assert_eq!(state.plan(1.0), Plan::Show(ViewError::Missing));
+        assert!(
+            state.token > flying,
+            "a missing-file state must supersede the render still in flight \
+             (token {} vs {flying})",
+            state.token
+        );
+
+        // Same again for the idle paths.
+        let before = state.token;
+        state.show(None, false);
+        assert_eq!(state.plan(1.0), Plan::Idle);
+        assert!(state.token > before, "an empty selection supersedes too");
+    }
+
     #[test]
     fn nothing_renders_before_the_layout_has_a_size() {
         let mut state = state();
-        state.select(0);
+        state.show(Some(monitor()), false);
         state.viewport = (0.0, 0.0);
 
         assert_eq!(state.plan(1.0), Plan::Idle);
@@ -640,7 +757,7 @@ mod tests {
     #[test]
     fn switching_document_or_product_returns_to_a_fitted_first_page() {
         let mut state = state();
-        state.select(0);
+        state.show(Some(monitor()), false);
         state.page = 7;
         state.pages = 12;
         state.zoom = 3.5;
@@ -650,18 +767,72 @@ mod tests {
         assert_eq!(state.zoom, ZOOM_MIN);
         assert_eq!(state.active_tab, 0);
 
-        // Selecting another product resets too, and re-reads the serial.
+        // Showing another product resets too, and re-reads the serial.
         state.page = 4;
         state.zoom = 2.0;
-        state.select(1);
+        state.show(Some(drive()), false);
+        assert_eq!(state.page, 0);
+        assert_eq!(state.zoom, ZOOM_MIN);
+        assert_eq!(state.serial, "ABC123XYZ");
+    }
+
+    #[test]
+    fn keeping_the_view_stays_on_the_same_file_at_the_same_page() {
+        let mut state = state();
+        state.show(Some(monitor()), false);
+        state.active_tab = 1;
+        state.page = 4;
+        state.pages = 9;
+        state.zoom = 2.5;
+
+        // What a re-sort does: same documents, nothing about the view changed.
+        state.show(Some(monitor()), true);
+
+        assert_eq!(state.active_tab, 1, "still on Garanti");
+        assert_eq!(state.page, 4, "still on the same page");
+        assert_eq!(state.zoom, 2.5, "still at the same zoom");
+    }
+
+    #[test]
+    fn keeping_the_view_falls_back_to_page_one_when_the_file_is_gone() {
+        let mut state = state();
+        state.show(Some(monitor()), false);
+        state.active_tab = 1;
+        state.page = 4;
+        state.zoom = 2.5;
+
+        // What removing that document in the edit form does.
+        let mut trimmed = monitor();
+        trimmed.pdfs.retain(|file| file != "garanti.pdf");
+        state.show(Some(trimmed), true);
+
+        assert_eq!(state.tabs.len(), 1);
+        assert_eq!(state.active_tab, 0);
         assert_eq!(state.page, 0);
         assert_eq!(state.zoom, ZOOM_MIN);
     }
 
     #[test]
+    fn a_file_that_has_arrived_stops_being_flagged_as_missing() {
+        let mut state = state();
+        state.show(Some(drive()), false);
+        assert!(state.tabs[1].missing);
+
+        // What importing the absent file does: same tabs, nothing missing now.
+        let mut found = drive();
+        found.missing.clear();
+        state.show(Some(found), true);
+
+        assert!(
+            !state.tabs[1].missing,
+            "tabs are rebuilt on every show, so `missing` cannot go stale"
+        );
+    }
+
+    #[test]
     fn the_page_label_is_one_based_and_blank_before_a_count_is_known() {
         let mut state = state();
-        state.select(0);
+        state.show(Some(monitor()), false);
         assert_eq!(state.snapshot().page_label, "");
 
         state.pages = 12;

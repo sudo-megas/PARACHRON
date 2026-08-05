@@ -85,6 +85,32 @@ export component AppWindow inherits Window {
     in property <bool> serial-copied;
     in-out property <float> zoom: 1.0;
 
+    // One product row. Shared so the scroll arithmetic below and the rows
+    // themselves cannot drift apart.
+    property <length> row-height: 38px;
+
+    // Bring a row into view after the list has been rebuilt.
+    //
+    // Imperative, never a `viewport-y:` binding: the repeater *assigns*
+    // `viewport-y` while laying out (including a zeroing pass when the model is
+    // empty, which every window hits before Rust has filled it), and assigning
+    // to a property removes its binding for good.
+    //
+    // Top-aligning rather than scrolling the minimum distance is also
+    // deliberate. A jump of more than one and a half screens is snapped to a
+    // whole row, and `idx * row-height` already sits on one — so this lands
+    // exactly where it says it will, first time. A bottom-aligned target does
+    // not, and would need calling twice.
+    //
+    // A negative index clamps to the top, which is also what a list that just
+    // got shorter needs: the runtime does not clamp `viewport-y` against the
+    // new, smaller `viewport-height`, and a stale offset leaves the list
+    // showing its last row alone above a band of empty space.
+    public function scroll-row-into-view(idx: int) {
+        let limit = max(0px, list.viewport-height - list.visible-height);
+        list.viewport-y = -clamp(idx * root.row-height, 0px, limit);
+    }
+
     callback product-selected(int);
     callback tab-selected(int);
     callback page-requested(int);
@@ -185,12 +211,12 @@ export component AppWindow inherits Window {
                         vertical-stretch: 1;
                         clip: true;
 
-                        ListView {
+                        list := ListView {
                             width: parent.width;
                             height: parent.height;
 
                             for item[idx] in root.products: Rectangle {
-                                height: 38px;
+                                height: root.row-height;
                                 background: idx == root.selected-index ? Palette.selection : transparent;
 
                                 HorizontalLayout {

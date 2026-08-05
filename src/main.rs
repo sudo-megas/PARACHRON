@@ -1,8 +1,8 @@
 // Parachron — a desktop vault for purchases.
 //
 // Wire-up only: resolve the vault, scan it, fill the string table, hand the
-// result to the UI, run. The interesting work lives in `data`, `config` and
-// `strings`.
+// result to the UI, run. The interesting work lives in `data`, `vault`,
+// `viewer` and `config`.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -10,13 +10,15 @@ mod config;
 mod data;
 mod render;
 mod strings;
+mod vault;
 mod viewer;
 
-use slint::{ModelRc, VecModel};
+use std::rc::Rc;
 
 use config::Config;
-use data::{DataError, Entry, Paths};
+use data::{Entry, Paths};
 use strings::{Key, Lang};
+use vault::SortMode;
 
 slint::include_modules!();
 
@@ -28,20 +30,24 @@ fn main() -> Result<(), slint::PlatformError> {
         .map(|paths| Config::load(&paths.config))
         .unwrap_or_default();
     let lang = Lang::from_code(&settings.lang);
+    let sort = SortMode::from_code(&settings.sort);
 
     let app = AppWindow::new()?;
     apply_strings(&app, lang);
 
-    let rows: Vec<ProductItem> = entries.iter().map(|entry| row(entry, lang)).collect();
-    app.set_products(ModelRc::new(VecModel::from(rows)));
-
-    // Column 2. Kept alive for the life of the window — dropping it stops the
-    // render thread.
     let products_root = paths
         .as_ref()
         .map(|paths| paths.products.clone())
         .unwrap_or_default();
-    let _viewer = viewer::install(&app, products_root, entries, lang);
+
+    // Column 2. Kept alive for the life of the window — dropping it stops the
+    // render thread.
+    let viewer = Rc::new(viewer::install(&app, products_root.clone(), lang));
+
+    // Column 1, and the only writer of the product list. Filling the window is
+    // part of installing it, so there is one code path for "show the list"
+    // rather than one for startup and another for everything after.
+    let _vault = vault::install(&app, products_root, entries, sort, lang, viewer);
 
     // Show first, then resize. Sizing an unshown window is silently discarded:
     // `preferred-width`/`preferred-height` from `app.slint` win when the window
@@ -63,7 +69,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // reported, never fatal.
     if let Some(paths) = &paths {
         let size = app.window().size().to_logical(app.window().scale_factor());
-        if let Err(detail) = persist(&paths.config, settings, lang, size.width, size.height) {
+        if let Err(detail) = persist(&paths.config, settings, lang, sort, size.width, size.height) {
             eprintln!("{}: {detail}", tr(lang, Key::ErrConfigSave));
         }
     }
@@ -76,13 +82,15 @@ fn persist(
     path: &std::path::Path,
     settings: Config,
     lang: Lang,
+    sort: SortMode,
     width: f32,
     height: f32,
 ) -> Result<(), String> {
     Config {
-        // Normalise on the way out, so an unrecognised `lang` is rewritten as
-        // the English it already fell back to.
+        // Normalise on the way out, so an unrecognised `lang` or `sort` is
+        // rewritten as the default it already fell back to.
         lang: lang.code().to_string(),
+        sort: sort.code().to_string(),
         window_width: width as u32,
         window_height: height as u32,
         ..settings
@@ -142,77 +150,6 @@ fn apply_strings(app: &AppWindow, lang: Lang) {
     table.set_copy_glyph(tr(lang, Key::CopyGlyph).into());
 }
 
-/// Turn one vault entry into a list row.
-///
-/// Every string a row carries — prefixes included — is assembled from the
-/// string table, so the `.slint` side never holds text of its own.
-fn row(entry: &Entry, lang: Lang) -> ProductItem {
-    match entry {
-        Entry::Ok(product) => {
-            let incomplete = !product.missing_pdfs.is_empty();
-            let prefix = if incomplete {
-                tr(lang, Key::WarnPrefix)
-            } else {
-                ""
-            };
-            let detail = if incomplete {
-                format!(
-                    "{}: {}",
-                    tr(lang, Key::MissingFiles),
-                    product.missing_pdfs.join(", ")
-                )
-            } else {
-                String::new()
-            };
-
-            ProductItem {
-                label: format!("{prefix}{}", product.name).into(),
-                name: product.name.clone().into(),
-                detail: detail.into(),
-                broken: false,
-                warning: incomplete,
-            }
-        }
-        Entry::Broken { folder, reason } => {
-            // A failure with no folder behind it (no home directory) falls back
-            // to the generic heading.
-            let heading = tr(lang, Key::BrokenTitle);
-            let label = if folder.is_empty() {
-                format!("{}{heading}", tr(lang, Key::BrokenPrefix))
-            } else {
-                format!("{}{folder}", tr(lang, Key::BrokenPrefix))
-            };
-            let name = if folder.is_empty() {
-                heading.to_string()
-            } else {
-                format!("{heading}: {folder}")
-            };
-
-            ProductItem {
-                label: label.into(),
-                name: name.into(),
-                detail: describe(lang, reason).into(),
-                broken: true,
-                warning: false,
-            }
-        }
-    }
-}
-
-/// Render a [`DataError`] as readable text in the chosen language. The trailing
-/// detail is diagnostic payload from the OS or the TOML parser and stays as-is.
-fn describe(lang: Lang, error: &DataError) -> String {
-    match error {
-        DataError::NoHome => tr(lang, Key::ErrNoHome).to_string(),
-        DataError::MissingToml => tr(lang, Key::ErrMissingToml).to_string(),
-        DataError::Unreadable(detail) => format!("{}: {detail}", tr(lang, Key::ErrUnreadable)),
-        DataError::Malformed(detail) => format!("{}: {detail}", tr(lang, Key::ErrMalformed)),
-        DataError::InvalidDate { field, detail } => {
-            format!("{} ({field}): {detail}", tr(lang, Key::ErrInvalidDate))
-        }
-    }
-}
-
 /// Shorthand for a string-table lookup.
 fn tr(lang: Lang, key: Key) -> &'static str {
     strings::get(lang, key)
@@ -224,86 +161,26 @@ mod ui_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use time::{Date, Month};
-
-    fn product(name: &str, missing: &[&str]) -> data::Product {
-        let date = Date::from_calendar_date(2026, Month::March, 14).unwrap();
-        data::Product {
-            folder: name.to_string(),
-            name: name.to_string(),
-            serial: String::new(),
-            link: String::new(),
-            purchase_date: date,
-            warranty_start: date,
-            warranty_end: date,
-            pdfs: Vec::new(),
-            added: date,
-            missing_pdfs: missing.iter().map(|name| name.to_string()).collect(),
-        }
-    }
-
-    #[test]
-    fn a_healthy_product_row_carries_no_prefix_and_no_detail() {
-        let item = row(&Entry::Ok(product("Monitor", &[])), Lang::En);
-        assert_eq!(item.label, "Monitor");
-        assert_eq!(item.name, "Monitor");
-        assert!(item.detail.is_empty());
-        assert!(!item.broken);
-    }
-
-    #[test]
-    fn missing_files_flag_the_row_without_breaking_it() {
-        let item = row(&Entry::Ok(product("Drive", &["invoice.pdf"])), Lang::En);
-        assert!(item.label.starts_with(strings::get(Lang::En, Key::WarnPrefix)));
-        assert!(item.detail.contains("invoice.pdf"));
-        assert!(!item.broken);
-    }
-
-    #[test]
-    fn a_broken_folder_stays_visible_and_explains_itself() {
-        let item = row(
-            &Entry::Broken {
-                folder: "test-broken".to_string(),
-                reason: DataError::MissingToml,
-            },
-            Lang::En,
-        );
-        assert!(item.broken);
-        assert!(item.label.contains("test-broken"));
-        assert_eq!(item.detail, strings::get(Lang::En, Key::ErrMissingToml));
-    }
 
     #[test]
     fn exiting_writes_the_session_state_back() {
-        let path = std::env::temp_dir().join("parachron-persist-test.toml");
-        let _ = std::fs::remove_file(&path);
+        let dir = tempfile::tempdir().expect("a temp dir must be available");
+        let path = dir.path().join("config.toml");
 
         // An unrecognised language on the way in is normalised on the way out.
         let stale = Config {
             lang: "klingon".to_string(),
             theme: "noctalia".to_string(),
+            sort: "sideways".to_string(),
             ..Config::default()
         };
-        persist(&path, stale, Lang::En, 1440.0, 910.0).expect("config must save");
+        persist(&path, stale, Lang::En, SortMode::Name, 1440.0, 910.0).expect("config must save");
 
         let reloaded = Config::load(&path);
         assert_eq!(reloaded.lang, "en");
+        assert_eq!(reloaded.sort, "name", "the session's sort mode is written");
         assert_eq!(reloaded.theme, "noctalia", "unrelated settings survive");
         assert_eq!(reloaded.window_width, 1440);
         assert_eq!(reloaded.window_height, 910);
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn rows_translate() {
-        let entry = Entry::Broken {
-            folder: "bozuk".to_string(),
-            reason: DataError::MissingToml,
-        };
-        assert_eq!(
-            row(&entry, Lang::Tr).detail,
-            strings::get(Lang::Tr, Key::ErrMissingToml)
-        );
     }
 }
