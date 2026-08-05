@@ -277,7 +277,7 @@ fn tab_label(file: &str) -> String {
 }
 
 /// Render a [`ViewError`] through the string table.
-fn describe(lang: Lang, error: &ViewError) -> String {
+pub fn describe(lang: Lang, error: &ViewError) -> String {
     let text = |key| strings::get(lang, key).to_string();
     match error {
         ViewError::Missing => text(Key::ErrPdfMissing),

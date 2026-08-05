@@ -67,6 +67,29 @@ pub enum Key {
     NextGlyph,
     CopyGlyph,
 
+    // Add and edit (Chron3)
+    ActionEditDocument,
+    FormAddTitle,
+    FormEditTitle,
+    FieldName,
+    FieldLink,
+    FieldPurchaseDate,
+    FieldWarrantyStart,
+    FieldWarrantyEnd,
+    FieldDocuments,
+    DateHint,
+    ActionAddPdf,
+    ActionSave,
+    ActionCancel,
+    RemoveGlyph,
+    FilterPdf,
+    Checking,
+    NoDocumentsYet,
+    ErrNameRequired,
+    ErrDateInvalid,
+    ErrWarrantyBackwards,
+    ErrSaveFailed,
+
     // Broken and incomplete entries
     BrokenTitle,
     MissingFiles,
@@ -114,6 +137,27 @@ impl Key {
         Key::PrevGlyph,
         Key::NextGlyph,
         Key::CopyGlyph,
+        Key::ActionEditDocument,
+        Key::FormAddTitle,
+        Key::FormEditTitle,
+        Key::FieldName,
+        Key::FieldLink,
+        Key::FieldPurchaseDate,
+        Key::FieldWarrantyStart,
+        Key::FieldWarrantyEnd,
+        Key::FieldDocuments,
+        Key::DateHint,
+        Key::ActionAddPdf,
+        Key::ActionSave,
+        Key::ActionCancel,
+        Key::RemoveGlyph,
+        Key::FilterPdf,
+        Key::Checking,
+        Key::NoDocumentsYet,
+        Key::ErrNameRequired,
+        Key::ErrDateInvalid,
+        Key::ErrWarrantyBackwards,
+        Key::ErrSaveFailed,
         Key::BrokenTitle,
         Key::MissingFiles,
         Key::ErrNoHome,
@@ -174,6 +218,38 @@ fn table(key: Key) -> (&'static str, &'static str) {
         NextGlyph => ("›", "›"),
         CopyGlyph => ("⧉", "⧉"),
 
+        ActionEditDocument => ("Edit Document…", "Belgeyi Düzenle…"),
+        FormAddTitle => ("Add Document", "Belge Ekle"),
+        FormEditTitle => ("Edit Document", "Belgeyi Düzenle"),
+        FieldName => ("Name", "Ad"),
+        FieldLink => ("Purchase link", "Satın alma bağlantısı"),
+        FieldPurchaseDate => ("Purchase date", "Satın alma tarihi"),
+        FieldWarrantyStart => ("Warranty start", "Garanti başlangıcı"),
+        FieldWarrantyEnd => ("Warranty end", "Garanti bitişi"),
+        FieldDocuments => ("Documents", "Belgeler"),
+        // The date format, spelled the way it is typed. Translated because the
+        // letters stand for words: day/month/year, gün/ay/yıl.
+        DateHint => ("DD-MM-YYYY", "GG-AA-YYYY"),
+        ActionAddPdf => ("Add PDF", "PDF Ekle"),
+        ActionSave => ("Save", "Kaydet"),
+        ActionCancel => ("Cancel", "İptal"),
+        RemoveGlyph => ("✕", "✕"),
+        // Shown in the file dialog's type filter, so it is on screen like
+        // anything else — same rule as the glyphs above.
+        FilterPdf => ("PDF", "PDF"),
+        Checking => ("Checking…", "Denetleniyor…"),
+        NoDocumentsYet => (
+            "No documents attached yet.",
+            "Henüz belge eklenmedi.",
+        ),
+        ErrNameRequired => ("A name is required.", "Bir ad gerekli."),
+        ErrDateInvalid => ("Not a real date.", "Geçerli bir tarih değil."),
+        ErrWarrantyBackwards => (
+            "The warranty ends before it starts.",
+            "Garanti, başlamadan bitiyor.",
+        ),
+        ErrSaveFailed => ("Could not save", "Kaydedilemedi"),
+
         BrokenTitle => ("Broken entry", "Bozuk kayıt"),
         MissingFiles => ("Missing files", "Eksik dosyalar"),
         ErrNoHome => (
@@ -231,7 +307,7 @@ mod tests {
         assert_eq!(before, seen.len(), "Key::ALL contains a duplicate");
         assert_eq!(
             Key::ALL.len(),
-            34,
+            55,
             "Key::ALL is out of step with the enum — add the new key to it"
         );
     }

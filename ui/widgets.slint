@@ -1,0 +1,170 @@
+// Controls shared by more than one column.
+//
+// Chron1 and Chron2 each hand-rolled the same button on a `Rectangle` and a
+// `TouchArea`, and the two copies had already drifted: the viewer's carried a
+// callback and four accessibility attributes, the window's carried neither.
+// This is the viewer's version, lifted out so the drift stops.
+//
+// Nothing from `std-widgets` is used for either of these. Those follow the
+// Slint style rather than the `Palette` global, which would leave them the only
+// things on screen that Chron5 could not theme.
+
+import { Palette } from "palette.slint";
+
+/// A text button.
+export component Btn inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    /// The affirmative one in a row of buttons.
+    in property <bool> primary: false;
+    callback clicked();
+
+    height: 28px;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: root.enabled && touch.has-hover
+        ? Palette.accent
+        : root.primary ? Palette.accent : Palette.border;
+    background: root.enabled && touch.has-hover ? Palette.raised : Palette.panel;
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        Text {
+            text: root.label;
+            color: root.enabled ? Palette.text : Palette.muted;
+            vertical-alignment: center;
+            font-size: 13px;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+/// A square glyph button — page navigation, and removing a row.
+export component GlyphBtn inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    width: 28px;
+    height: 28px;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: root.enabled && touch.has-hover ? Palette.accent : Palette.border;
+    background: root.enabled && touch.has-hover ? Palette.raised : Palette.panel;
+
+    // The glyph carries no meaning to a screen reader; callers supply the
+    // label, which needs a role to attach to.
+    accessible-role: button;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    Text {
+        text: root.glyph;
+        color: root.enabled ? Palette.text : Palette.muted;
+        font-size: 15px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: parent.width;
+        height: parent.height;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+/// A labelled single-line text field, with room for a message under it.
+///
+/// `error` is empty when the field is fine, and arrives pre-formatted from
+/// Rust — the component holds no text of its own.
+export component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> hint;
+    in-out property <string> text <=> input.text;
+    in property <string> error;
+    in property <bool> enabled: true;
+
+    callback edited();
+    callback accepted();
+
+    spacing: 4px;
+
+    Text {
+        text: root.label;
+        color: Palette.muted;
+        font-size: 12px;
+        letter-spacing: 1px;
+    }
+
+    Rectangle {
+        height: 30px;
+        border-radius: 5px;
+        border-width: 1px;
+        // A field that has something wrong with it says so in its outline as
+        // well as in words, so the eye finds it before the sentence does.
+        border-color: root.error != ""
+            ? Palette.danger
+            : input.has-focus ? Palette.accent : Palette.border;
+        background: Palette.bg;
+
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+
+            input := TextInput {
+                color: root.enabled ? Palette.text : Palette.muted;
+                font-size: 13px;
+                vertical-alignment: center;
+                single-line: true;
+                read-only: !root.enabled;
+                accessible-label: root.label;
+
+                edited => {
+                    root.edited();
+                }
+                accepted => {
+                    root.accepted();
+                }
+            }
+        }
+
+        // The hint sits behind the text rather than beside the label, so an
+        // empty date field shows the shape it wants without spending a row.
+        if input.text == "" && root.hint != "": Text {
+            x: 8px;
+            text: root.hint;
+            color: Palette.muted;
+            font-size: 13px;
+            vertical-alignment: center;
+            height: parent.height;
+        }
+    }
+
+    if root.error != "": Text {
+        text: root.error;
+        color: Palette.danger;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+}

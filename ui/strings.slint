@@ -32,4 +32,23 @@ export global Strings {
     in property <string> prev-glyph;
     in property <string> next-glyph;
     in property <string> copy-glyph;
+
+    // Add and edit (Chron3). The form's heading and its per-field messages are
+    // not here: they depend on which mode the form is in and on what the user
+    // typed, so Rust composes them and pushes them as ordinary properties —
+    // the same rule the viewer's error text follows.
+    in property <string> action-edit-document;
+    in property <string> field-name;
+    in property <string> field-link;
+    in property <string> field-purchase-date;
+    in property <string> field-warranty-start;
+    in property <string> field-warranty-end;
+    in property <string> field-documents;
+    in property <string> date-hint;
+    in property <string> action-add-pdf;
+    in property <string> action-save;
+    in property <string> action-cancel;
+    in property <string> remove-glyph;
+    in property <string> checking;
+    in property <string> no-documents-yet;
 }

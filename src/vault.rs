@@ -64,7 +64,6 @@ pub struct Vault {
     /// Folder of the selected product, or `None`.
     selected: Option<String>,
     lang: Lang,
-    viewer: Rc<Viewer>,
 }
 
 /// Everything the window is told after the list changes.
@@ -85,7 +84,6 @@ struct Update {
 
 impl Vault {
     /// Re-read the vault from disk, then show `select` if it is still there.
-    #[allow(dead_code)]
     fn plan_rescan(&mut self, select: Option<&str>) -> Update {
         self.entries = data::scan(&self.products_root);
         if let Some(folder) = select {
@@ -172,7 +170,6 @@ pub fn install(
         sort,
         selected: None,
         lang,
-        viewer: Rc::clone(&viewer),
     }));
 
     app.on_product_selected({
@@ -196,6 +193,26 @@ pub fn install(
     push(app, &viewer, update);
 
     vault
+}
+
+/// Re-read the vault and show `select` if it is still on disk.
+///
+/// What the form calls after a save. The borrow is scoped to the first
+/// statement, before anything touches the window.
+pub fn rescan(vault: &Rc<RefCell<Vault>>, app: &AppWindow, viewer: &Viewer, select: Option<&str>) {
+    let update = vault.borrow_mut().plan_rescan(select);
+    push(app, viewer, update);
+}
+
+/// A copy of the selected product, when one is selected and its manifest
+/// parsed. The form pre-fills from this.
+pub fn selected_product(vault: &Rc<RefCell<Vault>>) -> Option<Product> {
+    let vault = vault.borrow();
+    let folder = vault.selected.as_deref()?;
+    vault.entries.iter().find_map(|entry| match entry {
+        Entry::Ok(product) if product.folder == folder => Some(product.clone()),
+        _ => None,
+    })
 }
 
 /// Hand an update to the window. No borrow of the vault is alive here.
@@ -314,7 +331,7 @@ fn row(entry: &Entry, lang: Lang) -> ProductItem {
 
 /// Render a [`DataError`] as readable text in the chosen language. The trailing
 /// detail is diagnostic payload from the OS or the TOML parser and stays as-is.
-fn describe(lang: Lang, error: &DataError) -> String {
+pub fn describe(lang: Lang, error: &DataError) -> String {
     match error {
         DataError::NoHome => strings::get(lang, Key::ErrNoHome).to_string(),
         DataError::MissingToml => strings::get(lang, Key::ErrMissingToml).to_string(),

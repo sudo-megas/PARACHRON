@@ -8,6 +8,8 @@
 
 mod config;
 mod data;
+mod editor;
+mod import;
 mod render;
 mod strings;
 mod vault;
@@ -47,7 +49,18 @@ fn main() -> Result<(), slint::PlatformError> {
     // Column 1, and the only writer of the product list. Filling the window is
     // part of installing it, so there is one code path for "show the list"
     // rather than one for startup and another for everything after.
-    let _vault = vault::install(&app, products_root, entries, sort, lang, viewer);
+    let vault = vault::install(
+        &app,
+        products_root.clone(),
+        entries,
+        sort,
+        lang,
+        Rc::clone(&viewer),
+    );
+
+    // The add/edit sheet. It hands finished work to the vault, which is what
+    // puts it on screen.
+    editor::install(&app, products_root, lang, vault, viewer);
 
     // Show first, then resize. Sizing an unshown window is silently discarded:
     // `preferred-width`/`preferred-height` from `app.slint` win when the window
@@ -148,6 +161,20 @@ fn apply_strings(app: &AppWindow, lang: Lang) {
     table.set_prev_glyph(tr(lang, Key::PrevGlyph).into());
     table.set_next_glyph(tr(lang, Key::NextGlyph).into());
     table.set_copy_glyph(tr(lang, Key::CopyGlyph).into());
+    table.set_action_edit_document(tr(lang, Key::ActionEditDocument).into());
+    table.set_field_name(tr(lang, Key::FieldName).into());
+    table.set_field_link(tr(lang, Key::FieldLink).into());
+    table.set_field_purchase_date(tr(lang, Key::FieldPurchaseDate).into());
+    table.set_field_warranty_start(tr(lang, Key::FieldWarrantyStart).into());
+    table.set_field_warranty_end(tr(lang, Key::FieldWarrantyEnd).into());
+    table.set_field_documents(tr(lang, Key::FieldDocuments).into());
+    table.set_date_hint(tr(lang, Key::DateHint).into());
+    table.set_action_add_pdf(tr(lang, Key::ActionAddPdf).into());
+    table.set_action_save(tr(lang, Key::ActionSave).into());
+    table.set_action_cancel(tr(lang, Key::ActionCancel).into());
+    table.set_remove_glyph(tr(lang, Key::RemoveGlyph).into());
+    table.set_checking(tr(lang, Key::Checking).into());
+    table.set_no_documents_yet(tr(lang, Key::NoDocumentsYet).into());
 }
 
 /// Shorthand for a string-table lookup.

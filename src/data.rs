@@ -132,16 +132,6 @@ pub struct Product {
     pub extra: toml::Table,
 }
 
-impl Product {
-    /// Absolute path to one of this product's documents.
-    ///
-    /// Product folders are addressed by `folder`, not by `name` — the display
-    /// name is free to change or repeat, the folder is the identity.
-    pub fn document_path(&self, products_root: &Path, file: &str) -> PathBuf {
-        products_root.join(&self.folder).join(file)
-    }
-}
-
 /// A product folder, valid or not.
 ///
 /// Broken folders are surfaced, never hidden (CORE §3). This enum carries
@@ -153,18 +143,12 @@ pub enum Entry {
 }
 
 impl Entry {
+    /// A product is addressed by its folder, never by its name — the display
+    /// name is free to change or repeat, the folder is the identity.
     pub fn folder(&self) -> &str {
         match self {
             Entry::Ok(p) => &p.folder,
             Entry::Broken { folder, .. } => folder,
-        }
-    }
-
-    /// The insertion-order sort key, absent for folders that failed to parse.
-    pub fn added(&self) -> Option<Date> {
-        match self {
-            Entry::Ok(p) => Some(p.added),
-            Entry::Broken { .. } => None,
         }
     }
 }

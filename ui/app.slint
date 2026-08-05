@@ -8,9 +8,11 @@ import { ListView } from "std-widgets.slint";
 import { Palette } from "palette.slint";
 import { Strings } from "strings.slint";
 import { Viewer, DocTab } from "viewer.slint";
+import { FormSheet, FormDoc } from "form.slint";
+import { Btn } from "widgets.slint";
 
-// Re-exported so Rust can reach the global and the struct.
-export { Strings, DocTab }
+// Re-exported so Rust can reach the global and the structs.
+export { Strings, DocTab, FormDoc }
 
 // One row of the product list. Assembled in Rust so that every string it
 // carries — including the broken/warning prefixes — comes from the string table.
@@ -50,6 +52,43 @@ component StubButton inherits Rectangle {
     touch := TouchArea {
         // Inert by design this milestone.
         mouse-cursor: root.active ? MouseCursor.pointer : MouseCursor.default;
+    }
+}
+
+// One entry in the `Document ▾` menu.
+component MenuRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 30px;
+    border-radius: 4px;
+    background: root.enabled && touch.has-hover ? Palette.raised : transparent;
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        Text {
+            text: root.label;
+            color: root.enabled ? Palette.text : Palette.muted;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => {
+            root.clicked();
+        }
     }
 }
 
@@ -111,12 +150,49 @@ export component AppWindow inherits Window {
         list.viewport-y = -clamp(idx * root.row-height, 0px, limit);
     }
 
+    // ── Add and edit (Chron3) ────────────────────────────────────────────
+    //
+    // The sheet's text fields are `in-out`: the user types into them and Rust
+    // reads them back when Save is pressed. Everything else is pushed from
+    // Rust, already composed — the `.slint` side works out no messages of its
+    // own.
+    in property <bool> form-open;
+    in property <string> form-heading;
+    in-out property <string> form-name;
+    in-out property <string> form-serial;
+    in-out property <string> form-link;
+    in-out property <string> form-purchase-date;
+    in-out property <string> form-warranty-start;
+    in-out property <string> form-warranty-end;
+    in property <string> form-name-error;
+    in property <string> form-purchase-date-error;
+    in property <string> form-warranty-start-error;
+    in property <string> form-warranty-end-error;
+    in property <string> form-notice;
+    in property <[FormDoc]> form-docs;
+    in property <bool> form-busy;
+
+    // Menu state is nobody's business but this file's.
+    property <bool> menu-open: false;
+
     callback product-selected(int);
     callback tab-selected(int);
     callback page-requested(int);
     callback zoom-changed(float);
     callback copy-serial();
     callback viewport-resized(length, length);
+
+    callback add-document();
+    callback edit-document();
+    callback form-add-pdf();
+    callback form-remove-pdf(int);
+    callback form-save();
+    callback form-cancel();
+    callback form-edited();
+    /// Rung from the commit thread once a save has landed. It carries nothing:
+    /// the outcome waits in a slot the editor reads, because the editor cannot
+    /// cross a thread boundary.
+    callback form-commit-finished();
 
     title: Strings.app-title;
     icon: @image-url("../build/icons/parachron-256.png");
@@ -159,15 +235,21 @@ export component AppWindow inherits Window {
                     y: (parent.height - self.height) / 2;
                 }
 
-                StubButton {
+                menu-button := Btn {
                     label: Strings.menu-document;
                     y: (parent.height - self.height) / 2;
+                    clicked => {
+                        root.menu-open = !root.menu-open;
+                    }
                 }
 
-                StubButton {
+                add-button := Btn {
                     label: Strings.action-add-document;
-                    active: false;
                     y: (parent.height - self.height) / 2;
+                    clicked => {
+                        root.menu-open = false;
+                        root.add-document();
+                    }
                 }
 
                 // Pushes the wordmark to the centre of the remaining space.
@@ -404,6 +486,95 @@ export component AppWindow inherits Window {
                     Rectangle { vertical-stretch: 1; }
                 }
             }
+        }
+    }
+
+    // ── Document ▾ menu ──────────────────────────────────────────────────
+    //
+    // Hand-rolled rather than a `PopupWindow`. Elements inside a popup are not
+    // reliably realised for the testing backend's element lookup, which would
+    // put the whole menu — and the only route to the edit form — outside the
+    // headless tests. This is a comparable amount of code and stays reachable.
+    //
+    // Declared after the layout so it draws over it, with a transparent layer
+    // behind it to catch the dismissing click.
+    if root.menu-open: Rectangle {
+        dismiss-menu := TouchArea {
+            clicked => {
+                root.menu-open = false;
+            }
+        }
+
+        Rectangle {
+            x: 14px;
+            y: 44px;
+            width: 190px;
+            height: menu-items.preferred-height;
+            background: Palette.panel;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: Palette.border;
+
+            menu-items := VerticalLayout {
+                padding: 4px;
+                spacing: 2px;
+
+                menu-add := MenuRow {
+                    label: Strings.action-add-document;
+                    clicked => {
+                        root.menu-open = false;
+                        root.add-document();
+                    }
+                }
+
+                menu-edit := MenuRow {
+                    label: Strings.action-edit-document;
+                    // A folder whose manifest will not parse is repaired in a
+                    // text editor, not guessed at by a form.
+                    enabled: root.selected-index >= 0 && !root.selected-broken;
+                    clicked => {
+                        root.menu-open = false;
+                        root.edit-document();
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Add / edit sheet ─────────────────────────────────────────────────
+    if root.form-open: FormSheet {
+        width: root.width;
+        height: root.height;
+
+        heading: root.form-heading;
+        name <=> root.form-name;
+        serial <=> root.form-serial;
+        link <=> root.form-link;
+        purchase-date <=> root.form-purchase-date;
+        warranty-start <=> root.form-warranty-start;
+        warranty-end <=> root.form-warranty-end;
+        name-error: root.form-name-error;
+        purchase-date-error: root.form-purchase-date-error;
+        warranty-start-error: root.form-warranty-start-error;
+        warranty-end-error: root.form-warranty-end-error;
+        notice: root.form-notice;
+        docs: root.form-docs;
+        busy: root.form-busy;
+
+        add-pdf => {
+            root.form-add-pdf();
+        }
+        remove-pdf(index) => {
+            root.form-remove-pdf(index);
+        }
+        save => {
+            root.form-save();
+        }
+        cancel => {
+            root.form-cancel();
+        }
+        edited => {
+            root.form-edited();
         }
     }
 }
