@@ -1,7 +1,7 @@
 # Chron4 — Details column
 
 **Milestone:** 4 of ~9 (CORE §9)
-**Status:** planned
+**Status:** done
 **Builds against:** CORE §3 (data model — the fields column 3 reads), §4 (layout, column 3, sort toggles, app-wide principles), §8 (conventions & development rules), §10 (open items)
 
 ## Goal
@@ -38,18 +38,18 @@ ui/
 
 ## Tasks
 
-- [ ] `main.rs`: read the local UTC offset at the very top of `main`, before any thread exists, and keep it for the life of the app
-- [ ] `data.rs`: `days_left(warranty_end, today)` clamped at zero; drop the `#[allow(dead_code)]` on `Product` and on `fmt_date`, which now have callers
-- [ ] `details.rs`: build the column's snapshot from the selected `Entry` — dates through `fmt_date`, days-left composed through the string table
-- [ ] `details.slint`: the component, following the `Viewer` boundary — data in as properties, intent out as callbacks, no text of its own
-- [ ] `details.slint`: the days-left counter as the column's visual anchor, in the error colour once it reaches zero
-- [ ] `details.rs`: `on_copy_link`, mirroring `on_copy_serial` — clipboard, silent failure, a `link-copied` flag and its own single-shot timer
-- [ ] `app.slint`: column 3 hosts `Details`; THEME and EXPORT stay as they are
-- [ ] Broken entry, no selection, and a product with an empty link each render something readable rather than an empty panel
-- [ ] `app.slint`: two sort chips in a strip above the product list, the active one marked
-- [ ] `vault.rs`: `on_sort_toggled` — clicking the active chip returns to insertion order; selection and the open page survive the re-sort
-- [ ] `main.rs`: `persist` writes the session's sort mode instead of carrying the loaded one through
-- [ ] `strings.slint` / `strings.rs`: every new label, unit and chip through the table
+- [x] `main.rs`: read the local UTC offset at the very top of `main`, before any thread exists, and keep it for the life of the app
+- [x] `data.rs`: `days_left(warranty_end, today)` clamped at zero; drop the `#[allow(dead_code)]` on `Product` and on `fmt_date`, which now have callers
+- [x] `details.rs`: build the column's snapshot from the selected `Entry` — dates through `fmt_date`, days-left composed through the string table
+- [x] `details.slint`: the component, following the `Viewer` boundary — data in as properties, intent out as callbacks, no text of its own
+- [x] `details.slint`: the days-left counter as the column's visual anchor, in the error colour once it reaches zero
+- [x] `details.rs`: `on_copy_link`, mirroring `on_copy_serial` — clipboard, silent failure, a `link-copied` flag and its own single-shot timer
+- [x] `app.slint`: column 3 hosts `Details`; THEME and EXPORT stay as they are
+- [x] Broken entry, no selection, and a product with an empty link each render something readable rather than an empty panel
+- [x] `app.slint`: two sort chips in a strip above the product list, the active one marked
+- [x] `vault.rs`: `on_sort_toggled` — clicking the active chip returns to insertion order; selection and the open page survive the re-sort
+- [x] `main.rs`: `persist` writes the session's sort mode instead of carrying the loaded one through
+- [x] `strings.slint` / `strings.rs`: every new label, unit and chip through the table
 
 ## Acceptance criteria
 
@@ -85,7 +85,22 @@ Recomputing on every push rather than caching a `Date` at startup is deliberate:
 
 ## How the criteria were verified
 
-*(filled in when the milestone is done)*
+Part of the 94 tests `cargo test` runs; Chron3's entry describes the harness and the two corrections it needed.
+
+**Automated.** `details.rs` covers the column as a pure function of the selected entry and a date handed in: dates arrive in `DD-MM-YYYY`, the counter is the days between today and the warranty end, `1 day` is not `1 days`, Turkish gives `1 gün` and `658 gün` because it takes no plural after a numeral, a warranty that ran out reads as expired and never as a negative, the last day of a warranty is expired rather than zero days, and both "nothing selected" and "a broken folder" produce the same empty column. One test walks a warranty down to its end and asserts the sequence `7 days, 5 days, 1 day, Expired`. `vault.rs` covers the three comparators against a fixture built so that insertion, alphabetical and purchase order are all different from one another — no sort can pass by accident — plus broken entries sinking to the end under every mode, stability across repeated runs, and `SortMode` round-tripping through the `config.toml` value including a fallback for a file somebody has typed into.
+
+**By real clicks.** On the isolated display, against a scratch vault:
+
+| Action | Result |
+|---|---|
+| Select a product | Column 3 fills: link with its copy affordance, purchase date, warranty start, warranty end, and `951 days` in the largest, boldest text in the column |
+| Select the other product | Every field follows, `880 days` |
+| Click `A–Z` | The chip lights, the list reorders, the selection stays on the same product and its page keeps rendering — untouched, at the same page |
+| Click `Date`, then click it again | The lit chip moves, then clears back to insertion order |
+
+The two counters were checked by hand against the calendar rather than taken on trust: 2026-08-06 to 2029-03-14 is 951 days, and to 2029-01-02 is 880.
+
+**Not verified by machine.** That the countdown is correct *across* midnight. It is recomputed on every push rather than cached, so the code path is the same one every other update takes, but nobody left the app running overnight to watch it change. The UTC fallback has a test; the local offset itself depends on the machine.
 
 ## Done when
 

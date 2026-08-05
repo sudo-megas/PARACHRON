@@ -27,8 +27,10 @@ Single source of truth for the Parachron project. Every Chron milestone file bui
 | GUI | Slint | UI in `.slint` files; logic in Rust |
 | PDF render | MuPDF (`mupdf` crate) | pages rasterized to images for the preview pane; built with `default-features = false` plus `base14-fonts`, `system-fonts`, `brotli`, `img` — no OCR, no ebook formats, and **no PDF JavaScript execution** |
 | PDF export | MuPDF (reused) | generates summary page + merges product PDFs |
-| Data format | TOML (`toml` + `serde`) | one file per product |
-| Dates | `time` crate | Stored as native TOML dates (ISO `YYYY-MM-DD`); displayed as `DD-MM-YYYY`; days-left computed at runtime |
+| Data format | TOML (`toml` + `serde`) | one file per product; `preserve_order` so hand-added keys keep the order they were written in |
+| Dates | `time` crate | Stored as native TOML dates (ISO `YYYY-MM-DD`); displayed as `DD-MM-YYYY`; days-left computed at runtime. Features `macros`, `formatting`, `parsing`, `local-offset` — and the offset **must** be read at the top of `main`, before any thread exists (Chron4) |
+| File picker | `rfd`, `default-features = false` + `xdg-portal` | Native dialogs with no GTK development headers, which keeps §7's three targets cheap. `wayland` is deliberately **off**: its window identifier roundtrips a second event queue on Slint's own display from a foreign thread, which risks a deadlock in exchange for cosmetic dialog parenting. Always driven through `AsyncFileDialog` — the blocking call parks the caller in an untimeouted D-Bus read |
+| Clipboard | `arboard`, `wayland-data-control` only | No image support; Parachron only ever copies text |
 
 Rejected during planning: Python, TypeScript, Qt, Electron (vetoed on sketch); iced, egui, GTK4 (GUI runners-up); pdfium-render, Poppler, pure-Rust PDF (render runners-up); SQLite, JSON, RON (storage runners-up).
 
@@ -95,7 +97,9 @@ Column 1 — product list. Default order: as added (`added` field). Two sort tog
 
 Column 2 — document viewer. Workspace-style tabs switch between the selected product's PDFs (`pdfs` order); each tab is labelled with the file-name stem, so `invoice.pdf` reads `Invoice`. The preview takes the full remaining height and shows **one page at a time, fitted whole** inside the pane. Under it a control row carries `‹` / `›`, a `2 / 12` page counter, and a **zoom slider** — zoom is a multiplier of the fit scale (`1×`–`4×`), so `1×` always means the whole page is visible whatever the window size; above `1×` the page pans. Page and zoom reset whenever the tab or product changes. Below that, a fixed **44px** serial-number strip: click it to copy the serial to the clipboard with a brief "copied" confirmation, the same gesture the purchase link uses in column 3.
 
-Column 3 — details + actions. Top: THEME and EXPORT buttons. Then purchase link (click = **copy to clipboard** with a brief "copied" confirmation — never opens a browser), purchase date, warranty start, and the warranty-left counter in days — bold, largest text in the column, its visual anchor.
+Column 3 — details + actions. Top: THEME and EXPORT buttons. Then purchase link (click = **copy to clipboard** with a brief "copied" confirmation — never opens a browser), purchase date, warranty start, warranty end, and the warranty-left counter in days — bold, largest text in the column, its visual anchor. A warranty that has run out reads as expired rather than as a negative number, in the error colour.
+
+Warranty end was added to this list in Chron4; the original wireframe above omitted it. Hiding the date the countdown is counting toward leaves anyone checking the number with nothing to check it against.
 
 Columns are fixed-ratio; the content structure is identical for every product.
 
@@ -184,7 +188,7 @@ One line of planned scope per milestone. Each Chron file is written in detail on
 |---|---|
 | Chron1 | Scaffold: cargo + Slint build, data layer (folder scan, TOML parse, broken-file handling), bare three-column window with product list, string-table plumbing |
 | Chron2 | Document viewer: MuPDF page rendering, workspace tabs, serial strip |
-| Chron3 | Add/edit products: Document menu, input forms, PDF import into the data dir |
+| Chron3 | Add/edit products: Document menu, input forms, PDF import into the data dir. Also built the vault seam that owns the product list, and with it `SortMode` and its comparators — the module exists to own list order, and shipping it with a hardcoded order would have meant rewriting its centre a milestone later. The toggles anyone can *see* still arrived in Chron4 |
 | Chron4 | Details column: dates, copy-link, days-left counter, sort toggles |
 | Chron5 | Theming: all 11 palettes, THEME picker |
 | Chron6 | Localization: full EN/TR string tables, language switch |

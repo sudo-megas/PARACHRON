@@ -153,7 +153,36 @@ export component AppWindow inherits Window {
     // showing its last row alone above a band of empty space.
     public function scroll-row-into-view(idx: int) {
         let limit = max(0px, list.viewport-height - list.visible-height);
-        list.viewport-y = -clamp(idx * root.row-height, 0px, limit);
+        // Clamping what is already there is what rescues a list that just got
+        // shorter: the runtime does not clamp `viewport-y` against the new,
+        // smaller `viewport-height`, and a stale offset leaves the list showing
+        // its last row alone above a band of empty space.
+        let seen = clamp(-list.viewport-y, 0px, limit);
+
+        if (idx < 0) {
+            list.viewport-y = -seen;
+            return;
+        }
+
+        let top = idx * root.row-height;
+        let bottom = top + root.row-height;
+
+        // Already in view: leave the list exactly where the user left it.
+        // Scrolling on every click would drag the clicked row to the top and
+        // throw away the scroll position they had chosen.
+        if (top >= seen && bottom <= seen + list.visible-height) {
+            list.viewport-y = -seen;
+            return;
+        }
+
+        // Bringing a row down from above, or a jump far enough that the runtime
+        // would snap a bottom-aligned target to a whole row and leave the row
+        // half shown, is done by top-aligning — `idx * row-height` already sits
+        // on a row boundary, so it lands exactly. Anything closer scrolls the
+        // shortest distance instead.
+        let far = top > seen + 2 * list.visible-height;
+        let target = (top < seen || far) ? top : bottom - list.visible-height;
+        list.viewport-y = -clamp(target, 0px, limit);
     }
 
     // ── Add and edit (Chron3) ────────────────────────────────────────────

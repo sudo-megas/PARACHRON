@@ -1,7 +1,7 @@
 # Chron3 — Add and edit products
 
 **Milestone:** 3 of ~9 (CORE §9)
-**Status:** in progress
+**Status:** done
 **Builds against:** CORE §3 (data model — the write half), §4 (layout, `Document ▾`, app-wide principles), §7 (packaging — the picker must not add a build dependency), §8 (conventions & development rules), §9 (roadmap — see the note on sorting below)
 
 ## Goal
@@ -62,44 +62,44 @@ ui/
 
 ### The seam
 
-- [ ] `viewer.rs`: bump `token` at the top of `plan()` so it counts view generations, not requests; add the regression test that fails on today's code
-- [ ] `render.rs`: `Message::Invalidate(PathBuf)` — drop matching cache entries, close the open document if it matches; `Renderer::invalidate(path)` to send it
-- [ ] `viewer.rs`: replace `State.entries: Vec<Entry>` + `State.selected: usize` with a `DocSet { folder, serial, pdfs, missing }` handed in from outside, and expose `Viewer::show(&self, app, doc: Option<DocSet>, keep_view: bool)`
-- [ ] `viewer.rs`: stop registering `on_product_selected` — Slint permits one handler per callback, and the vault needs it
-- [ ] `viewer.rs`: `lang` becomes state rather than a value captured into seven closures, so Chron6 can change it without re-registering handlers (which is a panic, not a no-op, from inside a handler)
-- [ ] `vault.rs`: `Vault { products_root, entries, sort, selected: Option<String>, lang }`, holding only a `Weak` handle to the window
-- [ ] `vault.rs`: `SortMode { Added, Name, Purchase }` and its three comparators, broken entries last under every mode, tie-broken by folder
-- [ ] `data.rs`: `scan` stops sorting; `sort_by_added` moves into `vault.rs` as one comparator among three and finally gets a test
-- [ ] `vault.rs`: `row()` and `describe()` move here from `main.rs`, which stays wire-up only
-- [ ] `vault.rs`: two-phase update — compute an `Update` under a scoped borrow, then push it with no borrow held across any Slint setter
-- [ ] `vault.rs`: `rescan(select: Option<&str>)` re-reads the vault and restores the selection by folder
-- [ ] `app.slint`: name the list (`list := ListView`) and expose enough of its scroll state that a re-sorted or newly added selection can be brought back into view
+- [x] `viewer.rs`: bump `token` at the top of `plan()` so it counts view generations, not requests; add the regression test that fails on today's code
+- [x] `render.rs`: `Message::Invalidate(PathBuf)` — drop matching cache entries, close the open document if it matches; `Renderer::invalidate(path)` to send it
+- [x] `viewer.rs`: replace `State.entries: Vec<Entry>` + `State.selected: usize` with a `DocSet { folder, serial, pdfs, missing }` handed in from outside, and expose `Viewer::show(&self, app, doc: Option<DocSet>, keep_view: bool)`
+- [x] `viewer.rs`: stop registering `on_product_selected` — Slint permits one handler per callback, and the vault needs it
+- [x] `viewer.rs`: `lang` becomes state rather than a value captured into seven closures, so Chron6 can change it without re-registering handlers (which is a panic, not a no-op, from inside a handler)
+- [x] `vault.rs`: `Vault { products_root, entries, sort, selected: Option<String>, lang }`, holding only a `Weak` handle to the window
+- [x] `vault.rs`: `SortMode { Added, Name, Purchase }` and its three comparators, broken entries last under every mode, tie-broken by folder
+- [x] `data.rs`: `scan` stops sorting; `sort_by_added` moves into `vault.rs` as one comparator among three and finally gets a test
+- [x] `vault.rs`: `row()` and `describe()` move here from `main.rs`, which stays wire-up only
+- [x] `vault.rs`: two-phase update — compute an `Update` under a scoped borrow, then push it with no borrow held across any Slint setter
+- [x] `vault.rs`: `rescan(select: Option<&str>)` re-reads the vault and restores the selection by folder
+- [x] `app.slint`: name the list (`list := ListView`) and expose enough of its scroll state that a re-sorted or newly added selection can be brought back into view
 
 ### The write half
 
-- [ ] `data.rs`: `write_atomic(path, contents)` — temp file in the target's own directory, then rename; `Config::save` is pointed at it too
-- [ ] `data.rs`: manifest serialization, including `Date → toml::value::Datetime`, the inverse `to_date` never had
-- [ ] `data.rs`: unknown keys in `product.toml` survive a rewrite (CORE §3: "no hidden state" cuts both ways)
-- [ ] `data.rs`: `folder_slug(name)` — Turkish letters mapped before lowercasing, Windows-illegal and reserved names rejected, empty result replaced, collisions suffixed
-- [ ] `data.rs`: `Draft`, the validated shape the form produces and the writer consumes
+- [x] `data.rs`: `write_atomic(path, contents)` — temp file in the target's own directory, then rename; `Config::save` is pointed at it too
+- [x] `data.rs`: manifest serialization, including `Date → toml::value::Datetime`, the inverse `to_date` never had
+- [x] `data.rs`: unknown keys in `product.toml` survive a rewrite (CORE §3: "no hidden state" cuts both ways)
+- [x] `data.rs`: `folder_slug(name)` — Turkish letters mapped before lowercasing, Windows-illegal and reserved names rejected, empty result replaced, collisions suffixed
+- [x] `data.rs`: `Draft`, the validated shape the form produces and the writer consumes
 
 ### Import
 
-- [ ] Spike the picker before writing `import.rs`: confirm the window keeps repainting while the dialog is open
-- [ ] `import.rs`: picked files validated as real PDFs by reusing `render::open_document` and `render::page_count`, off the UI thread
-- [ ] `import.rs`: destination names sanitised and de-duplicated (`invoice.pdf` twice → `invoice-2.pdf`)
-- [ ] `import.rs`: copy files in, then `Renderer::invalidate` each destination
-- [ ] Add: create folder → copy PDFs → write manifest last. Edit: copy new PDFs → write manifest → delete removed copies last
+- [x] Spike the picker before writing `import.rs`: confirm the window keeps repainting while the dialog is open
+- [x] `import.rs`: picked files validated as real PDFs by reusing `render::open_document` and `render::page_count`, off the UI thread
+- [x] `import.rs`: destination names sanitised and de-duplicated (`invoice.pdf` twice → `invoice-2.pdf`)
+- [x] `import.rs`: copy files in, then `Renderer::invalidate` each destination
+- [x] Add: create folder → copy PDFs → write manifest last. Edit: copy new PDFs → write manifest → delete removed copies last
 
 ### The form
 
-- [ ] `widgets.slint`: `Btn` (lifted from `NavButton`, which is the better of the two duplicated recipes — it has the callback and the accessibility attributes) and `Field`, a hand-rolled `TextInput`
-- [ ] `form.slint`: the sheet — dim backdrop that swallows clicks without dismissing, centred card, no text of its own
-- [ ] `editor.rs`: open in add mode (empty) or edit mode (pre-filled from the selected product)
-- [ ] `editor.rs`: validation on Save, then live once a Save has failed, so errors clear as they are fixed
-- [ ] `editor.rs`: attach and remove PDFs inside the sheet, including on an existing product
-- [ ] `app.slint`: `Document ▾` opens a menu with `Add Document…` and `Edit Document…`; `Edit` is disabled unless a valid product is selected
-- [ ] `strings.slint` / `strings.rs`: every new label, button, error and glyph through the table
+- [x] `widgets.slint`: `Btn` (lifted from `NavButton`, which is the better of the two duplicated recipes — it has the callback and the accessibility attributes) and `Field`, a hand-rolled `TextInput`
+- [x] `form.slint`: the sheet — dim backdrop that swallows clicks without dismissing, centred card, no text of its own
+- [x] `editor.rs`: open in add mode (empty) or edit mode (pre-filled from the selected product)
+- [x] `editor.rs`: validation on Save, then live once a Save has failed, so errors clear as they are fixed
+- [x] `editor.rs`: attach and remove PDFs inside the sheet, including on an existing product
+- [x] `app.slint`: `Document ▾` opens a menu with `Add Document…` and `Edit Document…`; `Edit` is disabled unless a valid product is selected
+- [x] `strings.slint` / `strings.rs`: every new label, button, error and glyph through the table
 
 ## Acceptance criteria
 
@@ -145,7 +145,32 @@ ui/
 
 ## How the criteria were verified
 
-*(filled in when the milestone is done)*
+94 tests pass (`cargo test`), up from Chron2's 46. Chron3 accounts for most of that; Chron4 adds the rest.
+
+**Automated.** The write half is covered by pure tests that need no window: `folder_slug` over Turkish letters (including the `İ` → `i` + combining-dot trap), Windows device names, punctuation-only and non-Latin names, length capping and hyphen trimming; folder and file-name collision numbering; date parsing across `-`, `.` and `/` separators and single-digit days, with the impossible dates and the signed year refused; manifest round-tripping with unknown keys preserved and known keys keeping their documented order; atomic writes leaving neither a stale temporary nor a damaged file when they fail. `import.rs` drives whole commits against temporary directories: adding writes folder, PDF and manifest and scans back as the same product; a file that is not a PDF is refused with nothing written; attaching a second PDF later leaves the first alone; removing one deletes Parachron's copy and not the file it came from; and every path whose bytes changed is reported for the render worker to forget. `editor.rs` tests the validation rules and that editing preserves both `added` and the unknown keys. `viewer.rs` gained the regression test for the token defect, which fails on the pre-Chron3 code.
+
+**By real clicks, on an isolated display.** `Xvfb :98` plus `xdotool`, against a **scratch vault** — `XDG_DATA_HOME` pointed at a temporary directory, so no test ever touches the real one.
+
+**A correction to Chron2's convention, found the hard way.** `DISPLAY=:99` alone is not isolation on this machine. The session is Plasma Wayland, and Slint's winit backend prefers Wayland whenever `WAYLAND_DISPLAY` is set — so the app opens on the *real desktop* while the script watches an empty Xvfb, with no error and no window to find. Every launch must go through `env -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE`. Two more things the harness has to know: there is no window manager, so nothing holds X input focus and `xdotool key` needs `--window <id>` or an explicit `windowfocus` or the keystroke goes nowhere; and the first click after launch takes two to three seconds while MuPDF warms up, so a fixed `sleep` screenshots the previous frame. Poll for the window to actually change instead.
+
+Verified by clicking, each confirmed against a screenshot:
+
+| Action | Result |
+|---|---|
+| Launch against a seeded vault | Two products and the broken folder listed, sort chips present, nothing selected |
+| Click a product | Row highlights, tabs appear, page renders fitted, serial and details fill in |
+| Click the second product | Both its tabs appear, details and serial follow |
+| `Document ▾` | Menu opens with `Add Document` and `Edit Document…`, the latter enabled for a valid selection |
+| `Edit Document…` | Sheet opens over a dimmed window, prefilled: name, serial, link, three dates as `DD-MM-YYYY`, both documents listed with remove buttons |
+| Escape | Sheet closes, nothing written — the manifest on disk is byte-identical, hand-added `notes` key included |
+
+**A regression this found, and it was mine.** The first run rendered every page one pixel wide. `vault::install` now fills the window as part of installing itself, which happens *before* the window is mapped — and an unmapped window reports no size, so `fallback_viewport` computed a 1×1 pane and stored it. Because 1.0 is not less than 1.0, that bogus size then looked like a real measurement, and the layout's actual one never replaced it. Fixed by only accepting a fallback worth having; a viewport left unset simply waits for the real one, which arrives a moment later. Nothing in the test suite caught this because the whole failure lives in the gap between "the window exists" and "the window has been mapped", which the headless backend does not have.
+
+**Criterion 11** (a crash between copying and writing the manifest) is a test rather than a story: a folder holding a PDF and no manifest scans as `MissingToml`, which is what an interrupted add leaves behind.
+
+**Criterion 12.** The sweep over `src/` and `ui/` returns only import paths, `@image-url` resource paths, `""` emptiness comparisons, the `"monospace"` font identifier, path components, config values, and the two on-disk identifier fallbacks (`product` for a folder, `document` for a file) — which are names on disk, not words anyone reads. No user-visible text outside `strings.rs`.
+
+**Not verified by machine.** The file picker itself. A portal dialog is drawn by the desktop's own portal service in the user's session, so it appears on the real display whatever `DISPLAY` says and cannot be driven under `Xvfb`. Everything behind it takes paths and is tested that way; the click that opens it needs a person.
 
 ## Done when
 

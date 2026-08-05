@@ -10,6 +10,7 @@
 //! reason attached.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
@@ -298,12 +299,18 @@ pub fn parse_date(text: &str) -> Option<Date> {
         .collect();
 
     let padded = time::macros::format_description!("[day]-[month]-[year]");
-    if let Ok(date) = Date::parse(&normalised, &padded) {
-        return Some(date);
-    }
     let loose =
         time::macros::format_description!("[day padding:none]-[month padding:none]-[year]");
-    Date::parse(&normalised, &loose).ok()
+
+    let parsed = Date::parse(&normalised, &padded)
+        .or_else(|_| Date::parse(&normalised, &loose))
+        .ok()?;
+
+    // `time`'s `[year]` accepts a leading sign, so `14-03--0500` parses as the
+    // year −500. That would then be clamped on the way to TOML and written out
+    // as year 0 — a silent rewrite of what somebody typed. Refuse it instead;
+    // a purchase has never been made before the common era.
+    (parsed.year() >= 1).then_some(parsed)
 }
 
 /// The inverse of [`to_date`]: a calendar date the way TOML stores one.
@@ -338,10 +345,23 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<(), DataError> {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let tmp = dir.join(format!(".{name}.tmp"));
 
-    fs::write(&tmp, contents).map_err(unreadable)?;
+    // Leaving a temporary behind would be litter in somebody's product folder,
+    // so every failure below clears up after itself.
+    let written = (|| {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(contents.as_bytes())?;
+        // Without this the rename can be durable while the bytes are not, and
+        // a crash at the wrong moment leaves a zero-length manifest — the exact
+        // outcome this function exists to prevent.
+        file.sync_all()
+    })();
+
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(unreadable(e));
+    }
+
     fs::rename(&tmp, path).map_err(|e| {
-        // Leaving the temporary behind would look like a product folder's
-        // business next time somebody opened the directory.
         let _ = fs::remove_file(&tmp);
         unreadable(e)
     })
@@ -385,9 +405,10 @@ fn fold(ch: char) -> Option<char> {
 /// using one. CORE §7 ships a Windows binary, so a vault that syncs onto one
 /// must not contain a folder it cannot open.
 fn is_reserved(slug: &str) -> bool {
-    const RESERVED: [&str; 22] = [
-        "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
-        "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+    const RESERVED: [&str; 24] = [
+        "con", "prn", "aux", "nul", "com0", "com1", "com2", "com3", "com4", "com5", "com6", "com7",
+        "com8", "com9", "lpt0", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8",
+        "lpt9",
     ];
     RESERVED.contains(&slug)
 }
@@ -681,6 +702,10 @@ mod tests {
             "31-02-2026", // no such day
             "14-13-2026", // no such month
             "14-03",
+            // `time`'s year accepts a sign, and a negative year would be
+            // clamped to 0 on the way into TOML — a silent rewrite of what was
+            // typed rather than a refusal.
+            "14-03--0500",
         ] {
             assert_eq!(parse_date(text), None, "{text:?} should not parse");
         }
@@ -756,6 +781,32 @@ last_checked = 2026-07-01
             .filter(|name| name != "product.toml")
             .collect();
         assert!(leftovers.is_empty(), "temporary files left behind: {leftovers:?}");
+    }
+
+    #[test]
+    fn a_write_that_fails_leaves_neither_a_temporary_nor_a_damaged_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("product.toml");
+        write_atomic(&path, "the good copy").unwrap();
+
+        // A directory where the file should go: `File::create` cannot succeed,
+        // which is the cheapest reachable write failure.
+        let blocked = dir.path().join("blocked");
+        fs::create_dir(&blocked).unwrap();
+        assert!(write_atomic(&blocked, "nope").is_err());
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "the good copy",
+            "an unrelated failure must not touch what was already written"
+        );
+        let strays: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(strays.is_empty(), "temporary left behind: {strays:?}");
     }
 
     /// The round trip that matters: what the form writes is what the list reads.

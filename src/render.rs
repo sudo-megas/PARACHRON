@@ -189,15 +189,8 @@ struct OpenDocument {
 
 /// Serve one job, from cache when possible.
 fn serve(open: &mut Option<OpenDocument>, cache: &mut Cache, job: Job) -> Response {
-    let key = CacheKey {
-        path: job.path.clone(),
-        page: job.page,
-        width: job.target_width,
-        height: job.target_height,
-    };
-
-    // A cache hit still needs the page count, which only the open document
-    // knows — so make sure the right document is loaded either way.
+    // The page count comes first, because it decides which page is even
+    // askable for.
     let pages = match ensure_open(open, &job.path) {
         Ok(pages) => pages,
         Err(error) => {
@@ -208,17 +201,34 @@ fn serve(open: &mut Option<OpenDocument>, cache: &mut Cache, job: Job) -> Respon
         }
     };
 
+    // The requested page may be past the end. A file replaced on disk can be
+    // shorter than the one whose page number is still on screen — import a
+    // two-page warranty over a twelve-page one while the reader is on page
+    // eight, and this is that. Landing on the last page beats refusing to draw,
+    // and because the response carries the page it actually rendered rather
+    // than the one that was asked for, the counter and the arrows come back
+    // agreeing with it. `page_count` refuses a document with no pages at all,
+    // so there is always one to land on.
+    let page = job.page.min(pages.saturating_sub(1));
+
+    let key = CacheKey {
+        path: job.path.clone(),
+        page,
+        width: job.target_width,
+        height: job.target_height,
+    };
+
     if let Some(raster) = cache.get(&key) {
         return Response::Ready {
             token: job.token,
-            page: job.page,
+            page,
             pages,
             raster,
         };
     }
 
     let document = &open.as_ref().expect("just opened").document;
-    match rasterize(document, job.page, job.target_width, job.target_height) {
+    match rasterize(document, page, job.target_width, job.target_height) {
         Ok(raster) => {
             cache.insert(key, raster.clone());
             Response::Ready {

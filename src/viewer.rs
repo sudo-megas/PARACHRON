@@ -492,7 +492,17 @@ fn apply(app: &AppWindow, state: &Arc<Mutex<State>>, renderer: &Renderer) {
     let (snapshot, plan, lang) = {
         let mut state = state.lock().unwrap();
         if state.viewport.0 < 1.0 || state.viewport.1 < 1.0 {
-            state.viewport = fallback_viewport(app);
+            let fallback = fallback_viewport(app);
+            // Only if it is worth having. The vault fills the window before it
+            // is mapped, and an unmapped window reports no size at all — the
+            // fallback is then a 1×1 pane, which is both useless and worse than
+            // nothing: it is no longer "unset", so the layout's real
+            // measurement never replaces it and every page renders one pixel
+            // wide. Leaving it unset means nothing draws until the first real
+            // size arrives, which is a moment later and correct.
+            if fallback.0 > 1.0 && fallback.1 > 1.0 {
+                state.viewport = fallback;
+            }
         }
         (state.snapshot(), state.plan(scale), state.lang)
     };
