@@ -16,8 +16,10 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use time::UtcOffset;
 
 use crate::data::{self, DataError, Entry, Product};
+use crate::details;
 use crate::strings::{self, Key, Lang};
 use crate::viewer::{DocSet, Viewer};
 use crate::{AppWindow, ProductItem};
@@ -46,6 +48,24 @@ impl SortMode {
         }
     }
 
+    /// Which chip is lit for this mode.
+    pub fn chip(self) -> i32 {
+        match self {
+            SortMode::Added => 0,
+            SortMode::Name => 1,
+            SortMode::Purchase => 2,
+        }
+    }
+
+    /// The inverse of [`SortMode::chip`], for what a click asks for.
+    pub fn from_chip(chip: i32) -> Self {
+        match chip {
+            1 => SortMode::Name,
+            2 => SortMode::Purchase,
+            _ => SortMode::Added,
+        }
+    }
+
     pub fn code(self) -> &'static str {
         match self {
             SortMode::Added => "added",
@@ -64,6 +84,8 @@ pub struct Vault {
     /// Folder of the selected product, or `None`.
     selected: Option<String>,
     lang: Lang,
+    /// Read once at startup, while the process was still single-threaded.
+    offset: UtcOffset,
 }
 
 /// Everything the window is told after the list changes.
@@ -79,6 +101,9 @@ struct Update {
     detail: SharedString,
     broken: bool,
     doc: Option<DocSet>,
+    details: details::Snapshot,
+    /// Which chip is lit: 0 as added, 1 alphabetical, 2 purchase date.
+    sort: i32,
     keep_view: bool,
 }
 
@@ -130,6 +155,8 @@ impl Vault {
                 detail: SharedString::new(),
                 broken: false,
                 doc: None,
+                details: details::Snapshot::empty(),
+                sort: self.sort.chip(),
                 keep_view: false,
             };
         };
@@ -143,6 +170,11 @@ impl Vault {
             Entry::Broken { .. } => None,
         };
 
+        // Today is re-read here rather than cached at startup, so a window left
+        // open overnight shows the right countdown in the morning.
+        let details =
+            details::Snapshot::of(self.entries.get(index), self.lang, data::today(self.offset));
+
         Update {
             rows,
             index: index as i32,
@@ -150,8 +182,24 @@ impl Vault {
             detail,
             broken,
             doc,
+            details,
+            sort: self.sort.chip(),
             keep_view,
         }
+    }
+
+    /// Reorder the list. `Added` is CORE §4's default and what an active chip
+    /// clears back to.
+    fn plan_sort(&mut self, sort: SortMode) -> Update {
+        self.sort = sort;
+        // A re-sort is not a change of product: whoever was reading page seven
+        // of an invoice is still reading it.
+        self.plan(true)
+    }
+
+    /// What to write back to `config.toml` on the way out.
+    pub fn sort(&self) -> SortMode {
+        self.sort
     }
 }
 
@@ -162,6 +210,7 @@ pub fn install(
     entries: Vec<Entry>,
     sort: SortMode,
     lang: Lang,
+    offset: UtcOffset,
     viewer: Rc<Viewer>,
 ) -> Rc<RefCell<Vault>> {
     let vault = Rc::new(RefCell::new(Vault {
@@ -170,6 +219,7 @@ pub fn install(
         sort,
         selected: None,
         lang,
+        offset,
     }));
 
     app.on_product_selected({
@@ -185,6 +235,17 @@ pub fn install(
             // window. Slint setters can run bindings that call straight back
             // into this callback, and a `RefCell` borrowed twice is a panic.
             let update = vault.borrow_mut().plan_select(index as usize);
+            push(&app, &viewer, update);
+        }
+    });
+
+    app.on_sort_toggled({
+        let vault = Rc::clone(&vault);
+        let viewer = Rc::clone(&viewer);
+        let weak = app.as_weak();
+        move |mode| {
+            let Some(app) = weak.upgrade() else { return };
+            let update = vault.borrow_mut().plan_sort(SortMode::from_chip(mode));
             push(&app, &viewer, update);
         }
     });
@@ -230,6 +291,8 @@ fn push(app: &AppWindow, viewer: &Viewer, update: Update) {
     // the conditional that hosts the viewer, tearing it down and paying the
     // resize debounce to build it again.
     app.set_selected_index(update.index);
+    app.set_sort_mode(update.sort);
+    details::show(app, &update.details);
     viewer.show(app, update.doc, update.keep_view);
 
     // Scroll last, and only after a layout pass. The list still reports the

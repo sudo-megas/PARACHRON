@@ -90,6 +90,16 @@ pub enum Key {
     ErrWarrantyBackwards,
     ErrSaveFailed,
 
+    // Details column and sorting (Chron4)
+    WarrantyLeft,
+    DayUnit,
+    DaysUnit,
+    WarrantyExpired,
+    SortName,
+    SortPurchase,
+    SortByName,
+    SortByPurchase,
+
     // Broken and incomplete entries
     BrokenTitle,
     MissingFiles,
@@ -158,6 +168,14 @@ impl Key {
         Key::ErrDateInvalid,
         Key::ErrWarrantyBackwards,
         Key::ErrSaveFailed,
+        Key::WarrantyLeft,
+        Key::DayUnit,
+        Key::DaysUnit,
+        Key::WarrantyExpired,
+        Key::SortName,
+        Key::SortPurchase,
+        Key::SortByName,
+        Key::SortByPurchase,
         Key::BrokenTitle,
         Key::MissingFiles,
         Key::ErrNoHome,
@@ -250,6 +268,21 @@ fn table(key: Key) -> (&'static str, &'static str) {
         ),
         ErrSaveFailed => ("Could not save", "Kaydedilemedi"),
 
+        WarrantyLeft => ("Warranty left", "Kalan garanti"),
+        // Turkish takes no plural agreement after a numeral — "658 gün", not
+        // "658 günler" — so both units are the same word here. That is correct,
+        // not a table entry somebody forgot to finish.
+        DayUnit => ("day", "gün"),
+        DaysUnit => ("days", "gün"),
+        WarrantyExpired => ("Expired", "Süresi doldu"),
+        SortName => ("A–Z", "A–Z"),
+        SortPurchase => ("Date", "Tarih"),
+        SortByName => ("Sort alphabetically", "Alfabetik sırala"),
+        SortByPurchase => (
+            "Sort by purchase date",
+            "Satın alma tarihine göre sırala",
+        ),
+
         BrokenTitle => ("Broken entry", "Bozuk kayıt"),
         MissingFiles => ("Missing files", "Eksik dosyalar"),
         ErrNoHome => (
@@ -307,7 +340,7 @@ mod tests {
         assert_eq!(before, seen.len(), "Key::ALL contains a duplicate");
         assert_eq!(
             Key::ALL.len(),
-            55,
+            63,
             "Key::ALL is out of step with the enum — add the new key to it"
         );
     }

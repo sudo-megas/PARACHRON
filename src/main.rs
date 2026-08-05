@@ -8,6 +8,7 @@
 
 mod config;
 mod data;
+mod details;
 mod editor;
 mod import;
 mod render;
@@ -25,6 +26,11 @@ use vault::SortMode;
 slint::include_modules!();
 
 fn main() -> Result<(), slint::PlatformError> {
+    // First, before anything spawns a thread. `time` will not work the local
+    // offset out once the process has more than one, and the render worker
+    // starts with the window a few lines below.
+    let offset = data::local_offset();
+
     let (paths, entries) = open_vault();
 
     let settings = paths
@@ -55,12 +61,17 @@ fn main() -> Result<(), slint::PlatformError> {
         entries,
         sort,
         lang,
+        offset,
         Rc::clone(&viewer),
     );
 
+    // Column 3. The vault computes its contents while it is already deciding
+    // what the list looks like; this only wires up copying the link.
+    let _details = details::install(&app, Rc::clone(&vault));
+
     // The add/edit sheet. It hands finished work to the vault, which is what
     // puts it on screen.
-    editor::install(&app, products_root, lang, vault, viewer);
+    editor::install(&app, products_root, lang, Rc::clone(&vault), viewer);
 
     // Show first, then resize. Sizing an unshown window is silently discarded:
     // `preferred-width`/`preferred-height` from `app.slint` win when the window
@@ -82,6 +93,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // reported, never fatal.
     if let Some(paths) = &paths {
         let size = app.window().size().to_logical(app.window().scale_factor());
+        let sort = vault.borrow().sort();
         if let Err(detail) = persist(&paths.config, settings, lang, sort, size.width, size.height) {
             eprintln!("{}: {detail}", tr(lang, Key::ErrConfigSave));
         }
@@ -175,6 +187,11 @@ fn apply_strings(app: &AppWindow, lang: Lang) {
     table.set_remove_glyph(tr(lang, Key::RemoveGlyph).into());
     table.set_checking(tr(lang, Key::Checking).into());
     table.set_no_documents_yet(tr(lang, Key::NoDocumentsYet).into());
+    table.set_warranty_left(tr(lang, Key::WarrantyLeft).into());
+    table.set_sort_name(tr(lang, Key::SortName).into());
+    table.set_sort_purchase(tr(lang, Key::SortPurchase).into());
+    table.set_sort_by_name(tr(lang, Key::SortByName).into());
+    table.set_sort_by_purchase(tr(lang, Key::SortByPurchase).into());
 }
 
 /// Shorthand for a string-table lookup.

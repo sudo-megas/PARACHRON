@@ -22,7 +22,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 # `raw-window-handle-06` exposes `Window::window_handle`, which is what parents
 # the file dialog to the window on X11 and Windows.
 slint = { version = "1.17.1", features = ["raw-window-handle-06"] }
-time = { version = "0.3.55", features = ["macros", "formatting", "parsing"] }
+time = { version = "0.3.55", features = ["macros", "formatting", "parsing", "local-offset"] }
 # `preserve_order` keeps hand-added keys in the order they were written rather
 # than alphabetising somebody's file for them (CORE §3).
 toml = { version = "1.1.4", features = ["preserve_order"] }

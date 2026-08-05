@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use time::{Date, Month};
+use time::{Date, Month, OffsetDateTime, UtcOffset};
 
 /// Longest folder name `folder_slug` will produce.
 const SLUG_MAX: usize = 64;
@@ -251,6 +251,37 @@ fn first_line(message: &str) -> String {
 pub fn fmt_date(date: Date) -> String {
     let format = time::macros::format_description!("[day]-[month]-[year]");
     date.format(&format).unwrap_or_default()
+}
+
+/// Read the machine's UTC offset.
+///
+/// **Call this before anything spawns a thread.** `time` refuses to work the
+/// local offset out in a process that has more than one, because the C call
+/// underneath is not safe once other threads exist — and Parachron always has
+/// the render worker running a moment later. So `main` asks first, while it is
+/// still alone, and hands the answer to everything that needs a date.
+///
+/// A machine that will not say falls back to UTC. For a counter measured in
+/// months, being a day out at the edge of a timezone is the right failure.
+pub fn local_offset() -> UtcOffset {
+    UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC)
+}
+
+/// Today, where the user is.
+///
+/// Recomputed on every use rather than cached at startup, so an app left open
+/// overnight shows the right number in the morning. With the offset already in
+/// hand this costs nothing and is safe to ask from any thread.
+pub fn today(offset: UtcOffset) -> Date {
+    OffsetDateTime::now_utc().to_offset(offset).date()
+}
+
+/// Days of warranty left, clamped at zero (CORE §3).
+///
+/// A warranty that ran out is expired, not negative — nobody wants to read
+/// `-412 days`.
+pub fn days_left(warranty_end: Date, today: Date) -> i64 {
+    (warranty_end - today).whole_days().max(0)
 }
 
 /// Read a date typed the way Parachron displays them: `DD-MM-YYYY`.

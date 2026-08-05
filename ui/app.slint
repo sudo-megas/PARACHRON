@@ -9,6 +9,7 @@ import { Palette } from "palette.slint";
 import { Strings } from "strings.slint";
 import { Viewer, DocTab } from "viewer.slint";
 import { FormSheet, FormDoc } from "form.slint";
+import { Details } from "details.slint";
 import { Btn } from "widgets.slint";
 
 // Re-exported so Rust can reach the global and the structs.
@@ -26,32 +27,44 @@ export struct ProductItem {
     warning: bool,
 }
 
-// Title-bar affordance that does not do anything yet. `Document ▾` and
-// `Add Document` are stubs until Chron3.
-component StubButton inherits Rectangle {
+// One of column 1's two sort toggles.
+component SortChip inherits Rectangle {
     in property <string> label;
-    in property <bool> active: true;
+    /// What it does, for a screen reader — the chip itself is two letters.
+    in property <string> description;
+    in property <bool> active;
+    callback clicked();
 
-    height: 28px;
-    border-radius: 5px;
+    height: 22px;
+    width: chip-label.preferred-width + 18px;
+    border-radius: 11px;
     border-width: 1px;
-    border-color: root.active && touch.has-hover ? Palette.accent : Palette.border;
-    background: root.active && touch.has-hover ? Palette.raised : Palette.panel;
+    border-color: root.active ? Palette.accent : Palette.border;
+    background: root.active ? Palette.selection : transparent;
 
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        Text {
-            text: root.label;
-            color: root.active ? Palette.text : Palette.muted;
-            vertical-alignment: center;
-            font-size: 13px;
-        }
+    accessible-role: button;
+    accessible-label: root.description;
+    accessible-checkable: true;
+    accessible-checked: root.active;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    chip-label := Text {
+        text: root.label;
+        color: root.active ? Palette.text : Palette.muted;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: parent.width;
+        height: parent.height;
     }
 
     touch := TouchArea {
-        // Inert by design this milestone.
-        mouse-cursor: root.active ? MouseCursor.pointer : MouseCursor.default;
+        mouse-cursor: MouseCursor.pointer;
+        clicked => {
+            root.clicked();
+        }
     }
 }
 
@@ -90,13 +103,6 @@ component MenuRow inherits Rectangle {
             root.clicked();
         }
     }
-}
-
-// Column heading used above each placeholder pane.
-component PaneLabel inherits Text {
-    color: Palette.muted;
-    font-size: 12px;
-    letter-spacing: 1px;
 }
 
 export component AppWindow inherits Window {
@@ -172,6 +178,23 @@ export component AppWindow inherits Window {
     in property <[FormDoc]> form-docs;
     in property <bool> form-busy;
 
+    // ── Details column (Chron4) ──────────────────────────────────────────
+    in property <bool> details-filled;
+    in property <string> details-link;
+    in property <string> details-purchase-date;
+    in property <string> details-warranty-start;
+    in property <string> details-warranty-end;
+    /// Already formatted, expired case included — the string table holds no
+    /// interpolation, so Rust composes it.
+    in property <string> details-days-left;
+    in property <bool> details-expired;
+    in property <bool> link-copied;
+
+    /// 0 as added, 1 alphabetical, 2 purchase date. CORE §4 describes two
+    /// toggles over a default, which is what this is: clicking the active chip
+    /// clears it back to 0.
+    in property <int> sort-mode;
+
     // Menu state is nobody's business but this file's.
     property <bool> menu-open: false;
 
@@ -180,6 +203,8 @@ export component AppWindow inherits Window {
     callback page-requested(int);
     callback zoom-changed(float);
     callback copy-serial();
+    callback copy-link();
+    callback sort-toggled(int);
     callback viewport-resized(length, length);
 
     callback add-document();
@@ -288,6 +313,53 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     spacing: 0px;
                     padding: 0px;
+
+                    // ── Sort toggles (CORE §4) ───────────────────────────
+                    //
+                    // Two chips over a default of insertion order, which is
+                    // literally what CORE §4 asks for: clicking the active one
+                    // again clears it rather than needing a third chip.
+                    Rectangle {
+                        height: 34px;
+                        background: Palette.panel;
+
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            spacing: 6px;
+
+                            sort-name := SortChip {
+                                y: (parent.height - self.height) / 2;
+                                label: Strings.sort-name;
+                                description: Strings.sort-by-name;
+                                active: root.sort-mode == 1;
+                                clicked => {
+                                    root.sort-toggled(root.sort-mode == 1 ? 0 : 1);
+                                }
+                            }
+
+                            sort-purchase := SortChip {
+                                y: (parent.height - self.height) / 2;
+                                label: Strings.sort-purchase;
+                                description: Strings.sort-by-purchase;
+                                active: root.sort-mode == 2;
+                                clicked => {
+                                    root.sort-toggled(root.sort-mode == 2 ? 0 : 2);
+                                }
+                            }
+
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+
+                        // Bottom hairline.
+                        Rectangle {
+                            x: 0;
+                            y: parent.height - 1px;
+                            width: parent.width;
+                            height: 1px;
+                            background: Palette.border;
+                        }
+                    }
 
                     Rectangle {
                         vertical-stretch: 1;
@@ -461,29 +533,23 @@ export component AppWindow inherits Window {
                     background: Palette.border;
                 }
 
-                VerticalLayout {
-                    padding: 16px;
-                    spacing: 16px;
+                details := Details {
+                    x: 1px;
+                    width: parent.width - 1px;
+                    height: parent.height;
 
-                    HorizontalLayout {
-                        spacing: 8px;
-                        StubButton {
-                            label: Strings.action-theme;
-                            active: false;
-                        }
-                        StubButton {
-                            label: Strings.action-export;
-                            active: false;
-                        }
-                        Rectangle { horizontal-stretch: 1; }
+                    filled: root.details-filled;
+                    link: root.details-link;
+                    purchase-date: root.details-purchase-date;
+                    warranty-start: root.details-warranty-start;
+                    warranty-end: root.details-warranty-end;
+                    days-left: root.details-days-left;
+                    expired: root.details-expired;
+                    link-copied: root.link-copied;
+
+                    copy-link => {
+                        root.copy-link();
                     }
-
-                    PaneLabel {
-                        text: Strings.details-placeholder;
-                        wrap: word-wrap;
-                    }
-
-                    Rectangle { vertical-stretch: 1; }
                 }
             }
         }

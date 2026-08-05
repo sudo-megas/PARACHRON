@@ -1,0 +1,181 @@
+// Column 3: what the product is, and how long its warranty has left.
+//
+// Same boundary as the viewer: data in as properties, intent out as callbacks,
+// every string either from the `Strings` global or already composed by Rust.
+// The days-left figure in particular arrives as finished text — the number, its
+// unit and the expired case are all decided on the Rust side, because the
+// string table holds no interpolation and Turkish does not agree in number
+// after a numeral.
+
+import { Palette } from "palette.slint";
+import { Strings } from "strings.slint";
+import { Btn } from "widgets.slint";
+
+/// A label above its value. Three of these, all the same shape.
+component DetailRow inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+
+    spacing: 4px;
+
+    Text {
+        text: root.label;
+        color: Palette.muted;
+        font-size: 12px;
+        letter-spacing: 1px;
+    }
+
+    Text {
+        text: root.value;
+        color: Palette.text;
+        font-size: 14px;
+        overflow: elide;
+    }
+}
+
+export component Details inherits Rectangle {
+    /// False when nothing is selected, or the selection is a folder that would
+    /// not parse. The column then shows nothing rather than a half-filled panel.
+    in property <bool> filled;
+
+    in property <string> link;
+    in property <string> purchase-date;
+    in property <string> warranty-start;
+    in property <string> warranty-end;
+    /// Already formatted: "658 days", "1 day", or the expired message.
+    in property <string> days-left;
+    in property <bool> expired;
+    in property <bool> link-copied;
+
+    callback copy-link();
+
+    background: Palette.panel;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 16px;
+
+        // THEME arrives in Chron5, EXPORT in Chron7.
+        HorizontalLayout {
+            spacing: 8px;
+            Btn {
+                label: Strings.action-theme;
+                enabled: false;
+            }
+            Btn {
+                label: Strings.action-export;
+                enabled: false;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+
+        if !root.filled: Text {
+            text: Strings.details-placeholder;
+            color: Palette.muted;
+            font-size: 13px;
+            wrap: word-wrap;
+        }
+
+        if root.filled: VerticalLayout {
+            spacing: 16px;
+
+            // ── Purchase link ────────────────────────────────────────────
+            //
+            // CORE §4: Parachron never opens an external address. The link is
+            // text you copy, with the same confirmation the serial strip uses.
+            VerticalLayout {
+                spacing: 4px;
+
+                Text {
+                    text: Strings.field-link;
+                    color: Palette.muted;
+                    font-size: 12px;
+                    letter-spacing: 1px;
+                }
+
+                link-row := Rectangle {
+                    height: 26px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        Text {
+                            text: root.link;
+                            color: Palette.text;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        // The confirmation replaces the affordance in place, so
+                        // nothing reflows when it appears.
+                        Text {
+                            text: root.link-copied ? Strings.copied : Strings.copy-glyph;
+                            color: root.link-copied ? Palette.accent : Palette.muted;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    link-touch := TouchArea {
+                        enabled: root.link != "";
+                        mouse-cursor: root.link != "" ? MouseCursor.pointer : MouseCursor.default;
+                        clicked => {
+                            root.copy-link();
+                        }
+                    }
+                }
+            }
+
+            DetailRow {
+                label: Strings.field-purchase-date;
+                value: root.purchase-date;
+            }
+
+            DetailRow {
+                label: Strings.field-warranty-start;
+                value: root.warranty-start;
+            }
+
+            DetailRow {
+                label: Strings.field-warranty-end;
+                value: root.warranty-end;
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+            }
+
+            // ── The counter this app exists for (CORE §4) ────────────────
+            VerticalLayout {
+                spacing: 4px;
+
+                Text {
+                    text: Strings.warranty-left;
+                    color: Palette.muted;
+                    font-size: 12px;
+                    letter-spacing: 1px;
+                }
+
+                Text {
+                    text: root.days-left;
+                    color: root.expired ? Palette.danger : Palette.text;
+                    font-size: 26px;
+                    font-weight: 700;
+                    overflow: elide;
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+}
+
