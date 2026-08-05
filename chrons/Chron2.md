@@ -115,11 +115,25 @@ That set is **proven, not assumed**: a real 19-page illustrated PDF with embedde
 
 **Automated.** `render.rs` tests drive every fixture: page counts, a raster fitted inside its target box and touching one side, an opaque mostly-white page that still contains dark pixels (so an empty render cannot pass), doubling the box doubles the page, and each failure fixture mapping to its `ViewError`. `viewer.rs` tests drive the state machine without a window: tabs built in `pdfs` order, a missing file flagged rather than dropped, a broken folder offering no documents, the render target equal to `viewport × display scale × zoom`, tokens incrementing so every request supersedes the last, and page/zoom resetting on tab or product change. The LRU cache is tested for both retrieval and least-recently-used eviction.
 
-**By eye, in the running app.** No Wayland input-injection tool exists on this machine (`ydotool`, `xdotool`, `wtype`, `kdotool` all absent), so clicking was driven by a temporary scaffold that invoked the same callbacks the UI does, then removed. Captured: a two-tab product with its page fitted and `1 / 1` with both nav buttons correctly disabled; the 19-page guide at `10 / 19` with both enabled and zoom at 2.2×, the page enlarged, panning, and re-rendered sharp rather than upscaled; and the error product showing "This PDF is password-protected" on its first tab.
+**By real clicks, on an isolated display.** `Xvfb :99` plus `xdotool` drives the app on a virtual 1920×1080 screen with no window manager, so the window sits at the origin at 1:1 scale and coordinates are exact — and no click can reach the real desktop. (`ydotool` on the live session was tried first and rejected: clicks raised other windows above Parachron, and a stray one landed in the terminal running this work.)
+
+Verified by clicking, each confirmed against a screenshot:
+
+| Action | Result |
+|---|---|
+| Click a product | Row highlights, tab appears, page renders, serial shown |
+| `›` through the 19-page guide | Counter tracks `1 → 5 / 19`, both arrows enabled mid-document |
+| Switch product | Resets to page 1 at 1× zoom, tabs and serial rebuilt |
+| Click the `Warranty` tab | Switches document, counter becomes `1 / 3` |
+| Click back to `Invoice` | Returns to `1 / 1`, both arrows correctly disabled |
+
+Zoom (2.2×, page enlarged, panning, re-rendered sharp rather than upscaled) and the error states were captured earlier on the real display before the isolated setup existed.
 
 **Clipboard.** Verified through Klipper's D-Bus interface: after invoking the serial strip's copy, `getClipboardContents` returned `ABC123XYZ`.
 
 **Criterion 8.** The sweep over `src/` and `ui/` returns only icon resource paths, `""` emptiness comparisons, the `"monospace"` font-family identifier, format punctuation, and text inside comments. No user-visible words outside `strings.rs`.
+
+**A Chron1 defect found and fixed here.** Window-size persistence never worked. `Window::set_size()` was called before `app.run()`, and Slint discards that — `preferred-width`/`preferred-height` from `app.slint` win when the window is first mapped, so a saved size was silently ignored and every launch came up at 1280×800. Chron1 called this "optional, nice-to-have" and its test only asserted that `persist()` *writes* the file, never that the value is applied, so the gap went unnoticed. Fixed by showing the window first, then sizing it, then running the event loop. Verified on the virtual display with `xdotool getwindowgeometry`: a stored 1104×764 now comes up as exactly 1104×764, and a stored 400×300 clamps to exactly 1000×700 — Chron1's floor still holds, and more precisely than before.
 
 **Not verified by machine.** Criterion 7 (the window stays responsive during a long render) follows from the architecture — the UI thread never calls MuPDF — but was not measured under load. Worth a look with a very large scanned PDF when one turns up.
 

@@ -43,15 +43,21 @@ fn main() -> Result<(), slint::PlatformError> {
         .unwrap_or_default();
     let _viewer = viewer::install(&app, products_root, entries, lang);
 
+    // Show first, then resize. Sizing an unshown window is silently discarded:
+    // `preferred-width`/`preferred-height` from `app.slint` win when the window
+    // is first mapped, so the saved size never took effect.
+    //
     // Logical pixels throughout: `min-width`/`min-height` in the `.slint` file
     // are logical too, so a HiDPI display cannot make the stored size mean
     // something different from the declared floor.
+    app.show()?;
     app.window().set_size(slint::LogicalSize::new(
         settings.window_width as f32,
         settings.window_height as f32,
     ));
 
-    app.run()?;
+    slint::run_event_loop()?;
+    app.hide()?;
 
     // Persist whatever the session changed. A config that will not save is
     // reported, never fatal.

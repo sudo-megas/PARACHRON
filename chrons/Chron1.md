@@ -78,6 +78,8 @@ The 1000×700 floor is the one part the headless backend cannot judge — it has
 
 Criteria 1, 5 and 6 were checked directly: a fresh run with the data dir deleted, a literal sweep of `src/` and `ui/`, and `git log`.
 
+**Corrected during Chron2:** the optional window-size persistence in this milestone never actually worked — `set_size()` was called before the window was shown, and Slint discards that in favour of `preferred-width`/`preferred-height`. Nothing here caught it, because the test only asserted that the size was *written* to `config.toml`, not that it was applied on the next launch. Fixed in Chron2 by showing the window before sizing it.
+
 ## Done when
 
 All acceptance criteria pass on the laptop. Then: update CORE §2 with the chosen date crate, mark this file's status `done`, and ask user permission to start writing Chron2.
