@@ -1,0 +1,196 @@
+// Moving the vault (Chron9, CORE §3).
+//
+// One sheet doing two jobs in sequence: it confirms, and then it reports. They
+// are the same surface rather than two because they are one decision followed by
+// its consequence — a second sheet appearing where the first was is a flicker
+// that tells the user nothing.
+//
+// Every path on it is a path as it is on disk, and CORE §4 says what is on disk
+// is not UI copy: folder names, file names and the paths that hold them stay as
+// they are in both languages.
+
+import { Palette } from "palette.slint";
+import { Strings } from "strings.slint";
+import { Btn } from "widgets.slint";
+import { Sheet } from "sheet.slint";
+
+/// A determinate bar, drawn from `Palette` rather than taken from
+/// `std-widgets`.
+///
+/// This is not a preference. Chron5 shipped believing every colour in the app
+/// lived behind the `Palette` global, and it did not: the zoom slider came from
+/// `std-widgets` and therefore read the Slint style instead of the theme, which
+/// a screenshot caught after the milestone had been declared done. CORE §10
+/// still carries the `ListView` scrollbar as the surviving instance of the same
+/// thing. A `std-widgets` `ProgressIndicator` here would make it three, on a
+/// surface that is new and has no history to excuse it — and it is two
+/// rectangles.
+component Bar inherits Rectangle {
+    /// 0.0–1.0. Clamped here rather than trusted, because a fraction computed
+    /// from a byte total can divide by zero on an empty vault.
+    in property <float> fraction;
+
+    height: 6px;
+    border-radius: 3px;
+    background: Palette.raised;
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width * max(0.0, min(1.0, root.fraction));
+        height: parent.height;
+        border-radius: 3px;
+        background: Palette.accent;
+        // An empty bar should read as empty rather than as a dot of accent
+        // colour sitting at the left edge.
+        visible: root.fraction > 0.0;
+    }
+}
+
+/// One labelled path, in the "from → to" pair.
+component PathRow inherits VerticalLayout {
+    in property <string> label;
+    in property <string> path;
+
+    spacing: 2px;
+
+    Text {
+        text: root.label;
+        color: Palette.muted;
+        font-size: 11px;
+        letter-spacing: 1px;
+    }
+
+    Text {
+        text: root.path;
+        color: Palette.text;
+        font-size: 13px;
+        // Wraps rather than elides: a truncated path is exactly the thing
+        // somebody is reading this sheet to check.
+        wrap: word-wrap;
+    }
+}
+
+export component RelocateSheet inherits Sheet {
+    in property <string> from-path;
+    in property <string> to-path;
+    in property <string> summary;
+    in property <bool> running;
+    in property <float> fraction;
+    in property <string> progress;
+    in property <string> current;
+    in property <string> status;
+    in property <bool> failed;
+    /// The move finished and succeeded. The sheet stays up holding that rather
+    /// than vanishing: a copy that took minutes and then made the window blink
+    /// leaves the user with no way to tell "it worked" from "it gave up", and
+    /// this is the one operation in the app where that question matters.
+    in property <bool> done;
+
+    callback confirm();
+    callback cancel();
+
+    card-width: 520px;
+
+    Text {
+        text: Strings.relocate-title;
+        color: Palette.text;
+        font-size: 16px;
+        font-weight: 600;
+    }
+
+    PathRow {
+        label: Strings.relocate-from;
+        path: root.from-path;
+    }
+
+    PathRow {
+        label: Strings.relocate-to;
+        path: root.to-path;
+    }
+
+    // What is about to move, in documents and megabytes. The sheet says this
+    // before it asks, which is what makes confirming a decision rather than a
+    // dare — "move my vault" is a different sentence from "move 1,240 files".
+    Text {
+        text: root.summary;
+        color: Palette.muted;
+        font-size: 12px;
+        visible: root.summary != "";
+    }
+
+    // ── While it runs ────────────────────────────────────────────────────
+    if root.running: VerticalLayout {
+        spacing: 8px;
+
+        Bar {
+            fraction: root.fraction;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            Text {
+                text: root.progress;
+                color: Palette.text;
+                font-size: 12px;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+
+        // The file being copied. A name on disk, so it is not translated, and
+        // it elides rather than wrapping because it changes many times a second
+        // and a reflowing sheet is worse than a shortened name.
+        Text {
+            text: root.current;
+            color: Palette.muted;
+            font-size: 11px;
+            overflow: elide;
+        }
+    }
+
+    // ── A refusal, or a failure ──────────────────────────────────────────
+    //
+    // The sheet stays open holding it. A notice that appears where the sheet
+    // was and then goes is a notice nobody read, and this one names the file
+    // the move stopped on.
+    if root.status != "": Text {
+        text: root.status;
+        color: root.failed ? Palette.danger : Palette.muted;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        // Nothing to press while files are in flight. There is no half of this
+        // that is safe to abandon: the copy is recoverable only by finishing or
+        // by failing, and a Cancel that did neither would be a button that lies.
+        if !root.running: Btn {
+            // "Close" once the move has landed — there is nothing left to
+            // cancel, and a button reading Cancel over a finished move invites
+            // the reading that it might undo one.
+            label: root.done ? Strings.action-close : Strings.action-cancel;
+            primary: root.done;
+            clicked => {
+                root.cancel();
+            }
+        }
+
+        if !root.running && !root.failed && !root.done: Btn {
+            label: Strings.action-move;
+            primary: true;
+            clicked => {
+                root.confirm();
+            }
+        }
+    }
+}

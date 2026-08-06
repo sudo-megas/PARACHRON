@@ -13,6 +13,7 @@ import { FormSheet, FormDoc } from "form.slint";
 import { ThemeSheet, ThemeItem } from "theme.slint";
 import { Details } from "details.slint";
 import { About, LicenseSheet } from "about.slint";
+import { RelocateSheet } from "relocate.slint";
 import { Btn, SearchBar } from "widgets.slint";
 
 // Re-exported so Rust can reach the globals and the structs.
@@ -265,6 +266,49 @@ export component AppWindow inherits Window {
     /// outcome waits in a slot, because the export cannot cross a thread boundary.
     callback export-finished();
 
+    // ── Vault location (Chron9) ──────────────────────────────────────────
+    //
+    // CORE §3: the vault is wherever its owner put it. `Document ▾` opens a
+    // folder picker, and what comes back is confirmed on a sheet before a single
+    // file is copied — the sheet is where "5 documents, 24 MB" is said, which is
+    // what makes confirming a decision rather than a dare.
+    callback choose-vault();
+    /// False when the vault could not be resolved at startup at all — no home
+    /// directory, an unreadable `config.toml`, or a configured vault that is not
+    /// there. Moving needs a source, and there is nothing to move from.
+    in property <bool> relocate-available;
+    in property <bool> relocate-open;
+    /// The vault as it is now, and where it is going. Paths as they are on disk:
+    /// CORE §4 says what is on disk is not UI copy and never translates.
+    in property <string> relocate-from;
+    in property <string> relocate-to;
+    /// "5 documents · 24.1 MB", composed in Rust because the string table holds
+    /// no interpolation.
+    in property <string> relocate-summary;
+    callback relocate-confirm();
+    callback relocate-cancel();
+
+    /// A move is in flight. While it is, the sheet cannot be dismissed and the
+    /// confirm button is gone — there is no half of this that is safe to abandon.
+    in property <bool> relocate-running;
+    /// 0.0–1.0 by bytes, not by file count: five files of wildly different sizes
+    /// make a per-file fraction jump about and then sit still.
+    in property <float> relocate-fraction;
+    /// "3 of 5 documents", and the file being copied, both composed in Rust.
+    in property <string> relocate-progress;
+    in property <string> relocate-current;
+    /// A refusal or a failure. The sheet stays open holding it, rather than
+    /// closing and leaving a notice that is gone when the app closes.
+    in property <string> relocate-status;
+    in property <bool> relocate-failed;
+    /// The move landed. The sheet stays up saying so rather than vanishing.
+    in property <bool> relocate-done;
+    /// Rung per file from the move thread, and once more when it lands. Both
+    /// carry nothing; the progress and the outcome wait in a shared slot,
+    /// because neither can cross a thread boundary.
+    callback relocate-progressed();
+    callback relocate-finished();
+
     /// 0 as added, 1 alphabetical, 2 purchase date. CORE §4 describes two
     /// toggles over a default, which is what this is: clicking the active chip
     /// clears it back to 0.
@@ -301,10 +345,16 @@ export component AppWindow inherits Window {
     in property <string> app-released;
     in property <string> app-license-id;
     in property <string> app-license-text;
+    /// Where the vault is (Chron9). Unlike the four above this one *can* change
+    /// while the window is open — a move rewrites it — so `relocate` pushes it
+    /// again rather than it being filled once and forgotten.
+    in property <string> app-vault-path;
     in property <bool> about-source-copied;
     in property <bool> about-docs-copied;
+    in property <bool> about-vault-copied;
     callback about-copy-source();
     callback about-copy-docs();
+    callback about-copy-vault();
 
     // Menu state is nobody's business but this file's, and so is whether the
     // theme picker is up: opening it is a UI gesture, and the only thing Rust
@@ -771,9 +821,14 @@ export component AppWindow inherits Window {
                 version: root.app-version;
                 released: root.app-released;
                 license-id: root.app-license-id;
+                vault-path: root.app-vault-path;
                 source-copied: root.about-source-copied;
                 docs-copied: root.about-docs-copied;
+                vault-copied: root.about-vault-copied;
 
+                copy-vault => {
+                    root.about-copy-vault();
+                }
                 copy-source => {
                     root.about-copy-source();
                 }
@@ -836,6 +891,33 @@ export component AppWindow inherits Window {
                     clicked => {
                         root.menu-open = false;
                         root.edit-document();
+                    }
+                }
+
+                // ── Vault location (Chron9) ──────────────────────────────
+                //
+                // Below the two document actions and above the language rows: it
+                // is a thing done to the vault rather than to a document, and it
+                // is done once rather than daily.
+                Rectangle {
+                    height: 7px;
+                    Rectangle {
+                        x: 4px;
+                        y: 3px;
+                        width: parent.width - 8px;
+                        height: 1px;
+                        background: Palette.border;
+                    }
+                }
+
+                menu-vault := MenuRow {
+                    label: Strings.action-vault-location;
+                    // A move already running is the one state where opening the
+                    // picker again would start a second one over the same files.
+                    enabled: root.relocate-available && !root.relocate-running;
+                    clicked => {
+                        root.menu-open = false;
+                        root.choose-vault();
                     }
                 }
 
@@ -956,6 +1038,37 @@ export component AppWindow inherits Window {
 
         closed => {
             root.license-open = false;
+        }
+    }
+
+    // Moving the vault (Chron9). Declared after the licence sheet so that a move
+    // started from the menu draws over anything else that happens to be open —
+    // it is the only sheet in the app that is holding the user's documents.
+    if root.relocate-open: RelocateSheet {
+        width: root.width;
+        height: root.height;
+
+        from-path: root.relocate-from;
+        to-path: root.relocate-to;
+        summary: root.relocate-summary;
+        running: root.relocate-running;
+        fraction: root.relocate-fraction;
+        progress: root.relocate-progress;
+        current: root.relocate-current;
+        status: root.relocate-status;
+        failed: root.relocate-failed;
+        done: root.relocate-done;
+
+        confirm => {
+            root.relocate-confirm();
+        }
+        cancel => {
+            root.relocate-cancel();
+        }
+        // Escape is Cancel, and while a move runs it is neither: `relocate-cancel`
+        // ignores the call rather than this scope having to know why.
+        dismissed => {
+            root.relocate-cancel();
         }
     }
 }

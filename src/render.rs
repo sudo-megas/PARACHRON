@@ -261,10 +261,10 @@ fn forget(open: &mut Option<OpenDocument>, cache: &mut Cache, path: &Path) {
 /// Make `open` hold `path`, reusing it when it already does. Returns the page
 /// count.
 fn ensure_open(open: &mut Option<OpenDocument>, path: &Path) -> Result<usize, ViewError> {
-    if let Some(current) = open.as_ref() {
-        if current.path == path {
-            return Ok(current.pages);
-        }
+    if let Some(current) = open.as_ref()
+        && current.path == path
+    {
+        return Ok(current.pages);
     }
 
     let document = open_document(path)?;

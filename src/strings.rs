@@ -221,6 +221,29 @@ pub enum Key {
     AboutLicense,
     AboutReadLicense,
     AboutMotto,
+
+    // ── Vault location (Chron9) ──────────────────────────────────────────
+    ActionVaultLocation,
+    ActionMove,
+    RelocateTitle,
+    RelocateFrom,
+    RelocateTo,
+    /// The unit in "5 documents · 24.1 MB". Composed in Rust, because this
+    /// table holds no interpolation.
+    RelocateDocuments,
+    RelocateMoving,
+    RelocateDone,
+    AboutVault,
+    ErrVaultSame,
+    ErrVaultInside,
+    ErrVaultOccupied,
+    ErrVaultNotUtf8,
+    ErrVaultMoveFailed,
+    ErrVaultRead,
+    ErrVaultWrite,
+    ErrVaultVerify,
+    ErrVaultMissing,
+    ErrConfigUnreadable,
 }
 
 impl Key {
@@ -337,6 +360,25 @@ impl Key {
         Key::AboutLicense,
         Key::AboutReadLicense,
         Key::AboutMotto,
+        Key::ActionVaultLocation,
+        Key::ActionMove,
+        Key::RelocateTitle,
+        Key::RelocateFrom,
+        Key::RelocateTo,
+        Key::RelocateDocuments,
+        Key::RelocateMoving,
+        Key::RelocateDone,
+        Key::AboutVault,
+        Key::ErrVaultSame,
+        Key::ErrVaultInside,
+        Key::ErrVaultOccupied,
+        Key::ErrVaultNotUtf8,
+        Key::ErrVaultMoveFailed,
+        Key::ErrVaultRead,
+        Key::ErrVaultWrite,
+        Key::ErrVaultVerify,
+        Key::ErrVaultMissing,
+        Key::ErrConfigUnreadable,
     ];
 }
 
@@ -567,6 +609,64 @@ fn table(key: Key) -> (&'static str, &'static str) {
         // CORE §10, settled in Chron8. JADEITE's motto, carried across as a
         // maker's signature rather than a second description of the app.
         AboutMotto => ("Built with Reason and Passion", "Akıl ve Tutkuyla"),
+
+        // ── Vault location (Chron9) ──────────────────────────────────────
+        //
+        // "Kasa" — a safe or a strongbox — rather than a transliterated
+        // "vault", and the same word the About subtitle already uses in
+        // `Belge Kasası`. The ellipsis on the menu entry says a dialog follows,
+        // in both languages.
+        ActionVaultLocation => ("Vault location…", "Kasa konumu…"),
+        ActionMove => ("Move", "Taşı"),
+        RelocateTitle => ("Move the vault", "Kasayı taşı"),
+        RelocateFrom => ("CURRENTLY AT", "ŞU ANDA"),
+        // Turkish maps `i`→`İ`, so a label that shouts is stored shouting and
+        // never passed through `to_uppercase` (CORE §4). `YENİ KONUM` carries
+        // the dotted capital that `to_uppercase("yeni konum")` would not.
+        RelocateTo => ("MOVING TO", "YENİ KONUM"),
+        RelocateDocuments => ("documents", "belge"),
+        RelocateMoving => ("Moving…", "Taşınıyor…"),
+        RelocateDone => ("The vault has moved.", "Kasa taşındı."),
+        AboutVault => ("Vault", "Kasa"),
+
+        // The four refusals. Each says which of four quite different mistakes
+        // was made, because "that location cannot be used" tells nobody
+        // anything they can act on.
+        ErrVaultSame => ("The vault is already there.", "Kasa zaten burada."),
+        ErrVaultInside => (
+            "That folder is inside the vault being moved.",
+            "Bu klasör taşınacak kasanın içinde.",
+        ),
+        ErrVaultOccupied => (
+            "That folder already holds a vault.",
+            "Bu klasörde zaten bir kasa var.",
+        ),
+        // Not about the folder, about `config.toml`: a path that is not valid
+        // UTF-8 cannot be written into a TOML string at all.
+        ErrVaultNotUtf8 => (
+            "That path cannot be written to config.toml.",
+            "Bu yol config.toml dosyasına yazılamaz.",
+        ),
+
+        ErrVaultMoveFailed => ("The vault was not moved", "Kasa taşınmadı"),
+        ErrVaultRead => (
+            "the current vault could not be read",
+            "mevcut kasa okunamadı",
+        ),
+        ErrVaultWrite => ("a file could not be written", "bir dosya yazılamadı"),
+        ErrVaultVerify => ("the copy did not match", "kopya eşleşmedi"),
+
+        // The unmounted drive. Naming the path is the whole point: a user can
+        // act on "/mnt/ironwolf/parachron is not there" and cannot act on an
+        // empty list.
+        ErrVaultMissing => (
+            "The vault folder is not there. Nothing has been created; if it is on a drive, check that it is mounted",
+            "Kasa klasörü bulunamıyor. Hiçbir şey oluşturulmadı; bir sürücüdeyse bağlı olduğundan emin olun",
+        ),
+        ErrConfigUnreadable => (
+            "config.toml could not be read, so the vault it names is unknown",
+            "config.toml okunamadı, bu yüzden gösterdiği kasa bilinmiyor",
+        ),
     }
 }
 
@@ -725,7 +825,7 @@ mod tests {
         assert_eq!(before, seen.len(), "Key::ALL contains a duplicate");
         assert_eq!(
             Key::ALL.len(),
-            106,
+            125,
             "Key::ALL is out of step with the enum — add the new key to it"
         );
     }

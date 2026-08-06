@@ -350,6 +350,19 @@ impl Viewer {
     pub fn set_lang(&self, lang: Lang) {
         self.state.lock().unwrap().lang = lang;
     }
+
+    /// Chron9. The vault moved, so every path this composes is now under a
+    /// different root.
+    ///
+    /// One of four owners of the products root, which is the same arrangement
+    /// Chron6 arrived at for the language and for the same reason: a shared
+    /// `Rc` cannot be held here, because `State` lives behind an `Arc<Mutex<_>>`
+    /// captured into the render worker's `Send` sink. So each owner keeps a
+    /// plain copy and gains a setter, and the risk of a forgotten copy is
+    /// answered by there being exactly one caller — `relocate::retarget`.
+    pub fn set_products_root(&self, root: PathBuf) {
+        self.state.lock().unwrap().products_root = root;
+    }
 }
 
 /// Wire the viewer into the window: callbacks in, rendered pages out.

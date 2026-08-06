@@ -117,10 +117,8 @@ pub fn run(job: Job) -> Outcome {
     };
     let home = job.products_root.join(&folder);
 
-    if adding {
-        if let Err(e) = fs::create_dir_all(&home) {
-            return Outcome::Failed(unreadable(e));
-        }
+    if adding && let Err(e) = fs::create_dir_all(&home) {
+        return Outcome::Failed(unreadable(e));
     }
 
     let mut invalidate = Vec::new();

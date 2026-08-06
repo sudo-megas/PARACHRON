@@ -552,11 +552,22 @@ struct State {
 }
 
 /// What the language switch reaches the export through.
+/// `Clone` since Chron9, for the reason `Editors` gives: two callers now need a
+/// handle to the same state.
+#[derive(Clone)]
 pub struct Exports {
     state: Rc<RefCell<State>>,
 }
 
 impl Exports {
+    /// Chron9. Exports read the product's files from the new root.
+    ///
+    /// One of four owners of the products root — see
+    /// `viewer::Viewer::set_products_root` for why they are copies.
+    pub fn set_products_root(&self, root: PathBuf) {
+        self.state.borrow_mut().products_root = root;
+    }
+
     /// Chron6's switch calls this.
     ///
     /// A *finished* export's status is cleared rather than re-composed: it is a

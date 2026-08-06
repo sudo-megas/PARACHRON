@@ -177,10 +177,10 @@ impl Editor {
         }
 
         // Only worth saying once both ends are real dates.
-        if let (Some(start), Some(end)) = (start, end) {
-            if end < start {
-                report.end = text(Key::ErrWarrantyBackwards);
-            }
+        if let (Some(start), Some(end)) = (start, end)
+            && end < start
+        {
+            report.end = text(Key::ErrWarrantyBackwards);
         }
 
         if let (true, Some(purchase_date), Some(warranty_start), Some(warranty_end)) =
@@ -249,6 +249,10 @@ impl Editor {
 /// `details::Details` uses: the form's internals are nobody else's business and
 /// the only thing anything outside this module needs to do to it is tell it the
 /// language changed.
+/// `Clone` since Chron9: the language switch and the vault move both need to
+/// reach the form, and both are handed a handle rather than the one owner.
+/// Cloning an `Rc` here shares the same `Editor`, which is the point.
+#[derive(Clone)]
 pub struct Editors {
     editor: Rc<RefCell<Editor>>,
 }
@@ -256,6 +260,13 @@ pub struct Editors {
 impl Editors {
     pub fn set_lang(&self, lang: Lang) {
         self.editor.borrow_mut().set_lang(lang);
+    }
+
+    /// Chron9. Imports land under the new root from here on; see
+    /// `viewer::Viewer::set_products_root` for why this is a copy rather than a
+    /// share.
+    pub fn set_products_root(&self, root: PathBuf) {
+        self.editor.borrow_mut().products_root = root;
     }
 }
 

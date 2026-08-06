@@ -174,7 +174,23 @@ fn install_stack(app: &AppWindow) -> Stack {
         Rc::clone(&viewer),
     );
     let themes = crate::theme::install(app, Theme::Dark, Lang::En);
-    let exports = crate::export::install(app, root, Lang::En, offset, Rc::clone(&vault));
+    let exports = crate::export::install(app, root.clone(), Lang::En, offset, Rc::clone(&vault));
+
+    // Chron9. The vault-location entry needs a `Paths`, and `Paths::resolve`
+    // would reach the real home directory — so this is built against the same
+    // nonexistent root the rest of the stack uses. Nothing in the headless test
+    // opens the picker; what is asserted is that the menu entry exists and is
+    // labelled from the string table.
+    let relocations = crate::relocate::install(
+        app,
+        crate::data::Paths::for_test(PathBuf::from("/nonexistent/parachron")),
+        Lang::En,
+        Rc::clone(&vault),
+        Rc::clone(&viewer),
+        editors.clone(),
+        exports.clone(),
+    );
+
     let language = crate::lang::install(
         app,
         Lang::En,
@@ -183,7 +199,12 @@ fn install_stack(app: &AppWindow) -> Stack {
         editors,
         Rc::clone(&themes),
         exports,
+        Some(relocations),
     );
+
+    // `root` is what every owner above was built with; naming it here keeps the
+    // unused-variable warning honest rather than silencing it with an underscore.
+    let _ = root;
 
     Stack {
         vault,
@@ -968,6 +989,46 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
         1,
         "and the product it chose is what is now on screen"
     );
+
+    // ── Chron9: the vault-location entry, criteria 3 and 12 ───────────────
+    //
+    // The picker itself cannot be driven here — it is a portal dialog drawn by
+    // the desktop's own service, the boundary Chron3 documented and Chron7
+    // restated. What can be asserted is everything up to the click: that the
+    // entry is in `Document ▾`, that it is labelled from the string table in
+    // both languages, and that it is enabled — a menu row that exists but is
+    // dead is the shape this would fail in, since `relocate::install` is what
+    // turns it on and is skipped entirely when there is no vault to move from.
+    click(&elements(&app, "AppWindow::menu-button")[0]);
+    let vault_entry = elements(&app, "AppWindow::menu-vault");
+    assert_eq!(
+        vault_entry.len(),
+        1,
+        "Document ▾ has no vault-location entry"
+    );
+    assert_eq!(
+        vault_entry[0].accessible_label().as_deref(),
+        Some(strings_get(Lang::En, Key::ActionVaultLocation)),
+        "the entry is labelled from the string table, not from a literal"
+    );
+    assert_eq!(
+        vault_entry[0].accessible_enabled(),
+        Some(true),
+        "the entry is dead, which is what a skipped relocate::install looks like"
+    );
+
+    // And in Turkish, because a key added to one table and not the other is the
+    // one mistake `strings.rs`'s exhaustiveness test cannot catch on its own —
+    // it proves both sides exist, not that the window reads the right one.
+    click(&elements(&app, "AppWindow::menu-lang-tr")[0]);
+    click(&elements(&app, "AppWindow::menu-button")[0]);
+    assert_eq!(
+        elements(&app, "AppWindow::menu-vault")[0]
+            .accessible_label()
+            .as_deref(),
+        Some(strings_get(Lang::Tr, Key::ActionVaultLocation)),
+    );
+    click(&elements(&app, "AppWindow::menu-lang-en")[0]);
 }
 
 /// The Slint colour `theme.rs` would have pushed for an `0xRRGGBB` value.

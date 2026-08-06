@@ -41,17 +41,44 @@ pub enum DataError {
     Malformed(String),
     /// A date field is not a TOML date, or not a real calendar date.
     InvalidDate { field: &'static str, detail: String },
+    /// `config.toml` names a vault that is not there (Chron9).
+    ///
+    /// Carries the configured path, because naming it is the entire point: the
+    /// likeliest cause is a drive that has not been mounted, and a user can act
+    /// on "`/mnt/ironwolf/parachron` is not there" and cannot act on "no
+    /// products found".
+    VaultMissing(String),
+    /// `config.toml` itself could not be parsed, so the vault it names is
+    /// unknown (Chron9).
+    ///
+    /// Distinct from a config with no `vault` key, which is the ordinary case
+    /// and means the default. See `config::Config::load`.
+    ConfigUnreadable(String),
 }
 
 /// Where the vault lives.
 ///
-/// CORE §3 fixes this layout: `config.toml` sits beside `products/` inside the
-/// data dir, not in a separate config dir.
+/// CORE §3 fixed this layout as one directory holding both `config.toml` and
+/// `products/`. Chron9 split it in two, because a `vault` key cannot live inside
+/// the vault it names — the app would need the location in order to read the
+/// setting that gives it the location. So `data` is the platform's data
+/// directory and never moves, and `vault` is wherever the products are, which is
+/// `data` until somebody says otherwise.
 #[derive(Debug, Clone)]
 pub struct Paths {
+    /// The platform data directory. `config.toml` lives here, always.
     pub data: PathBuf,
+    /// The directory holding `products/`. Equal to `data` by default.
+    pub vault: PathBuf,
+    /// `vault/products`.
     pub products: PathBuf,
+    /// `data/config.toml`.
     pub config: PathBuf,
+    /// Whether `vault` came out of `config.toml` rather than being the default.
+    ///
+    /// This is what decides whether [`Paths::ensure`] creates or checks, and it
+    /// is the difference between a first run and a drive that is not mounted.
+    configured: bool,
 }
 
 impl Paths {
@@ -60,18 +87,80 @@ impl Paths {
     /// The project path is pinned literally instead of being derived from a
     /// qualifier/organisation triple, so the directory is named exactly what
     /// CORE §3 documents on every platform.
+    ///
+    /// The vault starts as the data directory. [`Paths::with_vault`] moves it,
+    /// and is called once `config.toml` has been read.
     pub fn resolve() -> Result<Self, DataError> {
         let dirs = ProjectDirs::from_path(PathBuf::from("parachron")).ok_or(DataError::NoHome)?;
         let data = dirs.data_dir().to_path_buf();
-        Ok(Self {
-            products: data.join("products"),
-            config: data.join("config.toml"),
-            data,
-        })
+        Ok(Self::rooted(data))
     }
 
-    /// Create the vault on first run. Existing directories are left alone.
+    /// A `Paths` rooted anywhere, for tests that must not reach a real home.
+    ///
+    /// `resolve` goes through `ProjectDirs` and therefore through `$HOME`, which
+    /// is the one thing a test may not touch — `ui_tests` in particular installs
+    /// the whole stack and would otherwise scan the machine's own vault.
+    #[cfg(test)]
+    pub fn for_test(data: PathBuf) -> Self {
+        Self::rooted(data)
+    }
+
+    /// The default layout for a given data directory: vault and data are one.
+    fn rooted(data: PathBuf) -> Self {
+        Self {
+            products: data.join("products"),
+            config: data.join("config.toml"),
+            vault: data.clone(),
+            data,
+            configured: false,
+        }
+    }
+
+    /// Point `products/` at a vault the user chose (Chron9).
+    ///
+    /// `None`, or a path that is empty once trimmed, means the default — which
+    /// is the ordinary case and resolves to exactly what every install had
+    /// before this existed. `config.toml` does not move whatever is passed here.
+    pub fn with_vault(self, vault: Option<&str>) -> Self {
+        let Some(vault) = vault.map(str::trim).filter(|v| !v.is_empty()) else {
+            return self;
+        };
+        let vault = PathBuf::from(vault);
+        Self {
+            products: vault.join("products"),
+            vault,
+            configured: true,
+            ..self
+        }
+    }
+
+    /// Whether the vault is one the user chose rather than the default.
+    pub fn is_configured(&self) -> bool {
+        self.configured
+    }
+
+    /// Make the vault usable, or say why it is not.
+    ///
+    /// **The default vault is created; a configured one is only ever checked.**
+    /// This is the rule Chron9 turns on, and it is about a drive that is not
+    /// mounted. If `vault` names a path under a mount point and the drive is not
+    /// there, that mount point is an ordinary empty directory on the root
+    /// filesystem — `create_dir_all` would succeed against it without complaint,
+    /// the app would build a vault on the system disk, and its owner would file
+    /// documents there believing they were on the drive they bought for exactly
+    /// this. Mounting the drive afterwards hides the lot underneath it: still on
+    /// disk, entirely invisible, and impossible to explain to somebody who did
+    /// nothing wrong.
+    ///
+    /// So a missing configured vault is reported and nothing is written. The
+    /// default is created because its parent is the platform's own data
+    /// directory, which exists on any machine that has a home at all, and
+    /// creating it on first run is what Parachron has always done.
     pub fn ensure(&self) -> Result<(), DataError> {
+        if self.configured && !self.vault.is_dir() {
+            return Err(DataError::VaultMissing(self.vault.display().to_string()));
+        }
         fs::create_dir_all(&self.products).map_err(|e| DataError::Unreadable(e.to_string()))
     }
 }
@@ -240,7 +329,7 @@ fn to_date(value: &toml::value::Datetime, field: &'static str) -> Result<Date, D
 }
 
 /// Parser messages span several lines; a list row only has space for the first.
-fn first_line(message: &str) -> String {
+pub fn first_line(message: &str) -> String {
     message
         .lines()
         .next()
@@ -535,6 +624,116 @@ mod tests {
     fn dates_display_as_day_month_year() {
         let date = Date::from_calendar_date(2026, Month::March, 14).unwrap();
         assert_eq!(fmt_date(date), "14-03-2026");
+    }
+
+    // ── Where the vault is (Chron9) ──────────────────────────────────────
+
+    /// The case that must not have changed: no `vault` key means exactly what
+    /// every install had before this key existed.
+    #[test]
+    fn without_a_vault_key_products_sit_beside_the_config_as_they_always_have() {
+        let paths = Paths::for_test(PathBuf::from("/data/parachron"));
+
+        assert_eq!(paths.vault, PathBuf::from("/data/parachron"));
+        assert_eq!(paths.products, PathBuf::from("/data/parachron/products"));
+        assert_eq!(paths.config, PathBuf::from("/data/parachron/config.toml"));
+        assert!(!paths.is_configured());
+    }
+
+    /// A configured vault moves `products/` and leaves `config.toml` alone —
+    /// which it must, since the key naming the vault is inside it.
+    #[test]
+    fn a_configured_vault_moves_the_products_and_never_the_config() {
+        let paths =
+            Paths::for_test(PathBuf::from("/data/parachron")).with_vault(Some("/mnt/ironwolf/pc"));
+
+        assert_eq!(paths.vault, PathBuf::from("/mnt/ironwolf/pc"));
+        assert_eq!(paths.products, PathBuf::from("/mnt/ironwolf/pc/products"));
+        assert_eq!(
+            paths.config,
+            PathBuf::from("/data/parachron/config.toml"),
+            "the pointer cannot live in the thing it points at"
+        );
+        assert!(paths.is_configured());
+    }
+
+    /// An empty or whitespace-only value is the default, not a vault at the
+    /// filesystem root. A hand-edited `vault = ""` is far likelier than somebody
+    /// meaning `/`.
+    #[test]
+    fn an_empty_vault_value_means_the_default() {
+        for value in [Some(""), Some("   "), None] {
+            let paths = Paths::for_test(PathBuf::from("/data/parachron")).with_vault(value);
+            assert_eq!(paths.products, PathBuf::from("/data/parachron/products"));
+            assert!(
+                !paths.is_configured(),
+                "{value:?} is not a configured vault"
+            );
+        }
+    }
+
+    /// The default vault is created on first run, as it always was.
+    #[test]
+    fn the_default_vault_is_created_on_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::for_test(dir.path().join("parachron"));
+
+        paths.ensure().expect("the default vault is created");
+        assert!(paths.products.is_dir());
+    }
+
+    /// **The test this milestone turns on.**
+    ///
+    /// If `vault` names a path under a mount point and the drive is not there,
+    /// that mount point is an ordinary empty directory on the root filesystem.
+    /// `create_dir_all` would succeed against it, Parachron would build a vault
+    /// on the system disk, and its owner would file documents there believing
+    /// they were on the drive they bought for exactly this — then mount the
+    /// drive and watch the lot disappear underneath it.
+    ///
+    /// So the assertion is not merely that `ensure` fails. It is that **nothing
+    /// was written**, which is the part a returned `Err` does not prove.
+    #[test]
+    fn a_configured_vault_that_is_not_there_is_reported_and_never_created() {
+        let dir = tempfile::tempdir().unwrap();
+        // A plausible unmounted drive: the parent exists and is writable, which
+        // is exactly the shape that makes `create_dir_all` succeed.
+        let mount_point = dir.path().join("mnt");
+        std::fs::create_dir_all(&mount_point).unwrap();
+        let vault = mount_point.join("ironwolf/parachron");
+
+        let paths =
+            Paths::for_test(dir.path().join("data")).with_vault(Some(vault.to_str().unwrap()));
+
+        let failure = paths
+            .ensure()
+            .expect_err("a missing vault must be reported");
+        assert!(
+            matches!(&failure, DataError::VaultMissing(named) if named == &vault.display().to_string()),
+            "the message must name the path so a user can act on it: {failure:?}"
+        );
+        assert!(!vault.exists(), "a vault was created on the wrong disk");
+        assert!(
+            !mount_point.join("ironwolf").exists(),
+            "the mount point was written into, which is what hides data under a mount"
+        );
+    }
+
+    /// And it does not quietly fall back to the default, which would look
+    /// identical to total data loss to whoever is reading the window.
+    #[test]
+    fn a_missing_configured_vault_does_not_fall_back_to_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        let paths = Paths::for_test(data.clone())
+            .with_vault(Some(dir.path().join("gone").to_str().unwrap()));
+
+        assert!(paths.ensure().is_err());
+        assert!(
+            !data.join("products").exists(),
+            "the default vault was created as a consolation prize"
+        );
+        assert_ne!(paths.products, data.join("products"));
     }
 
     #[test]

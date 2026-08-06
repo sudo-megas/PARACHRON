@@ -41,6 +41,7 @@ use slint::ComponentHandle;
 use crate::AppWindow;
 use crate::editor::Editors;
 use crate::export::Exports;
+use crate::relocate::Relocations;
 use crate::strings::Lang;
 use crate::theme::{self, Themes};
 use crate::vault::{self, Vault};
@@ -54,6 +55,8 @@ struct Owners {
     editors: Editors,
     themes: Rc<RefCell<Themes>>,
     exports: Exports,
+    /// `None` when there is no vault to move — see `relocate::install`'s caller.
+    relocations: Option<Relocations>,
 }
 
 /// Change the language and repaint every string on screen.
@@ -70,6 +73,11 @@ fn switch(app: &AppWindow, owners: &Owners, lang: Lang) {
     owners.editors.set_lang(lang);
     owners.themes.borrow_mut().set_lang(lang);
     owners.exports.set_lang(app, lang);
+    // Chron9. Only the sheet's *composed* strings need saying again — its labels
+    // are bound to `Strings` and follow `apply_strings` like the rest.
+    if let Some(relocations) = &owners.relocations {
+        relocations.set_lang(app, lang);
+    }
 
     crate::apply_strings(app, lang);
     // The picker's rows are looked up in Rust, so they are pushed rather than
@@ -85,6 +93,15 @@ fn switch(app: &AppWindow, owners: &Owners, lang: Lang) {
 /// to `config.toml` on the way out — the same shape `Themes::current` has, and
 /// for the same reason: reading it from the owner is what stops a stale copy
 /// being written.
+/// Eight arguments, and clippy is right that that is a lot.
+///
+/// It is a wire-up function and they are the window, the starting language and
+/// the six owners the switch has to reach; bundling them into a struct would put
+/// the identical list in `main` one line earlier and add a type whose only
+/// purpose is to be built and immediately taken apart. `Owners` below already is
+/// that struct — it exists because the *switch* needs the bundle, not because
+/// the constructor does.
+#[allow(clippy::too_many_arguments)]
 pub fn install(
     app: &AppWindow,
     lang: Lang,
@@ -93,6 +110,7 @@ pub fn install(
     editors: Editors,
     themes: Rc<RefCell<Themes>>,
     exports: Exports,
+    relocations: Option<Relocations>,
 ) -> Rc<Cell<Lang>> {
     let current = Rc::new(Cell::new(lang));
     let owners = Rc::new(Owners {
@@ -101,6 +119,7 @@ pub fn install(
         editors,
         themes,
         exports,
+        relocations,
     });
 
     app.set_lang_mode(lang.index());

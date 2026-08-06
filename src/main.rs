@@ -14,6 +14,7 @@ mod editor;
 mod export;
 mod import;
 mod lang;
+mod relocate;
 mod render;
 mod strings;
 mod theme;
@@ -36,12 +37,11 @@ fn main() -> Result<(), slint::PlatformError> {
     // starts with the window a few lines below.
     let offset = data::local_offset();
 
-    let (paths, entries) = open_vault();
+    // Resolving the vault now reads `config.toml` on the way, because the
+    // vault's location is in it (Chron9). Still single-threaded file I/O, so
+    // `local_offset` above keeps the ordering Chron4 requires.
+    let (paths, settings, entries) = open_vault();
 
-    let settings = paths
-        .as_ref()
-        .map(|paths| Config::load(&paths.config))
-        .unwrap_or_default();
     let lang = Lang::from_code(&settings.lang);
     let sort = SortMode::from_code(&settings.sort);
     let theme = Theme::from_code(&settings.theme);
@@ -84,6 +84,9 @@ fn main() -> Result<(), slint::PlatformError> {
     // The About pane. Four values pushed once and two clipboard callbacks — it
     // takes no language, because nothing it pushes is UI copy.
     let _about = about::install(&app);
+    // Chron9. Pushed here rather than inside `install` because it is the one
+    // value in the pane that can change while the window is open.
+    about::set_vault(&app, paths.as_ref().map(|paths| paths.vault.as_path()));
 
     // The add/edit sheet. It hands finished work to the vault, which is what
     // puts it on screen.
@@ -99,6 +102,25 @@ fn main() -> Result<(), slint::PlatformError> {
     // writes wherever the user points it, on a thread of its own.
     let exports = export::install(&app, products_root, lang, offset, Rc::clone(&vault));
 
+    // Moving the vault (Chron9). It reaches the four owners of the products root
+    // so that a finished move retargets all of them and re-reads the disk once —
+    // the same single-route arrangement Chron6 established for the language.
+    //
+    // Installed only when there is a vault to move *from*. A missing home
+    // directory, a `config.toml` that would not parse, or a configured vault
+    // that is not there all leave `paths` as `None`, and moving needs a source.
+    let relocations = paths.as_ref().map(|paths| {
+        relocate::install(
+            &app,
+            paths.clone(),
+            lang,
+            Rc::clone(&vault),
+            Rc::clone(&viewer),
+            editors.clone(),
+            exports.clone(),
+        )
+    });
+
     // The language switch, last, because it is the only thing that needs to reach
     // all five of the above. What it returns is where the session's language lives
     // from here on — `lang` the local is only the value it started at.
@@ -110,6 +132,7 @@ fn main() -> Result<(), slint::PlatformError> {
         editors,
         Rc::clone(&themes),
         exports,
+        relocations.clone(),
     );
 
     // Show first, then resize. Sizing an unshown window is silently discarded:
@@ -141,6 +164,14 @@ fn main() -> Result<(), slint::PlatformError> {
             theme: themes.borrow().current(),
             width: size.width,
             height: size.height,
+            // Chron9, and read from its owner like every other field here. A
+            // move that happened during the session changed this, and taking it
+            // from the config loaded at startup would write the old location
+            // back over the new one — the fourth time that shape would have bit.
+            vault: relocations
+                .as_ref()
+                .map(|r| r.current())
+                .unwrap_or_else(|| settings.vault.clone()),
         };
         // Reported to stderr and nowhere else, and Chron8 looked at whether that
         // could be better rather than leaving it to be rediscovered.
@@ -157,7 +188,7 @@ fn main() -> Result<(), slint::PlatformError> {
         // Windows build `windows_subsystem = "windows"` means there is no stderr
         // at all and a failed config save is silent. The vault itself is never at
         // risk — this is the file that remembers a theme and a window size.
-        if let Err(detail) = persist(&paths.config, session) {
+        if let Err(detail) = persist(&paths.config, &session) {
             eprintln!("{}: {detail}", tr(session.lang, Key::ErrConfigSave));
         }
     }
@@ -172,13 +203,25 @@ fn main() -> Result<(), slint::PlatformError> {
 /// mode from the vault, the theme from `Themes`, the language from the cell
 /// `lang::install` returns — because reading any of them from the local `main`
 /// computed at startup is exactly the bug that shipped three times.
-#[derive(Clone, Copy)]
+/// `Clone` but no longer `Copy`: Chron9's `vault` is an owned `String`, so this
+/// is passed by reference and `persist` clones the one field that needs it.
+#[derive(Clone)]
 struct Session {
     lang: Lang,
     sort: SortMode,
     theme: Theme,
     width: f32,
     height: f32,
+    /// Where the vault is, as the session last knew it (Chron9).
+    ///
+    /// A field here rather than carried through from the loaded config, for the
+    /// reason `persist` gives at length: a session can *change* this — that is
+    /// the whole milestone — and a value read from the config at startup would
+    /// silently write the old location back over the new one on exit. That is
+    /// the same bug the sort mode, the theme and the language each had in turn,
+    /// and this one would leave a user's documents in a folder the app no longer
+    /// pointed at.
+    vault: Option<String>,
 }
 
 /// Write the session's state back to `config.toml`.
@@ -195,7 +238,7 @@ struct Session {
 /// without this function failing to build and somebody deciding, on purpose,
 /// whether the session owns it. `..Config::default()` would be no better than
 /// `..settings` — it would silently reset rather than silently carry.
-fn persist(path: &std::path::Path, session: Session) -> Result<(), String> {
+fn persist(path: &std::path::Path, session: &Session) -> Result<(), String> {
     Config {
         // Normalised on the way out by construction: these come from typed
         // values, so an unrecognised string in the file is rewritten as the
@@ -205,6 +248,11 @@ fn persist(path: &std::path::Path, session: Session) -> Result<(), String> {
         theme: session.theme.code().to_string(),
         window_width: session.width as u32,
         window_height: session.height as u32,
+        // Chron9's field, and the sixth this function names. It is a plain
+        // carry-through when nothing moved the vault and the new location when
+        // something did — either way it is read from the live owner, never from
+        // the config `main` loaded at startup.
+        vault: session.vault.clone(),
     }
     .save(path)
 }
@@ -213,12 +261,25 @@ fn persist(path: &std::path::Path, session: Session) -> Result<(), String> {
 ///
 /// Any failure along the way becomes a visible broken entry rather than a
 /// startup crash (CORE §3).
-fn open_vault() -> (Option<Paths>, Vec<Entry>) {
-    let paths = match Paths::resolve() {
+///
+/// **The config is read in the middle of this, and that ordering is Chron9's.**
+/// The vault's location comes out of `config.toml`, so the file has to be read
+/// before there is a `products/` to scan — which is why this returns the
+/// settings rather than leaving `main` to load them afterwards. There is one
+/// place that knows how a vault is found, and it is this function.
+///
+/// A `None` for the paths means "do not write anything back on the way out".
+/// That matters most in the middle case: if `config.toml` could not be parsed,
+/// the app does not know what was in it, and saving a freshly-defaulted config
+/// over the top would delete the `vault` line that names where the user's
+/// documents are.
+fn open_vault() -> (Option<Paths>, Config, Vec<Entry>) {
+    let base = match Paths::resolve() {
         Ok(paths) => paths,
         Err(reason) => {
             return (
                 None,
+                Config::default(),
                 vec![Entry::Broken {
                     folder: String::new(),
                     reason,
@@ -227,13 +288,33 @@ fn open_vault() -> (Option<Paths>, Vec<Entry>) {
         }
     };
 
+    let settings = match Config::load(&base.config) {
+        Ok(settings) => settings,
+        Err(detail) => {
+            let folder = base.config.display().to_string();
+            return (
+                None,
+                Config::default(),
+                vec![Entry::Broken {
+                    folder,
+                    reason: data::DataError::ConfigUnreadable(detail),
+                }],
+            );
+        }
+    };
+
+    let paths = base.with_vault(settings.vault.as_deref());
+
     if let Err(reason) = paths.ensure() {
-        let folder = paths.data.display().to_string();
-        return (None, vec![Entry::Broken { folder, reason }]);
+        // The vault's path, not the data directory's: when a configured vault is
+        // missing this is the whole message, and `~/.local/share/parachron` is
+        // the one directory the user certainly did not mean.
+        let folder = paths.vault.display().to_string();
+        return (None, settings, vec![Entry::Broken { folder, reason }]);
     }
 
     let entries = data::scan(&paths.products);
-    (Some(paths), entries)
+    (Some(paths), settings, entries)
 }
 
 /// Fill the Slint string table. Called again whenever the language changes
@@ -302,6 +383,12 @@ fn apply_strings(app: &AppWindow, lang: Lang) {
     table.set_about_license(tr(lang, Key::AboutLicense).into());
     table.set_about_read_license(tr(lang, Key::AboutReadLicense).into());
     table.set_about_motto(tr(lang, Key::AboutMotto).into());
+    table.set_action_vault_location(tr(lang, Key::ActionVaultLocation).into());
+    table.set_action_move(tr(lang, Key::ActionMove).into());
+    table.set_relocate_title(tr(lang, Key::RelocateTitle).into());
+    table.set_relocate_from(tr(lang, Key::RelocateFrom).into());
+    table.set_relocate_to(tr(lang, Key::RelocateTo).into());
+    table.set_about_vault(tr(lang, Key::AboutVault).into());
 }
 
 /// Shorthand for a string-table lookup.
@@ -338,10 +425,11 @@ mod tests {
             theme: Theme::Latte,
             width: 1440.0,
             height: 910.0,
+            vault: None,
         };
-        persist(&path, session).expect("config must save");
+        persist(&path, &session).expect("config must save");
 
-        let reloaded = Config::load(&path);
+        let reloaded = Config::load(&path).expect("the config just written must load");
         assert_eq!(reloaded.lang, "en", "an unrecognised value is normalised");
         assert_eq!(reloaded.sort, "name", "the session's sort mode is written");
         // Chron5. This assertion used to read the other way round — `theme` was
@@ -355,5 +443,80 @@ mod tests {
         );
         assert_eq!(reloaded.window_width, 1440);
         assert_eq!(reloaded.window_height, 910);
+    }
+
+    /// Chron9, and the fourth time this shape has had to be tested.
+    ///
+    /// The sort mode, the theme and the language each shipped once with
+    /// `persist` carrying the *loaded* value through instead of the session's,
+    /// so a change made in the app never reached the disk. This field is the one
+    /// where that bug would leave a user's documents in a folder the app had
+    /// stopped pointing at — so it gets the same test, written the same way: a
+    /// stale value on disk first, and the assertion is that it did not survive.
+    #[test]
+    fn a_vault_moved_during_the_session_is_the_one_that_gets_written() {
+        let dir = tempfile::tempdir().expect("a temp dir must be available");
+        let path = dir.path().join("config.toml");
+
+        Config {
+            vault: Some("/mnt/old-disk/parachron".to_string()),
+            ..Config::default()
+        }
+        .save(&path)
+        .expect("the stale config must be written first");
+
+        let session = Session {
+            lang: Lang::En,
+            sort: SortMode::Added,
+            theme: Theme::Dark,
+            width: 1280.0,
+            height: 800.0,
+            vault: Some("/mnt/ironwolf/parachron".to_string()),
+        };
+        persist(&path, &session).expect("config must save");
+
+        let reloaded = Config::load(&path).expect("the config just written must load");
+        assert_eq!(
+            reloaded.vault.as_deref(),
+            Some("/mnt/ironwolf/parachron"),
+            "the session's vault is written, not the one that was loaded"
+        );
+    }
+
+    /// Moving back to the default writes no key at all rather than the default
+    /// path spelled out, so the file a user reads matches the file a fresh
+    /// install would have.
+    #[test]
+    fn a_vault_returned_to_the_default_writes_no_key() {
+        let dir = tempfile::tempdir().expect("a temp dir must be available");
+        let path = dir.path().join("config.toml");
+
+        Config {
+            vault: Some("/mnt/ironwolf/parachron".to_string()),
+            ..Config::default()
+        }
+        .save(&path)
+        .expect("the stale config must be written first");
+
+        let session = Session {
+            lang: Lang::En,
+            sort: SortMode::Added,
+            theme: Theme::Dark,
+            width: 1280.0,
+            height: 800.0,
+            vault: None,
+        };
+        persist(&path, &session).expect("config must save");
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("vault"),
+            "a default vault writes no key:\n{text}"
+        );
+        assert_eq!(
+            Config::load(&path).expect("must load").vault,
+            None,
+            "and reads back as the default"
+        );
     }
 }

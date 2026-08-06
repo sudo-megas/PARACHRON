@@ -290,6 +290,14 @@ impl Vault {
     /// Chron6. Every row's text — the `!` prefix, `Missing files: …`, a broken
     /// folder's heading and its reason — is composed here, so the language has to
     /// arrive before the rows are rebuilt.
+    /// Chron9. The vault moved; the next rescan reads the new root.
+    ///
+    /// One of four owners of the products root — see
+    /// `viewer::Viewer::set_products_root` for why they are copies.
+    pub fn set_products_root(&mut self, root: std::path::PathBuf) {
+        self.products_root = root;
+    }
+
     pub fn set_lang(&mut self, lang: Lang) {
         self.lang = lang;
     }
@@ -577,6 +585,17 @@ pub fn describe(lang: Lang, error: &DataError) -> String {
                 "{} ({field}): {detail}",
                 strings::get(lang, Key::ErrInvalidDate)
             )
+        }
+        // Chron9. Both carry a path or a file name rather than a parser's
+        // grumble, and both are shown with the folder they name beside them —
+        // which is the whole point of these two existing separately from
+        // `Unreadable`. A user can act on "that drive is not mounted" and can do
+        // nothing at all with an empty list.
+        DataError::VaultMissing(path) => {
+            format!("{}: {path}", strings::get(lang, Key::ErrVaultMissing))
+        }
+        DataError::ConfigUnreadable(detail) => {
+            format!("{}: {detail}", strings::get(lang, Key::ErrConfigUnreadable))
         }
     }
 }
