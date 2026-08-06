@@ -12,6 +12,7 @@
 [![Arch Linux](https://img.shields.io/badge/Arch-.pkg.tar.zst-1793d1?logo=archlinux&logoColor=white)](#arch-linux--cachyos)
 [![Debian](https://img.shields.io/badge/Debian-.deb-a80030?logo=debian&logoColor=white)](#debian--ubuntu)
 [![Windows](https://img.shields.io/badge/Windows-.exe-0078d4?logo=windows&logoColor=white)](#windows)
+[![CI](https://github.com/sudo-megas/PARACHRON/actions/workflows/ci.yml/badge.svg)](https://github.com/sudo-megas/PARACHRON/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green)](LICENSE)
 
 ---
