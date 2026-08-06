@@ -1,18 +1,24 @@
-# Chron9 — Packaging and CI
+# Chron10 — Packaging and CI
 
-**Milestone:** 9 of ~9 (CORE §9)
+**Milestone:** 10 of ~10 (CORE §9)
 **Status:** planned
-**Builds against:** CORE §1 (identity — app id, binary name, icons, licence, repo), §2 (stack — every dependency has to exist on three platforms), §3 (data model — where the vault lives on a target that is not Linux), §7 (packaging & CI, in full), §8 (conventions & development rules, including who is allowed to be the author of a release), §9 (roadmap — the README lands here)
+**Builds against:** CORE §1 (identity — app id, binary name, icons, licence, repo), §2 (stack — every dependency has to exist on three platforms), §3 (data model — where the vault lives on a target that is not Linux, and where it lives once the user has chosen), §7 (packaging & CI, in full), §8 (conventions & development rules, including who is allowed to be the author of a release), §9 (roadmap — the README lands here)
+
+**Renumbered during Chron9:** this file was Chron9 until the roadmap's last two rows swapped places. A release is the one step that hands artefacts to people who did not build them, and the milestone that lets a user choose which disk the vault lives on changes where their documents are — that cannot land *after* a version has shipped expecting them somewhere else. So the save-location milestone took the 9 slot and packaging moved to 10. Releases are the last step. CORE §9's table records the move; the eight earlier files that say "packaging (Chron9)" in their **Out** lists are left as written, because they were true when written and this project annotates rather than rewrites.
+
+**AUR is out, and this is a withdrawal rather than a decision.** The Arch User Repository is temporarily disabled by its own maintainers following attacks on it. Everything below that named it is struck in place with that reason rather than deleted, because a reader a year from now needs to know the AUR was planned and why it was not shipped — and because if the AUR comes back, what is struck here is the design to un-strike. It costs one of the three human prerequisites, one acceptance criterion, and the only part of this milestone that was going to make a git commit outside this repository.
 
 ## Goal
 
-Parachron becomes something a person installs rather than something a person builds. A tag pushed to the repository produces three assets — `.pkg.tar.zst`, `.deb`, `.exe` — built by GitHub Actions, each carrying the binary, the icons, the licence and, on Linux, a desktop entry that puts the app in a menu. An AUR package makes `paru -S parachron` work. And `README.md` is finally written, for the person who landed on the GitHub page and wants the app, not the history.
+Parachron becomes something a person installs rather than something a person builds. A tag pushed to the repository produces three assets — `.pkg.tar.zst`, `.deb`, `.exe` — built by GitHub Actions, each carrying the binary, the icons, the licence and, on Linux, a desktop entry that puts the app in a menu. ~~An AUR package makes `paru -S parachron` work.~~ And `README.md` is finally written, for the person who landed on the GitHub page and wants the app, not the history.
+
+**Overtaken before this milestone began:** `README.md` was written in commit `9768a07`, ahead of the milestone that was going to write it, and CORE §9's row records why — the page is what a visitor lands on, and having it ready means this milestone cuts a tag rather than also writing a page. So the last sentence of that paragraph describes work already done. What is left of it here is real but smaller: the screenshots the walkthrough has never had, a Windows line for the data-directory section, the AUR route coming back out, and the check that every link resolves and every badge reads a real value once a release exists.
 
 This is the only milestone whose output is not code the app runs, and the only one whose acceptance criteria are largely unverifiable on this laptop. Both facts shape everything below.
 
 ## Scope
 
-**In:** a dependency split so that two Linux-only feature sets are not asked for on a target that cannot use them · `packaging/org.parachron.Parachron.desktop` · the icon install map · `[package.metadata.deb]` · a `PKGBUILD` · Windows resources (icon and manifest) through `build.rs` · `[profile.release]` · a CI workflow on push and a release workflow on tag · MuPDF built statically or bundled per target · AGPL compliance in every artefact · the AUR package · `README.md` per `usereadme.md`.
+**In:** a dependency split so that two Linux-only feature sets are not asked for on a target that cannot use them · `packaging/org.parachron.Parachron.desktop` · the icon install map · `[package.metadata.deb]` · a `PKGBUILD` · Windows resources (icon and manifest) through `build.rs` · `[profile.release]` · a CI workflow on push and a release workflow on tag · MuPDF built statically or bundled per target · AGPL compliance in every artefact · ~~the AUR package~~ · `README.md`'s remaining work per `usereadme.md`.
 
 **Out (explicitly):** a Windows installer — the release asset is the executable CORE §7 names, and an MSI or NSIS wrapper is a second packaging system for one of three targets · code signing on Windows, which needs a certificate somebody has to buy and renew, and an unsigned binary with a public build log is the more honest artefact for an AGPL app · Flatpak, Snap and AppImage, none of which CORE §7 lists · macOS, for the same reason · auto-update, which is a network call in an app that makes none (CORE §4) · publishing to crates.io, since this is an application and a vendored MuPDF makes it a hostile dependency for anyone who did pull it in · a changelog, which CORE §8 rule 3 rules out of the README and the repository already keeps · translating the README, which is a document for a GitHub page rather than UI copy.
 
@@ -21,7 +27,7 @@ This is the only milestone whose output is not code the app runs, and the only o
 Named up front because three of them block acceptance and none of them is a task anybody can tick on the user's behalf.
 
 1. **The GitHub repository must exist at `https://github.com/sudo-megas/PARACHRON` with Actions enabled.** CORE §1 names it and `Cargo.toml` points at it; nothing in this tree proves it is there.
-2. **An AUR account with an SSH public key registered, and that private key added to the repository as a secret.** AUR publication is a `git push` to `ssh://aur@aur.archlinux.org/parachron.git`, and it is a *commit* — which puts it squarely under CORE §8 rule 2, so it must be authored by `sudo-megas` and by nothing else.
+2. ~~**An AUR account with an SSH public key registered, and that private key added to the repository as a secret.** AUR publication is a `git push` to `ssh://aur@aur.archlinux.org/parachron.git`, and it is a *commit* — which puts it squarely under CORE §8 rule 2, so it must be authored by `sudo-megas` and by nothing else.~~ — struck: the AUR is temporarily disabled by its maintainers. This was the only one of the three that needed a credential, and it is the one that went away.
 3. **A tag has to be pushed by a person.** The release workflow triggers on it; nothing triggers the person.
 
 Everything else in this file is work that can be written and reviewed before any of the three happen.
@@ -59,19 +65,25 @@ The spike's output is four yes-or-no answers and a `Cargo.toml`. It runs in CI, 
 Cargo.toml            # + target-gated rfd and arboard, [package.metadata.deb],
                       #   [profile.release], Windows build-dependencies
 build.rs              # + Windows resources: the .ico and an app manifest
-README.md             # NEW — per usereadme.md (CORE §8 rule 3)
+src/main.rs           # + slint::set_xdg_app_id, so a Wayland shell can tie
+                      #   the window to the desktop entry
+README.md             # + screenshots, a Windows data path, no AUR route
+build/parachron.manifest              # NEW — DPI awareness, asInvoker
 packaging/
 ├── org.parachron.Parachron.desktop   # NEW — CORE §7 names this file exactly
 └── PKGBUILD                          # NEW — the Arch package
 .github/
 └── workflows/
     ├── ci.yml        # NEW — build and test on push and pull request
-    └── release.yml   # NEW — three assets on a tag, and the AUR push
+    ├── spike.yml     # NEW — the four Windows answers, on a branch, first
+    └── release.yml   # NEW — three assets on a tag ~~and the AUR push~~
 ```
 
 `packaging/` rather than `build/`, which already exists. The distinction is who reads them: `build/icons/` holds assets the *app* reads — `app.slint` references `../build/icons/parachron-256.png` at compile time — while `packaging/` holds files only a packager ever opens. Keeping them apart means a person looking for what ships is not reading past what the binary embeds.
 
-`README.md` is listed as new and is genuinely absent, which is worth one more sentence: `Cargo.toml` already says `readme = "README.md"`, so the manifest currently points at a file that is not there. Nothing has noticed because nothing has run `cargo package`.
+~~`README.md` is listed as new and is genuinely absent, which is worth one more sentence: `Cargo.toml` already says `readme = "README.md"`, so the manifest currently points at a file that is not there. Nothing has noticed because nothing has run `cargo package`.~~
+
+**Overtaken by `9768a07`:** the README exists, and `readme = "README.md"` now points at something. What this milestone owes the page is listed under **The README** in the tasks below, and it is smaller than writing one: screenshots, a Windows line for the data-directory section, the AUR route coming out, and a dependency sentence that currently claims more than it means.
 
 ## Tasks
 
@@ -87,26 +99,33 @@ packaging/
 
 ### Linux install layout
 
-- [ ] `packaging/org.parachron.Parachron.desktop`: `Name=Parachron`, `Exec=parachron`, `Icon=parachron`, `Categories=Utility;Office;`, and a `Comment` — with a `Comment[tr]` beside it, because a desktop entry is the one piece of UI copy that lives outside the string table by necessity
+- [ ] `main.rs`: `slint::set_xdg_app_id("org.parachron.Parachron")` between `local_offset()` and `AppWindow::new()` — without it a Wayland session never associates the window with the entry, and no value in the `.desktop` file can repair that (Technical notes)
+- [ ] `packaging/org.parachron.Parachron.desktop`: `Name=Parachron`, `Exec=parachron`, `Icon=parachron`, `Categories=Utility;Office;`, a `StartupWMClass` matching the app id above, and a `Comment` — with a `Comment[tr]` beside it, because a desktop entry is the one piece of UI copy that lives outside the string table by necessity
+- [ ] Confirm the app id empirically rather than by reading the source: `xprop WM_CLASS` under the `Xvfb :98` harness the earlier milestones use, before and after the line above
+- [ ] `desktop-file-validate` the entry, in `ci.yml` rather than in the `PKGBUILD`, so it is checked on every push and not only when somebody packages
 - [ ] Icon install map: `build/icons/parachron-<n>.png` → `/usr/share/icons/hicolor/<n>x<n>/apps/parachron.png`, for every size from 16 to 512; `parachron-1024.png` stays in the repo as artwork and ships in no package
-- [ ] `LICENSE` installed to `/usr/share/licenses/parachron/LICENSE` in both Linux packages
-- [ ] `Cargo.toml`: `[package.metadata.deb]` naming the binary, the icons, the desktop entry and the licence, with the same layout CORE §7 specifies
+- [ ] `LICENSE` installed to `/usr/share/licenses/parachron/LICENSE` on Arch and to `/usr/share/doc/parachron/copyright` on Debian — the policy path each distribution's own tooling reads, which is not the single path this file originally named for both
+- [ ] `Cargo.toml`: `[package.metadata.deb]` naming the binary, the icons, the desktop entry and the licence, with the same layout CORE §7 specifies, and a `maintainer` with an address in it — `authors = ["sudo-megas"]` has no `<…>` part and `cargo-deb` would emit a malformed `Maintainer:` field from it
+- [ ] Both dependency lists carry the twelve `dlopen`ed libraries as well as the eleven linked ones (Technical notes), and the two lists are kept identical
 - [ ] `packaging/PKGBUILD`: `pkgname=parachron`, the AGPL licence field, build and package functions, and the same install map — verified with `makepkg -si` on this machine, which is the one Linux target that can be tested locally
 
 ### CI
 
 - [ ] `.github/workflows/ci.yml`: on push and pull request — `cargo build`, `cargo test`, `cargo clippy`, `cargo fmt --check`; **tests in the dev profile**, for the reason in Technical notes
 - [ ] Cache the vendored MuPDF build per target, and confirm the cache is actually hit on a second run rather than assumed to be
-- [ ] `.github/workflows/release.yml`: on a `v*` tag — build all three assets, attach them to a GitHub release, and push the AUR package
+- [ ] `.github/workflows/release.yml`: on a `v*` tag — build all three assets and attach them to a GitHub release ~~, and push the AUR package~~
 - [ ] MuPDF statically linked or bundled per target, so no asset depends on a MuPDF the user has to install (CORE §7)
 - [ ] The release workflow sets `PARACHRON_BUILD_DATE` from the tag rather than leaving `build.rs` to read the runner's clock — Chron8 stamps it at compile time so that a source build honestly reports its own build day, and a *released* asset should carry the release date CORE §4 asks the About pane for. This is the seam Chron8 hands over
-- [ ] The AUR push authenticates with the registered key and commits as `sudo-megas` (CORE §8 rule 2)
+- [ ] ~~The AUR push authenticates with the registered key and commits as `sudo-megas` (CORE §8 rule 2)~~ — struck with the AUR
 - [ ] No AI attribution in any workflow file, comment, commit or release note — CORE §8 rule 1 covers generated YAML exactly as it covers Rust
 
 ### The README
 
-- [ ] `README.md` per `usereadme.md`'s layout: wordmark and icon, the badge row, description, dependencies, the four installation routes, the app-sections walkthrough, and the licence summary
-- [ ] Written **after** the first release exists, so every download link and every badge points at something real (CORE §9)
+- [x] ~~`README.md` per `usereadme.md`'s layout: wordmark and icon, the badge row, description, dependencies, the four installation routes, the app-sections walkthrough, and the licence summary~~ — done ahead of this milestone in `9768a07`
+- [x] ~~Written **after** the first release exists, so every download link and every badge points at something real (CORE §9)~~ — deliberately inverted; the cost is stated on the page itself, in a note saying packaged downloads arrive with the first release and build-from-source works today
+- [ ] Take the AUR route back out of the Arch section — it names `paru -S parachron` for a package that cannot be published while the AUR is down, and a dead install command on a public page is worse than a missing one
+- [ ] Add a Windows line to **Where your data lives**, and a line for a vault the user has relocated (Chron9)
+- [ ] Soften "To run a packaged release — nothing", which is true of MuPDF and reads as a claim about everything; both Linux packages declare a dozen runtime dependencies
 - [ ] Screenshots of the real app for the sections walkthrough, taken on the isolated display the earlier milestones use
 
 ## Acceptance criteria
@@ -120,10 +139,10 @@ packaging/
 7. Every package includes the full AGPL text, and the binary's About pane shows it too (Chron8).
 8. `cargo test` is green in CI on every target that runs it, in the dev profile, with no warnings from `cargo build` either.
 9. A second CI run hits the MuPDF cache and completes materially faster than the first.
-10. `paru -S parachron` (or `yay`, or a manual AUR clone) installs a working app from the AUR.
-11. `README.md` follows `usereadme.md`'s layout, every download link resolves, and every badge shows a real value.
-12. No AI attribution anywhere in the repository, the workflows, the release notes or the AUR package.
-13. `git log` shows only `sudo-megas` as author, in this repository and in the AUR one.
+10. ~~`paru -S parachron` (or `yay`, or a manual AUR clone) installs a working app from the AUR.~~ — struck with the AUR. It was one of the four criteria that could not be checked on this laptop, and the only one that has stopped being checkable anywhere.
+11. `README.md` follows `usereadme.md`'s layout, carries screenshots of the real app, names no install route that does not exist, every download link resolves, and every badge shows a real value.
+12. No AI attribution anywhere in the repository, the workflows or the release notes.
+13. `git log` shows only `sudo-megas` as author.
 
 ## Technical notes
 
@@ -131,11 +150,27 @@ packaging/
 
 **The vault's path on Windows is a CORE §3 question, not a packaging one.** CORE §3 documents the data directory as `~/.local/share/parachron/`, and `data.rs` pins the project path deliberately "so the directory is named exactly what CORE §3 documents on every platform." On Windows, `directories` resolves that to somewhere under `%APPDATA%`, which is correct behaviour and is not what §3 says. The moment a Windows binary exists, §3 is describing one of three targets. It should gain the other two paths — CORE's own rule is that when reality and CORE differ, CORE is updated first — and the README's Windows section should say where a user's data actually lives, because "everything human-readable, rsync-friendly, no hidden state" is a promise that needs an address.
 
-**A release is not a commit, and an AUR push is.** CORE §8 rule 2 says every commit, push and pull request is authored by `sudo-megas` and never by a bot. A GitHub release created by a workflow is attributed to the workflow's token, which is not a person and also not a commit — it is an artefact upload against a tag the user pushed, and the tag is the authored thing. The AUR is different in kind: publishing there *is* a git commit in a git repository, so it must carry `sudo-megas` as author and must authenticate as them. That is why the SSH key is a human prerequisite rather than a task, and why it is worth stating the distinction rather than letting a future reader discover that half of "no bots" was interpreted loosely.
+**A release is not a commit.** CORE §8 rule 2 says every commit, push and pull request is authored by `sudo-megas` and never by a bot. A GitHub release created by a workflow is attributed to the workflow's token, which is not a person and also not a commit — it is an artefact upload against a tag the user pushed, and the tag is the authored thing. Worth stating rather than letting a future reader discover that "no bots" was interpreted loosely somewhere.
+
+~~The AUR is different in kind: publishing there *is* a git commit in a git repository, so it must carry `sudo-megas` as author and must authenticate as them. That is why the SSH key is a human prerequisite rather than a task.~~ — struck with the AUR, and worth leaving legible, because it is the reasoning to restore rather than re-derive if the AUR comes back. With it gone, **this milestone makes no git commit outside this repository at all**, which removes the only place rule 2 was going to be tested against a machine holding a credential.
 
 **AGPL compliance is mostly already satisfied, and the part that is not is an install path.** CORE §1 chose AGPL-3.0 because MuPDF's linkage requires it, and CORE §7 says the public repository satisfies the source obligation — which it does, for a binary built from a public tree by a public workflow whose logs anyone can read. What each package still has to do is ship the licence text itself, at the path that distribution's users and tooling expect. That is one line in the `PKGBUILD`, one entry in `[package.metadata.deb]`, and on Windows the About pane Chron8 built, which is the only place a Windows user would look.
 
 **Static or bundled, but never "the user installs MuPDF".** CORE §7 flags this and it is worth restating as a rule the workflow has to obey rather than an aspiration: `mupdf-sys` vendors and builds MuPDF from source, so the natural outcome is a static link, and the natural failure is a `.deb` that declares a runtime dependency on a system `libmupdf` that Debian does not ship in the version this needs. Every asset is checked with `ldd` — or its Windows equivalent — before it is attached to a release, and what it links against is a criterion rather than a note.
+
+**Corrected before this milestone began: a dependency list built from `ldd` produces a package that installs cleanly and then fails to open a window.** The paragraph above tells a packager to check with `ldd`, and for the question it was answering — *is MuPDF linked in, or is it expecting a system copy* — that is the right instrument. It is the wrong instrument for `depends=()`, and this file did not say so.
+
+`ldd target/release/parachron` reports eleven libraries: fontconfig, freetype, libpng, expat, bzip2, brotli, zlib, libgcc, libc and friends. Slint's winit backend opens twelve more with `dlopen` at runtime — `libX11`, `libX11-xcb`, `libxcb`, `libXcursor`, `libXrender`, `libXi`, `libxkbcommon`, `libxkbcommon-x11`, `libwayland-client`, `libwayland-egl`, `libEGL`, `libGL` — and none of them appears in any `ldd` output, because none of them is a link-time dependency. A `depends=()` or a `Depends:` derived from `ldd` alone therefore installs without complaint, puts the app in the menu, and produces nothing when it is clicked. On the `.deb` side `cargo-deb`'s `$auto` runs `dpkg-shlibdeps`, which reads the same eleven and misses the same twelve.
+
+That is the worst shape a packaging bug can take: criteria 2 and 4 both say "installs … and launches from it", so both would pass their install half and fail their launch half, on a machine that is not this one. The two lists are written out in full in both `PKGBUILD`s and in `[package.metadata.deb]`, and they are the same list and move together.
+
+This is recorded as a correction rather than folded in silently, in the genre this file's own spike section already uses on itself — and for the same reason. The first draft asserted something about `rfd` and `arboard` that ten seconds of `cargo tree` disproved; this one asserted an instrument, and reading what the binary actually opens disproved it. **A claim about code is not a finding until the code has been read at the line the claim is about** (Chron8).
+
+**Nothing calls `slint::set_xdg_app_id`, and criterion 2 fails on the maintainer's own desktop because of it.** The desktop entry gets a `StartupWMClass` so a shell can tie a running window to the launcher that started it, and the value has to match what the toolkit actually reports. Slint sets a window's app id only when asked: `i-slint-backend-winit`'s window adapter calls winit's `with_name` only if `xdg_app_id()` returns `Some`, and `set_xdg_app_id` is the only thing that makes it. Nothing in `src/` or `ui/` calls it.
+
+Without it, winit falls back to `argv[0]` on X11 — so `WM_CLASS` reads `"parachron", "parachron"`, which a `StartupWMClass` could at least be written against — and on Wayland it does not set an app id **at all**. Wayland has no `WM_CLASS` and no `StartupWMClass` to fall back on, so on a Plasma or GNOME Wayland session the entry and the window are never associated: wrong icon in the task bar, a second launcher entry, and no value in the `.desktop` file that could fix it. This project's own desktop is Wayland, which makes criterion 2 fail where it is most likely to be checked first.
+
+The repair is one line in `main.rs`, between `local_offset()` and `AppWindow::new()` — after Chron4's ordering requirement and before any window exists, which is what `set_xdg_app_id` requires. It is not on this milestone's task list because the task list was written believing the `.desktop` file was the whole of the problem.
 
 **`96` and `1024` are not the same kind of leftover.** The icon set has ten PNG sizes and a `.ico`. The hicolor theme takes whatever sizes are installed into it, so 16 through 512 all go in and cost a few hundred kilobytes between them. `parachron-1024.png` is 1.6MB on its own, is larger than any icon theme will ever ask for, and exists for artwork — a README header, a store listing, a future website. It stays in the repository and ships in nothing.
 
@@ -149,8 +184,10 @@ packaging/
 
 ## How the criteria were verified
 
-Written when the milestone is done, as in Chron1–7. It will have a section this project has not needed before — **what was verified only by CI, and what was verified only by one person on one machine** — because criteria 4, 5, 6 and 10 cannot be checked on a CachyOS laptop, and criteria 2 and 3 are the only two that can be checked locally end to end.
+Written when the milestone is done. Chron8 is the model rather than Chron1–7, which this line originally named: its **Not verified.** list — a bolded noun phrase, what was done instead, the argument standing in for the observation, then a flat sentence conceding the argument is not the observation — is the exact form this milestone needs.
+
+It will have a section this project has not needed before: **what was verified only by CI, and what was verified only by one person on one machine.** Criteria 4, 5 and 6 cannot be checked on this laptop, and criteria 2 and 3 are the only two that can be checked locally end to end. Criterion 10 used to be in that first list and is now struck, which does not improve the ratio — it removes a row rather than answering it.
 
 ## Done when
 
-All acceptance criteria pass, which for the first time means "pass in CI and on a machine that is not this one". Then: amend CORE §3 with the data directory on all three targets, amend CORE §7 with whatever the spike settles about MuPDF per target and the renderer, record in CORE §4 that a released binary's About date comes from its tag while a source build's comes from its clock, record the AUR package name and its repository, note in CORE §8 how rule 2 applies to a release as against an AUR commit, mark this file's status `done` — and with it, the roadmap in CORE §9.
+All acceptance criteria pass, which for the first time means "pass in CI and on a machine that is not this one". Then: amend CORE §3 with the data directory on all three targets, amend CORE §7 with whatever the spike settles about MuPDF per target and the renderer, record in CORE §4 that a released binary's About date comes from its tag while a source build's comes from its clock, ~~record the AUR package name and its repository~~, note in CORE §8 how rule 2 applies to a release, record in CORE §7 that the AUR route was designed and withdrawn and under what condition it returns, mark this file's status `done` — and with it, the roadmap in CORE §9.
