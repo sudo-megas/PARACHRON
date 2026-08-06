@@ -82,7 +82,15 @@ pub fn countdown(days: i64, lang: Lang) -> String {
 }
 
 /// Push a snapshot to the window.
+///
+/// Also takes the export's status line down, because this is called on every
+/// change of selection and that status is a claim about one product: `Saved — Not
+/// included: gone.pdf` left over from the last product, sitting above the next
+/// one's details or above a broken folder's placeholder, says something untrue.
+/// `export.rs` is the only thing that ever puts a status up; a change of product
+/// is the only other thing that can take one down.
 pub fn show(app: &AppWindow, snapshot: &Snapshot) {
+    crate::export::clear_status(app);
     app.set_details_filled(snapshot.filled);
     app.set_details_link(snapshot.link.as_str().into());
     app.set_details_purchase_date(snapshot.purchase_date.as_str().into());

@@ -302,9 +302,18 @@ pub fn open_document(path: &Path) -> Result<Document, ViewError> {
 /// Open a document as a PDF, for export (Chron7).
 ///
 /// The same three checks as [`open_document`], in the same order, mapped onto the
-/// same [`ViewError`] — because "is this a readable PDF" has to have exactly one
-/// answer in the app, and `import.rs` already argued that. It lives here rather
-/// than in `export.rs` for that reason.
+/// same [`ViewError`] — because the *verdicts* have to be phrased in one
+/// vocabulary, and `import.rs` already argued that. It lives here rather than in
+/// `export.rs` for that reason.
+///
+/// The two are not quite interchangeable, and the difference is a real one rather
+/// than an oversight. CORE §2 builds MuPDF with `img`, so `Document::open`
+/// recognises image formats that `PdfDocument::open` cannot: a scan saved as
+/// `invoice.pdf` that is really a PNG opens in the viewer and is refused here. That
+/// is correct — a PNG cannot be grafted into a PDF's page tree — and the export
+/// names it among the documents it could not include, which is what CORE §6 asks
+/// for. It is written down because "one answer in the app" would otherwise read as
+/// a stronger promise than the code makes.
 ///
 /// The third check is why this function exists at all. `PdfDocument::open` does
 /// **not** refuse a password-protected file the way `Document::open` plus

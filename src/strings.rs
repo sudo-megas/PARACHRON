@@ -168,6 +168,8 @@ pub enum Key {
     Exporting,
     ExportDone,
     ErrExportFailed,
+    ErrExportWrite,
+    ErrExportAssemble,
 
     // Broken and incomplete entries
     BrokenTitle,
@@ -268,6 +270,8 @@ impl Key {
         Key::Exporting,
         Key::ExportDone,
         Key::ErrExportFailed,
+        Key::ErrExportWrite,
+        Key::ErrExportAssemble,
         Key::BrokenTitle,
         Key::MissingFiles,
         Key::ErrNoHome,
@@ -411,17 +415,31 @@ fn table(key: Key) -> (&'static str, &'static str) {
         LangEnglish => ("English", "English"),
         LangTurkish => ("Türkçe", "Türkçe"),
 
-        ExportSaveTitle => ("Export PDF", "PDF Olarak Aktar"),
-        // On the summary page's footer, in front of the date.
-        ExportedOn => ("Exported", "Aktarma tarihi"),
+        // "Export" in Turkish is *dışa aktarmak*; bare *aktarmak* is "transfer".
+        // These five all keep the particle, and that is a correction: three of
+        // them dropped it, so a user pressed `DIŞA AKTAR`, got a dialog titled
+        // *PDF Olarak Aktar*, watched *Aktarılıyor…* and on failure read *Dışa
+        // aktarılamadı* — four wordings for one action.
+        ExportSaveTitle => ("Export PDF", "PDF Olarak Dışa Aktar"),
+        // On the summary page's footer, in front of the date. English reads as a
+        // sentence, `Exported 06-08-2026`; Turkish reads as a label, so it takes
+        // the colon English does not want. One of the few places the two languages
+        // need different punctuation rather than different words.
+        ExportedOn => ("Exported", "Dışa aktarma tarihi:"),
         ExportSkipped => ("Not included", "Eklenmeyen belgeler"),
-        Exporting => ("Exporting…", "Aktarılıyor…"),
+        Exporting => ("Exporting…", "Dışa aktarılıyor…"),
         // The status line after a successful export. Deliberately not the same
         // word as `ExportedOn`, which sits on the page's footer in front of a date
         // — that one is a label on an artefact, this one is a thing that just
         // happened, and English would otherwise use "Exported" for both.
         ExportDone => ("Saved", "Kaydedildi"),
         ErrExportFailed => ("Could not export", "Dışa aktarılamadı"),
+        // Which half of the export failed. Writing is the file; assembling is the
+        // PDF. Neither is a fault in the user's own data, which is what the first
+        // version of this said — every MuPDF error was reported as
+        // `product.toml is not valid`.
+        ErrExportWrite => ("the file could not be written", "dosya yazılamadı"),
+        ErrExportAssemble => ("the PDF could not be built", "PDF oluşturulamadı"),
 
         BrokenTitle => ("Broken entry", "Bozuk kayıt"),
         MissingFiles => ("Missing files", "Eksik dosyalar"),
@@ -558,7 +576,7 @@ mod tests {
         assert_eq!(before, seen.len(), "Key::ALL contains a duplicate");
         assert_eq!(
             Key::ALL.len(),
-            86,
+            88,
             "Key::ALL is out of step with the enum — add the new key to it"
         );
     }

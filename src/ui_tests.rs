@@ -519,6 +519,31 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     click(&export_button());
     assert_eq!(app.get_export_status(), "");
     assert!(!app.get_export_failed());
+
+    // The status line does not survive a change of product.
+    //
+    // It is a claim about one product: `Saved — Not included: gone.pdf` left over
+    // from the last export, sitting above the next product's details or above a
+    // broken folder's "Details appear here", says something untrue. Nothing in the
+    // vault's own push used to touch it, and the line is a sibling of both the
+    // filled and unfilled branches of column 3, so it survived the column emptying.
+    app.set_export_status("Saved".into());
+    app.set_export_failed(true);
+    click(&elements(&app, "AppWindow::row-touch")[0]);
+    assert_eq!(
+        app.get_export_status(),
+        "",
+        "a status from the previous product is still on screen"
+    );
+    assert!(!app.get_export_failed());
+
+    app.set_export_status("Saved".into());
+    click(&elements(&app, "AppWindow::row-touch")[3]);
+    assert_eq!(
+        app.get_export_status(),
+        "",
+        "a status survived onto a folder that has no product at all"
+    );
 }
 
 /// The Slint colour `theme.rs` would have pushed for an `0xRRGGBB` value.

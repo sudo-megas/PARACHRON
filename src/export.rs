@@ -32,12 +32,12 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use mupdf::pdf::PdfDocument;
-use mupdf::shape::{PdfColor, Shape, TextOptions};
-use mupdf::{Point, Size};
+use mupdf::shape::{PdfColor, Shape, TextOptions, TextboxOptions};
+use mupdf::{Point, Rect, Size};
 use slint::ComponentHandle;
 use time::{Date, UtcOffset};
 
-use crate::data::{self, DataError, Product};
+use crate::data::{self, Product};
 use crate::render::{self, ViewError};
 use crate::strings::{self, Key, Lang};
 use crate::vault::Vault;
@@ -57,10 +57,17 @@ const BODY: f32 = 12.0;
 const COUNTER: f32 = 19.0;
 const FOOTNOTE: f32 = 8.5;
 
-/// Distance from a field's label baseline to its value's.
-const LABEL_GAP: f32 = 15.0;
-/// Distance between one field and the next.
-const FIELD_GAP: f32 = 30.0;
+/// Space between a label and the value under it, and between one field and the
+/// next. Everything else about vertical position is whatever the previous block
+/// actually consumed, because a wrapped value's height is not known until it is
+/// drawn.
+const LABEL_GAP: f32 = 4.0;
+const FIELD_GAP: f32 = 14.0;
+
+/// The longest filename a filesystem will accept, in bytes. 255 on Linux, on
+/// Windows, and on macOS; the suggestion is capped to it rather than to a
+/// character count, because a Turkish letter is two bytes.
+const NAME_MAX: usize = 255;
 
 /// Ink. Black on white, theme-independent by construction (CORE §6) — the export
 /// reads nothing from `Palette`, because a printed page is not a window.
@@ -70,6 +77,22 @@ fn ink() -> PdfColor {
 
 fn quiet_ink() -> PdfColor {
     PdfColor::gray(0.42)
+}
+
+/// Why an export did not happen.
+///
+/// Its own type rather than a reused [`DataError`], because export's failures are
+/// not data-layer failures and saying they are misinforms the user about their own
+/// files. Every MuPDF error used to be mapped onto `DataError::Malformed`, which
+/// the string table renders as **"product.toml is not valid"** — so an export onto
+/// a full disk told somebody to go and fix a manifest that was perfectly fine.
+/// `File::create` failing became `Unreadable`, "Could not be read", for a write.
+#[derive(Debug)]
+pub enum Failure {
+    /// The output could not be written; carries the OS message.
+    Write(String),
+    /// MuPDF could not build or serialise the document.
+    Assemble(String),
 }
 
 /// What a commit did, or why it did not.
@@ -84,7 +107,7 @@ pub enum Outcome {
         /// succeeded; the summary page names them.
         skipped: Vec<(String, ViewError)>,
     },
-    Failed(DataError),
+    Failed(Failure),
 }
 
 /// Everything one export needs, in a package that can cross to a thread.
@@ -127,7 +150,7 @@ pub fn commit(job: Job, slot: Arc<Mutex<Option<Outcome>>>, weak: slint::Weak<App
 /// over paths the viewer may have cached; export writes nowhere the render worker
 /// has heard of.
 pub fn run(job: Job) -> Outcome {
-    let mupdf_failed = |e: mupdf::Error| DataError::Malformed(e.to_string());
+    let assemble = |e: mupdf::Error| Failure::Assemble(e.to_string());
 
     // Every source is opened before anything is drawn, so the summary page can
     // name what it had to leave out — and so a refusal costs nothing, since
@@ -147,24 +170,29 @@ pub fn run(job: Job) -> Outcome {
 
     let mut out = PdfDocument::new();
     if let Err(e) = summary(&mut out, &job, &skipped) {
-        return Outcome::Failed(mupdf_failed(e));
+        return Outcome::Failed(assemble(e));
     }
 
     for source in &sources {
         if let Err(e) = out.insert_pdf(source, Default::default()) {
-            return Outcome::Failed(mupdf_failed(e));
+            return Outcome::Failed(assemble(e));
         }
     }
 
     // `write_to` rather than `save`, which takes a `&str` and so cannot express a
     // destination that is not valid UTF-8 — and on Linux a path is bytes, so that
     // is a real file somebody could have picked rather than a hypothetical.
+    //
+    // Both failures here are `Write`: the file could not be created, or the bytes
+    // could not be got into it. A full disk fails at the second, and MuPDF reports
+    // it as a MuPDF error, which is why the distinction is drawn by *where* the
+    // failure happened rather than by which library said so.
     match File::create(&job.destination) {
         Ok(mut file) => match out.write_to(&mut file) {
             Ok(_) => Outcome::Done { skipped },
-            Err(e) => Outcome::Failed(mupdf_failed(e)),
+            Err(e) => Outcome::Failed(Failure::Write(e.to_string())),
         },
-        Err(e) => Outcome::Failed(DataError::Unreadable(e.to_string())),
+        Err(e) => Outcome::Failed(Failure::Write(e.to_string())),
     }
 }
 
@@ -182,21 +210,23 @@ fn summary(
     let mut page = doc.new_page(PAGE)?;
     {
         let mut shape = Shape::new(&mut page)?;
-        let mut y = MARGIN + TITLE;
+        let footer = PAGE.height - MARGIN;
+        let footer_rule = footer - 14.0;
+
+        // Labels come from the string table and are short and known. Values are
+        // user data of unbounded length, so every one of them is wrapped — see
+        // `wrapped` for what happened before they were.
+        let mut y = MARGIN;
 
         // ── Wordmark and product name ────────────────────────────────────
         shape.insert_text(
-            Point::new(MARGIN, y),
+            Point::new(MARGIN, y + FOOTNOTE),
             tr(Key::AppTitle),
             &text(FOOTNOTE, quiet_ink()),
         )?;
-        y += TITLE;
-        shape.insert_text(
-            Point::new(MARGIN, y),
-            &product.name,
-            &text(TITLE, ink()),
-        )?;
-        y += 18.0;
+        y += FOOTNOTE + 10.0;
+        y = wrapped(&mut shape, y, &product.name, TITLE, ink(), 2)?;
+        y += 10.0;
 
         // A rule under the name. `finish` paints what has been drawn since the
         // last one, so the line has to be finished before any more text.
@@ -205,7 +235,7 @@ fn summary(
             Point::new(PAGE.width - MARGIN, y),
         )?;
         shape.finish(&rule())?;
-        y += FIELD_GAP;
+        y += 22.0;
 
         // ── The fields CORE §6 asks for ──────────────────────────────────
         let fields = [
@@ -217,18 +247,13 @@ fn summary(
         ];
         for (label, value) in fields {
             shape.insert_text(
-                Point::new(MARGIN, y),
+                Point::new(MARGIN, y + HEADING),
                 tr(label),
                 &text(HEADING, quiet_ink()),
             )?;
-            if !value.is_empty() {
-                shape.insert_text(
-                    Point::new(MARGIN, y + LABEL_GAP),
-                    &value,
-                    &text(BODY, ink()),
-                )?;
-            }
-            y += FIELD_GAP + LABEL_GAP;
+            y += HEADING + LABEL_GAP;
+            y = wrapped(&mut shape, y, &value, BODY, ink(), 2)?;
+            y += FIELD_GAP;
         }
 
         // ── The counter this app exists for ──────────────────────────────
@@ -237,17 +262,21 @@ fn summary(
         // the number on the page and the number on screen cannot disagree — which
         // is why CORE §6 says "days left at time of export" rather than "days
         // left".
-        y += 8.0;
+        y += 6.0;
         shape.insert_text(
-            Point::new(MARGIN, y),
+            Point::new(MARGIN, y + HEADING),
             tr(Key::WarrantyLeft),
             &text(HEADING, quiet_ink()),
         )?;
+        y += HEADING + LABEL_GAP;
         let remaining = data::days_left(product.warranty_end, job.today);
-        shape.insert_text(
-            Point::new(MARGIN, y + COUNTER),
+        y = wrapped(
+            &mut shape,
+            y,
             &crate::details::countdown(remaining, job.lang),
-            &text(COUNTER, ink()),
+            COUNTER,
+            ink(),
+            1,
         )?;
 
         // ── What could not be included ───────────────────────────────────
@@ -256,28 +285,56 @@ fn summary(
         // 3 is gone when the app closes, and this file is what gets emailed to a
         // shop six months later. The same principle that keeps broken folders
         // visible in the list with a readable reason.
+        //
+        // Placed below whatever the fields actually needed rather than at a fixed
+        // fraction of the page, so a wrapped name or link pushes it down instead of
+        // being written over by it. And it stops at the footer rule: a product with
+        // thirteen unreadable documents used to run its list off the bottom of the
+        // paper, which is the same class of defect as the overflowing link.
         if !skipped.is_empty() {
-            let mut note = MARGIN + PAGE.height * 0.62;
+            y += 30.0;
             shape.insert_text(
-                Point::new(MARGIN, note),
+                Point::new(MARGIN, y + HEADING),
                 tr(Key::ExportSkipped),
                 &text(HEADING, quiet_ink()),
             )?;
+            y += HEADING + LABEL_GAP;
+
+            let line = (FOOTNOTE + 1.0) * 1.2;
+            let mut listed = 0;
             for (name, reason) in skipped {
-                note += LABEL_GAP;
-                shape.insert_text(
-                    Point::new(MARGIN, note),
+                if y + line > footer_rule - 4.0 {
+                    break;
+                }
+                y = wrapped(
+                    &mut shape,
+                    y,
                     &format!("{name} — {}", crate::viewer::describe(job.lang, reason)),
-                    &text(FOOTNOTE + 1.0, ink()),
+                    FOOTNOTE + 1.0,
+                    ink(),
+                    2,
+                )?;
+                listed += 1;
+            }
+
+            // A list that had to stop says so, rather than quietly being shorter
+            // than the truth — the artefact has to be honest about its own gaps.
+            if listed < skipped.len() && y + line <= footer_rule - 4.0 {
+                wrapped(
+                    &mut shape,
+                    y,
+                    &format!("+{}", skipped.len() - listed),
+                    FOOTNOTE + 1.0,
+                    quiet_ink(),
+                    1,
                 )?;
             }
         }
 
         // ── Footer ───────────────────────────────────────────────────────
-        let footer = PAGE.height - MARGIN;
         shape.draw_line(
-            Point::new(MARGIN, footer - 14.0),
-            Point::new(PAGE.width - MARGIN, footer - 14.0),
+            Point::new(MARGIN, footer_rule),
+            Point::new(PAGE.width - MARGIN, footer_rule),
         )?;
         shape.finish(&rule())?;
         shape.insert_text(
@@ -303,6 +360,64 @@ fn text(size: f32, colour: PdfColor) -> TextOptions<'static> {
         simple: false,
         ..Default::default()
     }
+}
+
+/// Draw `body` inside the page's margins, wrapping, and return the `y` after it.
+///
+/// **Every piece of user data on the page goes through this**, and the reason is
+/// that `insert_text` does not wrap and does not clip: it lays a single line out
+/// from the point given and keeps going past the paper's edge. A product called
+/// `Samsung Odyssey OLED G8 34-inch Ultrawide Curved Gaming Monitor` with an
+/// ordinary store URL under it put ink in column 594 of a 595-point page — the
+/// right margin is at 539 — so the end of the name and most of the link were
+/// simply off the sheet.
+///
+/// Nothing caught it. Every test here searches the written file for its text, and
+/// `search` reads the content stream rather than the visible area, so text drawn
+/// past the media box is still found. The test that rasterizes the page only
+/// checked where the ink was *vertically*. It took measuring the rightmost dark
+/// column to see it.
+///
+/// `max_lines` bounds the space a value may claim so one long field cannot push
+/// the rest of the page off the bottom. Two lines is about 160 characters at body
+/// size, which covers any real link; a value longer than its allowance is clipped
+/// by the box rather than escaping it, which is the failure mode worth having.
+fn wrapped(
+    shape: &mut Shape,
+    y: f32,
+    body: &str,
+    size: f32,
+    colour: PdfColor,
+    max_lines: u32,
+) -> Result<f32, mupdf::Error> {
+    if body.is_empty() {
+        return Ok(y);
+    }
+
+    let line = size * 1.2;
+    // Half a size of headroom, because a box exactly `max_lines` tall draws
+    // **nothing at all**. `insert_textbox` places a line only if the whole line
+    // box fits, and at the descender it does not quite: a one-line box at the
+    // counter's 19pt silently produced an empty page region, which the search
+    // tests caught only because they were looking for that exact string.
+    let allowance = line * max_lines as f32 + size * 0.5;
+    let unused = shape.insert_textbox(
+        Rect::new(MARGIN, y, PAGE.width - MARGIN, y + allowance),
+        body,
+        &TextboxOptions {
+            fontsize: size,
+            fill: Some(colour),
+            simple: false,
+            ..Default::default()
+        },
+    )?;
+
+    // `insert_textbox` reports the height it did not use, and reports it negative
+    // when the text wanted more room than it was given. Either way what advances
+    // `y` is what was actually consumed — clamped to at least one line, so a value
+    // can never take up nothing and be written over by the next field.
+    let used = (allowance - unused.max(0.0)).clamp(line, allowance);
+    Ok(y + used)
 }
 
 /// A hairline rule, stroked rather than filled.
@@ -333,10 +448,32 @@ pub fn suggested_name(product: &Product, today: Date) -> String {
         .collect();
     let cleaned = cleaned.trim().trim_matches('.').trim();
 
+    let date = data::fmt_date(today);
     if cleaned.is_empty() {
-        format!("Parachron-{}.pdf", data::fmt_date(today))
+        return format!("Parachron-{date}.pdf");
+    }
+
+    // Bounded in **bytes**, not characters, because `NAME_MAX` is 255 bytes on
+    // Linux and Turkish letters are two bytes each — so a name that looks well
+    // inside the limit can be over it. Without this, a pasted marketplace product
+    // title produced a suggestion the dialog could offer and the filesystem would
+    // refuse, and the user got an ENAMETOOLONG they had no way to interpret.
+    let room = NAME_MAX.saturating_sub(b"Parachron--.pdf".len() + date.len());
+    let mut name = cleaned;
+    if name.len() > room {
+        // Never mid-character: truncating a two-byte letter in half would put
+        // invalid UTF-8 into the suggestion.
+        let mut end = room;
+        while end > 0 && !name.is_char_boundary(end) {
+            end -= 1;
+        }
+        name = name[..end].trim_end();
+    }
+
+    if name.is_empty() {
+        format!("Parachron-{date}.pdf")
     } else {
-        format!("Parachron-{cleaned}-{}.pdf", data::fmt_date(today))
+        format!("Parachron-{name}-{date}.pdf")
     }
 }
 
@@ -374,12 +511,19 @@ pub fn pick_destination(
     });
 }
 
-/// Render an [`Outcome`]'s failure through the string table.
-pub fn describe(lang: Lang, error: &DataError) -> String {
+/// Render a [`Failure`] through the string table.
+///
+/// The trailing detail is the OS's or MuPDF's own message and stays as it is, the
+/// same way `vault::describe` and `viewer::describe` treat theirs.
+pub fn describe(lang: Lang, failure: &Failure) -> String {
+    let (key, detail) = match failure {
+        Failure::Write(detail) => (Key::ErrExportWrite, detail),
+        Failure::Assemble(detail) => (Key::ErrExportAssemble, detail),
+    };
     format!(
-        "{}: {}",
+        "{}: {}: {detail}",
         strings::get(lang, Key::ErrExportFailed),
-        crate::vault::describe(lang, error)
+        strings::get(lang, key)
     )
 }
 
@@ -405,19 +549,46 @@ pub struct Exports {
 }
 
 impl Exports {
-    /// Chron6's switch calls this. The status line is cleared rather than
-    /// re-composed: it is a transient sentence about something that has already
-    /// happened, and re-translating "Saved" after the fact would be pretending the
-    /// export happened in the new language.
+    /// Chron6's switch calls this.
+    ///
+    /// A *finished* export's status is cleared rather than re-composed: it is a
+    /// sentence about something that already happened, and re-translating "Saved"
+    /// after the fact would pretend the export happened in the new language.
+    ///
+    /// A *running* one is the opposite case and used to be treated the same, which
+    /// was wrong: switching language mid-export blanked "Exporting…" while the
+    /// thread was still writing, leaving a live EXPORT button that did nothing
+    /// (because `busy` was true) and an app that looked idle while it worked. What
+    /// is happening now gets said again, in the new language.
     pub fn set_lang(&self, app: &AppWindow, lang: Lang) {
-        self.state.borrow_mut().lang = lang;
-        status(app, String::new(), false);
+        let busy = {
+            let mut state = self.state.borrow_mut();
+            state.lang = lang;
+            state.busy
+        };
+        if busy {
+            status(app, strings::get(lang, Key::Exporting).to_string(), false);
+        } else {
+            clear_status(app);
+        }
     }
 }
 
 fn status(app: &AppWindow, text: String, failed: bool) {
     app.set_export_status(text.as_str().into());
     app.set_export_failed(failed);
+}
+
+/// Take the status line down.
+///
+/// Called by `details::show` on every selection change as well as from here, and
+/// that split is deliberate: `export.rs` is the only thing that ever *says*
+/// anything, and a change of product is the only other thing that can *unsay* it.
+/// A status is a claim about one product — `Saved — Not included: gone.pdf` left
+/// over from product A, sitting above product B's details or above a broken
+/// folder's "Details appear here", is a claim about the wrong thing.
+pub fn clear_status(app: &AppWindow) {
+    status(app, String::new(), false);
 }
 
 /// Wire EXPORT into the window.
@@ -872,6 +1043,165 @@ mod tests {
             white * 10 > total * 9,
             "only {}% of the page is paper",
             white * 100 / total
+        );
+    }
+
+    /// Long user data has to stay inside the margins.
+    ///
+    /// `insert_text` neither wraps nor clips, so before every value went through
+    /// `wrapped` an ordinary product name and store URL put ink in column 594 of a
+    /// 595-point page. No search-based test could see it: `search` reads the
+    /// content stream, so text drawn past the media box is still found, and the
+    /// rasterizing test only looked at the vertical extent. This one measures the
+    /// leftmost and rightmost dark columns.
+    #[test]
+    fn long_values_wrap_instead_of_running_off_the_page() {
+        let (dir, folder) = vault(&[("invoice.pdf", "sample.pdf")]);
+        let out = dir.path().join("out.pdf");
+
+        let mut p = product(&["invoice.pdf"]);
+        p.name = "Samsung Odyssey OLED G8 34-inch Ultrawide Curved Gaming Monitor".to_string();
+        p.link = "https://www.example-store.com/products/qd-oled-monitor-27-inch-\
+4k-144hz?variant=884412&ref=email_campaign_2026_summer_sale".to_string();
+        p.serial = "SN-".to_string() + &"0123456789".repeat(12);
+        export(&folder, p, &out, Lang::En);
+
+        let doc = page_one(&out);
+        // One pixel per point, so a column index *is* a page coordinate.
+        let r = render::rasterize(&doc, 0, 595, 842).unwrap();
+        let w = r.width as usize;
+
+        let mut leftmost = w;
+        let mut rightmost = 0usize;
+        for y in 0..r.height as usize {
+            for x in 0..w {
+                if r.rgba[(y * w + x) * 4] < 140 {
+                    leftmost = leftmost.min(x);
+                    rightmost = rightmost.max(x);
+                }
+            }
+        }
+
+        let margin = MARGIN as usize;
+        assert!(leftmost >= margin - 1, "ink at column {leftmost}, left margin is {margin}");
+        assert!(
+            rightmost <= w - margin + 1,
+            "ink at column {rightmost} of {w}: the right margin is at {}, so user data \
+             is running off the paper",
+            w - margin
+        );
+
+        // And wrapping must not have lost anything: the tail of each long value is
+        // still in the file.
+        assert!(finds(&doc, "Gaming Monitor") > 0, "the end of the name was dropped");
+        assert!(
+            finds(&doc, "summer_sale") > 0,
+            "the end of the link was dropped, which is data loss in the artefact"
+        );
+    }
+
+    /// A product whose every document is unreadable must not run its list off the
+    /// bottom of the page. The block used to sit at a fixed fraction of the page
+    /// height and grow downwards without a stop.
+    #[test]
+    fn a_long_skipped_list_stops_at_the_footer() {
+        let (dir, folder) = vault(&[]);
+        let out = dir.path().join("out.pdf");
+
+        // Twenty documents, none of them on disk.
+        let names: Vec<String> = (1..=20).map(|n| format!("scan-{n:02}.pdf")).collect();
+        let mut p = product(&[]);
+        p.pdfs = names;
+        let outcome = export(&folder, p, &out, Lang::En);
+
+        let Outcome::Done { skipped } = &outcome else {
+            panic!("all-unreadable must still export: {outcome:?}");
+        };
+        assert_eq!(skipped.len(), 20, "every one is reported to the caller");
+
+        let doc = page_one(&out);
+        let r = render::rasterize(&doc, 0, 595, 842).unwrap();
+        let w = r.width as usize;
+        let last_ink = (0..r.height as usize)
+            .rev()
+            .find(|y| {
+                let start = y * w * 4;
+                r.rgba[start..start + w * 4].chunks_exact(4).any(|px| px[0] < 140)
+            })
+            .expect("the page is not blank");
+
+        // The footer's own text is the last thing on the page, and it sits at
+        // `height - MARGIN`. Nothing may be drawn below it.
+        assert!(
+            last_ink <= (PAGE.height - MARGIN) as usize + 4,
+            "ink at row {last_ink} of {}: something is drawn below the footer",
+            r.height
+        );
+    }
+
+    /// A failed export must not blame the user's own files.
+    ///
+    /// Every MuPDF error used to be mapped onto `DataError::Malformed`, which the
+    /// string table renders as "product.toml is not valid" — so an export onto a
+    /// full disk told somebody to go and repair a manifest that was fine. The old
+    /// test asserted only that the message was non-empty, so it passed.
+    #[test]
+    fn a_failed_export_names_the_right_thing() {
+        for lang in [Lang::En, Lang::Tr] {
+            let manifest = strings::get(lang, Key::ErrMalformed);
+            let unreadable = strings::get(lang, Key::ErrUnreadable);
+
+            let write = describe(lang, &Failure::Write("No space left on device".into()));
+            assert!(write.contains(strings::get(lang, Key::ErrExportWrite)), "{write}");
+            assert!(write.contains("No space left on device"), "{write}");
+            assert!(!write.contains(manifest), "a write failure blamed the manifest: {write}");
+            assert!(
+                !write.contains(unreadable),
+                "a write failure was reported as a read failure: {write}"
+            );
+
+            let build = describe(lang, &Failure::Assemble("cycle in page tree".into()));
+            assert!(build.contains(strings::get(lang, Key::ErrExportAssemble)), "{build}");
+            assert!(build.contains("cycle in page tree"), "{build}");
+            assert!(!build.contains(manifest), "{build}");
+        }
+    }
+
+    /// `NAME_MAX` is 255 *bytes*, and a Turkish letter is two of them — so a name
+    /// that looks well inside the limit can be over it. Without the bound the
+    /// dialog pre-filled a suggestion the filesystem would refuse.
+    #[test]
+    fn the_suggested_filename_cannot_exceed_what_a_filesystem_accepts() {
+        let today = day(2026, Month::August, 6);
+
+        for name in [
+            "x".repeat(400),
+            // Two bytes per letter, so 200 characters is 400 bytes.
+            "ş".repeat(200),
+            // A boundary case: the truncation point lands mid-character.
+            "a".repeat(200) + &"ğ".repeat(50),
+        ] {
+            let mut p = product(&[]);
+            p.name = name.clone();
+            let suggestion = suggested_name(&p, today);
+
+            assert!(
+                suggestion.len() <= NAME_MAX,
+                "{} bytes for a {}-byte name",
+                suggestion.len(),
+                name.len()
+            );
+            assert!(suggestion.starts_with("Parachron-"));
+            assert!(suggestion.ends_with(".pdf"));
+            // Truncating mid-character would have produced invalid UTF-8, which
+            // `String` cannot even hold — so reaching here at all is the check.
+            assert!(suggestion.chars().count() > 0);
+        }
+
+        // And a name that fits is untouched.
+        assert_eq!(
+            suggested_name(&product(&[]), today),
+            "Parachron-Şarj Cihazı-06-08-2026.pdf"
         );
     }
 
