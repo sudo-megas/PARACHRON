@@ -77,11 +77,14 @@ Window: resizable, minimum **1000×700**. Three fixed columns — **25 / 50 / 25
 │ [icon] Document ▾ | Add Document        PARACHRON          – □ ✕  │
 ├───────────────┬───────────────────────────────┬───────────────────┤
 │ Column 1(25%) │ Column 2 (50%)                │ Column 3 (25%)    │
-│               │  [Invoice] [Garanti] [.pdf]   │  [THEME] [EXPORT] │
-│ Product list  │  ┌─────────────────────────┐  │                   │
-│ (insertion    │  │                         │  │  Link:            │
-│  order,       │  │                         │  │  store.example/p  │
-│  sortable)    │  │   PDF preview (MuPDF)   │  │                   │
+│ [A–Z] [Date]  │  [Invoice] [Garanti] [.pdf]   │  [THEME] [EXPORT] │
+│ ┌───────────┐ │  ┌─────────────────────────┐  │                   │
+│ │ Search… ✕ │ │  │                         │  │  Link:            │
+│ └───────────┘ │  │                         │  │  store.example/p  │
+│ Product list  │  │   PDF preview (MuPDF)   │  │                   │
+│ (insertion    │  │                         │  │                   │
+│  order,       │  │                         │  │                   │
+│  sortable)    │  │                         │  │                   │
 │               │  │   full height,          │  │  Purchase date    │
 │               │  │   portrait-friendly     │  │  14-03-2026       │
 │               │  │                         │  │                   │
@@ -93,7 +96,9 @@ Window: resizable, minimum **1000×700**. Three fixed columns — **25 / 50 / 25
 └───────────────┴───────────────────────────────┴───────────────────┘
 ```
 
-Column 1 — product list. Default order: as added (`added` field). Two sort toggles: alphabetical (by `name`) and purchase date (oldest first, newest at bottom). Bottom strip: a fixed **About** entry (JADEITE-style sidebar footer) that opens the About view.
+Column 1 — product list. Default order: as added (`added` field). Two sort toggles: alphabetical (by `name`) and purchase date (oldest first, newest at bottom). Under the toggles and directly above the entries, a **search bar**: full column width, fixed height, matching product **name and serial number** as you type and narrowing the list to what matches. Bottom strip: a fixed **About** entry (JADEITE-style sidebar footer) that opens the About view.
+
+The search bar was added to this layout in Chron8; the original wireframe had column 1 as a list and nothing else, and the sort toggles were never drawn into it either. Both are in the sketch above now. Three rules it follows, so that later work does not have to rediscover them. Matching is **folded** — accent- and case-insensitive in both directions, so `sarj` finds `Şarj Cihazı` and Turkish's dotless `ı` cannot make a product unfindable by its own name. A broken folder is matched on its **folder name**, because that is the only text it has and hiding the entry somebody is looking for is the one thing the list has never done (§3: never crash, never hide). And the query is **session state, not settings** — it is never written to `config.toml`, because a sort order that survives a restart reorders and a filter that survives one *hides*, and an app that opens showing three of your eleven products has lost them as far as you can tell.
 
 Column 2 — document viewer. Workspace-style tabs switch between the selected product's PDFs (`pdfs` order); each tab is labelled with the file-name stem, so `invoice.pdf` reads `Invoice`. The preview takes the full remaining height and shows **one page at a time, fitted whole** inside the pane. Under it a control row carries `‹` / `›`, a `2 / 12` page counter, and a **zoom slider** — zoom is a multiplier of the fit scale (`1×`–`4×`), so `1×` always means the whole page is visible whatever the window size; above `1×` the page pans. Page and zoom reset whenever the tab or product changes. Below that, a fixed **44px** serial-number strip: click it to copy the serial to the clipboard with a brief "copied" confirmation, the same gesture the purchase link uses in column 3.
 
@@ -213,7 +218,7 @@ One line of planned scope per milestone. Each Chron file is written in detail on
 | Chron5 | Theming: all 11 palettes, THEME picker |
 | Chron6 | Localization: full EN/TR string tables, language switch |
 | Chron7 | Export: summary page generation + PDF merge |
-| Chron8 | About view + polish: error states, min-size behavior, edge cases |
+| Chron8 | About view + column-1 search bar + polish: error states, min-size behavior, edge cases. The search bar was asked for after Chron7 closed and folded in here rather than becoming a milestone of its own — it lands in column 1, which is where this milestone's other layout work already is. It does mean Chron7's line about being the last milestone to add a feature stopped being true one milestone later; §9 is the map, and the map changed |
 | Chron9 | Packaging & CI: PKGBUILD, .deb, Windows .exe, GitHub Actions, AUR; `README.md` written per `usereadme.md` (§8 rule 3) once release assets exist |
 
 ## 10. Open items

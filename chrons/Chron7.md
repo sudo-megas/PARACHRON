@@ -10,6 +10,8 @@ EXPORT stops being a disabled stub. Selecting a product and pressing it produces
 
 This is the last milestone that adds a feature; Chron8 is polish and Chron9 is packaging. It is also the only one that makes Parachron *write* a PDF rather than read one.
 
+**Overtaken during Chron8:** the first of those sentences stopped being true. A column-1 search bar was asked for after this milestone closed and was folded into Chron8 rather than given a milestone of its own, so Chron8 adds a feature as well as polishing. Nothing here changes — the export is still the last thing Chron7 built, and the roadmap in CORE §9 records the reordering. Noted so that a later reader does not take this line as evidence that the search bar was scope creep nobody wrote down.
+
 ## Scope
 
 **In:** the summary page, generated from the product's data · appending the product's PDFs in tab order · one output file, at a path the user picks · export off the UI thread · documents that cannot be included, skipped and named on the summary page itself · EXPORT gated on a selection that can actually be exported · new string keys.
