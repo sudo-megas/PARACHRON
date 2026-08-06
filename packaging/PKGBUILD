@@ -88,6 +88,26 @@ depends=(
   # nothing at all when `Add Document` or `EXPORT` is chosen. An app that cannot
   # add a document is not a working app.
   'dbus'             # libdbus-1.so.3
+
+  # The fourteenth, and it is not a library at all.
+  #
+  # `fontconfig` above is the library that *finds* fonts. It is not a font. On a
+  # system that has fontconfig and no font files, the lookup returns no match
+  # and `fontique` unwraps it:
+  #
+  #   fontique/src/backend/fontconfig.rs:685
+  #   called `Result::unwrap()` on an `Err` value: NoMatch
+  #
+  # which is a panic rather than a blank window. Found the only way it could be
+  # found — by building this package in a bare `archlinux:base-devel` container,
+  # where `check()` ran 187 tests and the one that instantiates a real window
+  # was the single failure.
+  #
+  # `ttf-font` is the virtual package every font on Arch provides, so this asks
+  # for "a font" rather than picking one on the user's behalf. Any desktop
+  # already satisfies it; a minimal install or a container does not, and that is
+  # exactly the machine this would otherwise panic on.
+  'ttf-font'
 )
 
 makedepends=('cargo' 'clang')

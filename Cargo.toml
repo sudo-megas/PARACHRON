@@ -142,7 +142,14 @@ priority = "optional"
 # complaint and produces an app that either shows no window or adds no document.
 #
 # This list and the PKGBUILD's are the same list and move together.
-depends = "libfontconfig1, libfreetype6, libpng16-16, libexpat1, libbz2-1.0, libbrotli1, zlib1g, libc6, libgcc-s1, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxrender1, libxi6, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-egl1, libegl1, libgl1, libdbus-1-3"
+# `fonts-dejavu-core` is the odd one out and is not a library. `libfontconfig1`
+# finds fonts; it is not a font. With fontconfig present and no font files
+# installed, the lookup returns no match and `fontique` unwraps it into a panic
+# rather than degrading — found by building the Arch package in a bare
+# container, where the one test that instantiates a real window was the single
+# failure out of 187. Debian has no `ttf-font`-style virtual to depend on, so a
+# small concrete font is named instead.
+depends = "libfontconfig1, libfreetype6, libpng16-16, libexpat1, libbz2-1.0, libbrotli1, zlib1g, libc6, libgcc-s1, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxrender1, libxi6, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-egl1, libegl1, libgl1, libdbus-1-3, fonts-dejavu-core"
 
 # CORE §7's layout. 1024 is deliberately absent: 1.6MB on its own, larger than
 # any icon theme will ever ask for, and kept in the repository as artwork for a
