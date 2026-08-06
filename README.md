@@ -49,7 +49,7 @@ is self-contained.
 sudo pacman -S --needed rust clang gcc make python fontconfig
 
 # Debian / Ubuntu
-sudo apt install build-essential clang python3 libfontconfig-1-dev
+sudo apt install build-essential clang python3 libfontconfig1-dev
 # plus rustup, from https://rustup.rs
 ```
 
