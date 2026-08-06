@@ -59,6 +59,34 @@ So the split is **hygiene, not a fix**. It is still worth doing — a `[target.'
 
 The spike's output is four yes-or-no answers and a `Cargo.toml`. It runs in CI, on a branch, before the release workflow is written — because a release workflow built on the assumption that all three targets compile is a workflow whose first real run is its first test.
 
+## What the spike returned
+
+It ran on `windows-latest` (Windows Server 2025, MSVC 14.51) from branch `worktree-chron11-packaging`. The headline is that **the question this section was built around was not the one that mattered**, which is the best argument for spiking that this milestone could have produced.
+
+**Q3 — does `mupdf-sys` build on `windows-latest` at all? Yes.** It vendored MuPDF, ran `bindgen` under MSVC, and produced `…\out\build\platform\win32\x64\Release` in **484 seconds**. Chron2 measured the same vendored compile at about 1m40s on Linux, so Windows costs roughly five times as much wall clock and no correctness. `LIBCLANG_PATH` had to be set explicitly; LLVM is present on the image but `bindgen` does not find it unaided. This was named as the milestone's honest risk and it is simply not one.
+
+**The icon and the manifest work.** Not a question this section asked, and worth recording because it is the only evidence criterion 5 can have before somebody runs the `.exe`. `winresource` compiled `parachron.ico` and `build/parachron.manifest` into `resource.res`, and the link line carries `-C link-arg=…\out\resource.res`. The resource reached the linker; whether Explorer draws it is still a person's observation.
+
+**And then the build failed, on Parachron's own code.** Two errors, both in `src/render.rs`, and neither has anything to do with packaging:
+
+```
+error[E0277]: the trait bound `Path: AsRef<FilePath>` is not satisfied
+note: required by a bound in `PdfDocument::open`
+  --> mupdf-0.8.0/src/pdf/document.rs:580
+```
+
+`mupdf`'s `FilePath` is `[u8]` on Unix and `str` on Windows, and its `impl AsRef<FilePath> for Path` carries `#[cfg(any(unix, target_os = "wasi"))]`. So `Document::open(path)` and `PdfDocument::open(path)`, both taking a `&Path`, resolve on Linux and have **no applicable impl on Windows**.
+
+**This crate had never compiled for Windows, and nothing in eleven milestones could have said so.** Every `cargo build`, every `cargo clippy --all-targets -- -D warnings`, every one of the 187 tests was green on the day this was found, and all of them were green about Linux. CORE §7 has said since it was written that there is no local Windows machine and that CI owns the target; what it did not say, because nobody had run it, is that "CI owns this target" had so far meant *nobody* owned it.
+
+The repair is in `render.rs` rather than in any file this milestone planned to touch, and it is a deliberate `#[cfg]` split rather than a `to_str()` at both call sites: on Unix a path is bytes and need not be UTF-8, CORE §3 refuses a non-UTF-8 vault path when it is *chosen* rather than converting it lossily, and routing Linux through `to_str()` would make a document with an undecodable name unopenable when it opens today. On Windows MuPDF requires UTF-8 and an unconvertible path is reported as unreadable, which is what it is.
+
+**Q1 — do `rfd` and `arboard` reach their Win32 backends? Resolution: confirmed on the runner.** `cargo tree` on `windows-latest` reports the same thing the maintainer's laptop reports — `rfd` with `windows-sys` and `Win32_UI_Shell`, `arboard` with `clipboard-win`. The compiled half of that question (`dumpbin /dependents` on the built `.exe`) sits behind the build and has not run yet.
+
+**Q2 and Q4 have not been answered.** Both steps run after the build, and the build did not finish. They are re-running on the fix. Q2's dialog half is not CI's to answer at all — see the note in `spike.yml` and criterion 6.
+
+**A false start worth one line.** The spike's first run failed before `checkout` with `Failed to resolve action download info: Service Unavailable`, and the CI run beside it lost its Linux job to `The job was not acquired by Runner of type hosted`. Both are GitHub availability rather than anything in this repository, and both are the reason "CI is green" and "the code is right" are separate claims.
+
 ## Files to add and change
 
 ```
@@ -206,9 +234,44 @@ The repair is one line in `main.rs`, between `local_offset()` and `AppWindow::ne
 
 ## How the criteria were verified
 
-Written when the milestone is done. Chron8 is the model rather than Chron1–7, which this line originally named: its **Not verified.** list — a bolded noun phrase, what was done instead, the argument standing in for the observation, then a flat sentence conceding the argument is not the observation — is the exact form this milestone needs.
+This milestone predicted it would need a section this project had not needed before — *what was verified only by CI, and what was verified only by one person on one machine* — and it does. It also needs a third heading the prediction did not anticipate: **what could not be verified by anybody yet, because it needs a tag that only a person can push.**
 
-It will have a section this project has not needed before: **what was verified only by CI, and what was verified only by one person on one machine.** Criteria 4, 5 and 6 cannot be checked on this laptop, and criteria 2 and 3 are the only two that can be checked locally end to end. Criterion 10 used to be in that first list and is now struck, which does not improve the ratio — it removes a row rather than answering it.
+The genre is Chron8's, as this file already specified: a bolded noun phrase, what was done instead, the argument standing in for the observation, then a flat sentence conceding the argument is not the observation.
+
+### Verified on this laptop
+
+- **`cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`** — clean, clean, and **187 passed / 0 failed** in the dev profile. This covers criterion 8's *content* on one target and none of its "in CI on every target" clause.
+- **`desktop-file-validate`** passes the entry. One hint is left unactioned on purpose (see Technical notes).
+- **The `.deb`, built with `cargo deb` and read back with `bsdtar` and `dpkg-deb`.** `/usr/bin/parachron`; `/usr/share/applications/org.parachron.Parachron.desktop`; `/usr/share/doc/parachron/copyright`; the nine hicolor sizes plus 512, and **no 1024**. `Maintainer:` carries an address. `Depends:` lists all twenty-two packages including `libdbus-1-3`. That is criterion 4's *layout* in full.
+- **MuPDF is statically linked.** `ldd target/release/parachron` names twelve libraries and none of them is MuPDF, which is what CORE §7 requires and what `release.yml` re-asserts per artefact.
+- **The dependency lists were measured, not recalled** — `ldd` for the linked twelve, soname literals in the binary for the `dlopen`ed thirteen. The thirteenth is the correction in Technical notes.
+- **`WM_CLASS` under `Xvfb :98`** — `"", "org.parachron.Parachron"`, which is what `StartupWMClass` was then set from.
+- **Screenshots of the real app**, on the same isolated display, against a scratch vault of five products under a throwaway `XDG_DATA_HOME`.
+- **Criteria 12 and 13.** No AI attribution anywhere in the repository, the workflows or the commit messages; `git log` shows only `sudo-megas`. These are the two criteria that were always checkable here and they are checked.
+- **Half of criterion 7.** The `.deb` carries the full AGPL text at Debian's policy path, and the About pane shows `AGPL-3.0-only` with its **Read the full license** entry — that much is in a screenshot.
+
+### Verified only by CI
+
+- **`mupdf-sys` builds under MSVC**, in 484 seconds, and the icon and manifest reach the linker as `resource.res`. See **What the spike returned**.
+- **`rfd` and `arboard` resolve their Win32 backends on the runner itself**, not only in the maintainer's dependency graph.
+- **That this crate did not compile for Windows at all.** No local instrument could have produced that, and eleven milestones of green Linux builds are the proof: the defect was found the first time a compiler was pointed at the target.
+
+### Not verified. And these are the honest ones.
+
+- **Criterion 1 — a pushed `v*` tag producing a release with three assets.** No tag has been pushed, deliberately: this file lists "a tag has to be pushed by a person" as a human prerequisite and `release.yml` triggers on nothing else. What exists instead is a workflow that has never run, read carefully and guarded against the two ways it could produce silent nonsense — a tag disagreeing with `Cargo.toml`, and an asset count other than three. A guard that has never fired is not a guard that works.
+- **Criteria 2 and 4's install halves.** `pacman -U` and `apt install` both need root, and the second needs a Debian machine this project does not have. The *layouts* are read out of both archives, which is the argument standing in for the observation. It is not the observation: "installs to `/usr/bin/parachron`" and "an archive containing `usr/bin/parachron`" are different sentences, and only the first one covers a `postinst` that fails or a file conflict with another package.
+- **Criterion 2 and 4's "launches from the menu" halves.** Nothing here has launched Parachron from a desktop menu out of an installed package. The dependency lists are now measured rather than assumed, which is the specific failure that would have caused this, and the app-id chain is checked in three places by CI. Still an argument.
+- **Criterion 5, entirely.** No Windows machine. The `.exe` has never been run, so "runs on a clean Windows machine", "opens no console window" and "shows its own icon in Explorer and the taskbar" are all unobserved. `windows_subsystem = "windows"` covers the console clause on paper and `main.rs:7` has carried it since before this milestone; the icon is in the binary as a linked resource. Neither statement is a screenshot.
+- **Criterion 6's dialog half.** `AsyncFileDialog::pick_file` shows a modal window and waits for a person, and no workflow can answer it without making the test meaningless. This is the same boundary Chron3 documented for the picker, Chron7 for the save dialog and Chron9 for the vault move — the fourth milestone to write this paragraph. What is new is that the spike now uploads the built `.exe` as an artefact, so the person who answers it does not have to build anything first.
+- **Criterion 9 — a second CI run hitting the MuPDF cache.** The workflow prints `HIT`/`MISS` and the matched key, so the evidence will exist. It has not been read yet, because GitHub's runner availability failed two of the first three runs outright.
+- **Criterion 11's link and badge clauses.** Every download link points at a Releases page that is empty until the first tag, and the version and release-date badges read a release that does not exist. The README says so on its own face rather than pretending otherwise. This cannot be closed before criterion 1 is.
+- **The `time` `local-offset` ordering on Windows.** `main` still reads the offset as its first statement and nothing in this milestone reordered it, but Chron4's requirement is a soundness property and "the diff did not touch it" is a fact about the diff.
+
+### The ratio, stated plainly
+
+Of thirteen criteria, two are fully verified here (12 and 13), one is verified locally in the only way it can be until a release exists (8's content), three are verified in their layout or resolution half and not their install or functioning half (2, 3, 4), one is half verified (7), and five are not verified at all (1, 5, 6, 9, 11). Criterion 10 is struck with the AUR, which removes a row rather than answering one.
+
+That is not a milestone that passed. It is a milestone whose every writable part is written and whose every locally-checkable part is checked, waiting on two things no amount of further work here can supply: a Windows machine, and a person deciding to cut a release.
 
 ## Done when
 
