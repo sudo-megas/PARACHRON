@@ -79,6 +79,25 @@ jobs:
           $elapsed = (Get-Date) - $start
           echo "SPIKE ANSWER Q3: mupdf-sys built under MSVC in $($elapsed.TotalSeconds) seconds."
 
+      # ── Question 3b, which the first draft of this spike did not ask ──────
+      # "The binary compiles" and "the test suite compiles" are different
+      # statements about a Windows target, and criterion 8 wants the second.
+      # The test tree has a different cfg surface: `relocate.rs` and `export.rs`
+      # both reach for `std::os::unix::ffi::OsStringExt` and
+      # `std::os::unix::fs::PermissionsExt` to build the non-UTF-8 and
+      # unwritable-destination cases CORE §3 cares about, and a `#[cfg(unix)]`
+      # missing from any one of them is a Windows compile error that no Linux
+      # run can see.
+      #
+      # `--no-run` rather than a full `cargo test`: it compiles and links every
+      # test binary for the target, which is the whole of the question, without
+      # spending runner minutes executing a suite `ci.yml` already runs.
+      - name: Q3b — does the *test tree* compile for Windows
+        shell: pwsh
+        run: |
+          cargo test --no-run
+          echo "SPIKE ANSWER Q3b: the test tree compiles and links for x86_64-pc-windows-msvc."
+
       # ── Question 1, second half ───────────────────────────────────────────
       # A binary that links the Win32 shell and the Win32 clipboard imports
       # their DLLs by name. `dumpbin /dependents` reads the import table, which

@@ -42,7 +42,12 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       date: ${{ steps.check.outputs.date }}
     steps:
+      # `fetch-depth: 0` so the tag *object* is present, not just the commit it
+      # resolves to. `for-each-ref` below reads the annotation, and a shallow
+      # checkout can leave it unfetched.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - id: check
         shell: bash
@@ -65,7 +70,25 @@ jobs:
           # PARACHRON_BUILD_DATE in the environment wins over the runner's
           # clock. This is that seam: a source build honestly reports the day it
           # was compiled, and a released asset carries the day it was tagged.
-          date="$(git log -1 --format=%cs "$GITHUB_REF_NAME")"
+          #
+          # `for-each-ref … %(creatordate:short)` rather than
+          # `git log -1 --format=%cs "$tag"`, and the difference is not
+          # academic. `git log` on a tag resolves to the **commit** the tag
+          # points at and reports *its* date. Tagging a three-week-old commit
+          # would then stamp the release with a date three weeks before the
+          # release, and the About pane would report it forever. Measured on a
+          # real annotated tag: `%cs` gave the commit's day, `creatordate` gave
+          # the day the tag was made, and they differed.
+          #
+          # `creatordate` is the tagger's date for an annotated tag and falls
+          # back to the commit's date for a lightweight one — which is the right
+          # answer in both cases, because a lightweight tag has no date of its
+          # own to prefer.
+          date="$(git for-each-ref --format='%(creatordate:short)' "refs/tags/$GITHUB_REF_NAME")"
+          if [ -z "$date" ]; then
+            echo "::error::Could not read a date for tag $GITHUB_REF_NAME."
+            exit 1
+          fi
           echo "release date (from the tag): $date"
 
           echo "version=$tag_version" >> "$GITHUB_OUTPUT"
@@ -106,7 +129,18 @@ jobs:
       - name: Assert MuPDF is not a runtime dependency
         run: |
           set -euo pipefail
-          binary="$(find "$GITHUB_WORKSPACE" -name parachron -type f -perm -u+x | head -1)"
+          # The *packaged* binary, named explicitly. After `makepkg` two files
+          # match a bare `-name parachron` search — the one under
+          # `packaging/src/…/target/release/` and the one staged under
+          # `packaging/pkg/…/usr/bin/` — and `find`'s order is not guaranteed.
+          # Both would satisfy this check today, which is exactly why the gate
+          # has to name the one it means: a check that passes for the wrong
+          # reason stops being a check the moment either path changes.
+          binary="$(find "$GITHUB_WORKSPACE/packaging/pkg" -path '*/usr/bin/parachron' -type f | head -1)"
+          if [ -z "$binary" ]; then
+            echo "::error::No packaged binary found under packaging/pkg/*/usr/bin/parachron."
+            exit 1
+          fi
           echo "checking: $binary"
           ldd "$binary"
           if ldd "$binary" | grep -qi mupdf; then

@@ -125,6 +125,8 @@ packaging/
 
 `packaging/` rather than `build/`, which already exists. The distinction is who reads them: `build/icons/` holds assets the *app* reads — `app.slint` references `../build/icons/parachron-256.png` at compile time — while `packaging/` holds files only a packager ever opens. Keeping them apart means a person looking for what ships is not reading past what the binary embeds.
 
+**A third directory arrived with the screenshots, and the rule above has to stretch to cover it.** `docs/screenshots/` holds what a *GitHub visitor* reads: images the README embeds, which the binary never opens and no packager ever installs. Three readers, three directories — the app, the packager, the visitor — which is the same distinction this paragraph already draws rather than a new one. Naming it here keeps the reasoning complete instead of silently outgrown, and it is why the screenshots did not go in `build/` beside the icons they superficially resemble.
+
 ~~`README.md` is listed as new and is genuinely absent, which is worth one more sentence: `Cargo.toml` already says `readme = "README.md"`, so the manifest currently points at a file that is not there. Nothing has noticed because nothing has run `cargo package`.~~
 
 **Overtaken by `9768a07`:** the README exists, and `readme = "README.md"` now points at something. What this milestone owes the page is listed under **The README** in the tasks below, and it is smaller than writing one: screenshots, a Windows line for the data-directory section, the AUR route coming out, and a dependency sentence that currently claims more than it means.
@@ -221,6 +223,21 @@ rfd-0.17.2/src/backend/xdg_desktop_portal/portal/ffi.rs:199
 That is the file dialog. What makes it worth its own correction rather than a thirteenth row is how it fails. Every other library in the list is needed to put a window on screen, so omitting one produces an app that does not start — loud, and found by the first person who clicks the launcher. libdbus is needed to open a *dialog*, and `rfd` degrades rather than panics; `portal/libdbus.rs:77` logs `Can't connect to a portal: libdbus-1.so not found` and carries on. A package missing it installs cleanly, appears in the menu, opens its window, draws all three columns, and then does nothing whatsoever when `Add Document` or `EXPORT` is clicked, with the only trace in a log nobody is reading.
 
 So the paragraph above was right about the *shape* of the bug — "installs cleanly and then fails to open a window" — and its own list would have shipped a worse version of it: installs cleanly, opens a window, and cannot add a document. An app that cannot add a document is not an app. This was found by doing the thing that paragraph ends by recommending, one level further down: not reading what the toolkit opens, but reading what *everything* the binary links opens, and then reading the line.
+
+**Corrected before it ever ran: the release workflow stamped the wrong date, and CORE said so before the code did.** The first draft of `release.yml` took the release date with `git log -1 --format=%cs "$GITHUB_REF_NAME"`, and both this file and CORE §4 described the result as "the tag's own date". `git log` on a tag resolves to the **commit** the tag points at and reports *its* date. Tag a three-week-old commit and every downloaded asset's About pane reports a release date three weeks before the release, permanently, with nothing on screen to suggest it is wrong.
+
+Measured rather than reasoned about, on a real annotated tag made today against a commit from the day before:
+
+```
+git log -1 --format=%cs <tag>                        → 2026-08-05   (the commit)
+git for-each-ref --format='%(creatordate:short)' …   → 2026-08-06   (the tag)
+```
+
+`creatordate` is the tagger's date for an annotated tag and falls back to the commit's date for a lightweight one, which is right in both cases — a lightweight tag has no date of its own to prefer. The workflow now uses it, and checks out with `fetch-depth: 0` so the tag *object* is present to be read rather than only the commit it resolves to.
+
+Worth recording as its own correction because of where it sat: in a workflow that has never run, describing a value nobody can see until a release exists, backed by a sentence in CORE that had already been written to match the wrong command. Nothing except reading the command against its own claim would have caught it.
+
+**Checked rather than assumed: the test tree does compile for Windows.** Criterion 8 wants `cargo test` green on every target, and "the binary compiles" is a different statement — the test tree reaches for `std::os::unix::ffi::OsStringExt` and `std::os::unix::fs::PermissionsExt` in `relocate.rs` and `export.rs`, to build the non-UTF-8 destination and unwritable-destination cases CORE §3 cares about. All four uses already carry `#[cfg(unix)]`, put there by the milestones that wrote them. That is a reading rather than a compile, so `spike.yml` gained a `cargo test --no-run` step to make it an observation on the target itself.
 
 **Found by running it: the Arch package does not link unless the `PKGBUILD` says `options=(!lto)`.** Arch's stock `/etc/makepkg.conf` ships `OPTIONS=(… lto)` with `LTOFLAGS="-flto=auto"`, so makepkg appends GCC's link-time-optimisation flag to `CFLAGS`, `CXXFLAGS` and `LDFLAGS` for every package built on the machine. `mupdf-sys` compiles MuPDF's C source through `cc`, which picks those flags up, and the archive it produces then holds GCC LTO bytecode rather than native objects. `rust-lld` cannot read that format and does not say so — it reports every MuPDF symbol as undefined, which reads exactly like a missing library:
 
