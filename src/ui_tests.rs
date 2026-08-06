@@ -5,11 +5,18 @@
 //! test keeps every window on one thread. Later milestones add sections to it
 //! rather than test functions beside it.
 
+use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
+use std::rc::Rc;
+
 use i_slint_backend_testing as testing;
 use slint::{ComponentHandle, LogicalSize, Model, ModelRc, VecModel};
+use time::{Date, Month};
 
+use crate::data::{DataError, Entry, Product};
 use crate::strings::{Key, Lang};
-use crate::theme::Theme;
+use crate::theme::{Theme, Themes};
+use crate::vault::{SortMode, Vault};
 use crate::{AppWindow, Palette, ProductItem};
 
 /// Widths must land exactly on 25 / 50 / 25 (CORE §4), so no tolerance here
@@ -70,6 +77,109 @@ fn click(element: &testing::ElementHandle) {
     element.mock_single_click(slint::platform::PointerEventButton::Left);
 }
 
+fn day(year: i32, month: Month, day: u8) -> Date {
+    Date::from_calendar_date(year, month, day).expect("a real calendar date")
+}
+
+/// A vault holding one of each state column 1 and column 3 can be in.
+///
+/// Every string Chron6 has to re-translate comes from one of these: the warning
+/// prefix and `Missing files:` from the incomplete one, `Broken entry` and a
+/// `DataError` from the broken one, and the countdown from both healthy ones —
+/// one expired, one not.
+fn seeded_entries() -> Vec<Entry> {
+    let product = |folder: &str, name: &str, added: u8, end: Date, missing: Vec<String>| {
+        Entry::Ok(Product {
+            folder: folder.to_string(),
+            name: name.to_string(),
+            serial: "ABC123XYZ".to_string(),
+            link: "https://store.example/p".to_string(),
+            purchase_date: day(2026, Month::March, 14),
+            warranty_start: day(2026, Month::March, 14),
+            warranty_end: end,
+            pdfs: if missing.is_empty() {
+                Vec::new()
+            } else {
+                missing.clone()
+            },
+            added: day(2026, Month::August, added),
+            missing_pdfs: missing,
+            extra: Default::default(),
+        })
+    };
+
+    vec![
+        // Warranty ending well past any date this test could run on.
+        product("monitor", "QD-OLED Monitor", 1, day(2099, Month::March, 14), Vec::new()),
+        product("drive", "IronWolf Pro", 2, day(2025, Month::January, 1), Vec::new()),
+        product(
+            "charger",
+            "Şarj Cihazı",
+            3,
+            day(2099, Month::March, 14),
+            vec!["gone.pdf".to_string()],
+        ),
+        Entry::Broken {
+            folder: "test-broken".to_string(),
+            reason: DataError::MissingToml,
+        },
+    ]
+}
+
+/// The owners `main` installs, kept alive for the rest of the test.
+struct Stack {
+    vault: Rc<RefCell<Vault>>,
+    themes: Rc<RefCell<Themes>>,
+    language: Rc<Cell<Lang>>,
+    _details: crate::details::Details,
+    _viewer: Rc<crate::viewer::Viewer>,
+}
+
+/// Wire up the real owners, in `main`'s order.
+fn install_stack(app: &AppWindow) -> Stack {
+    // Nothing here opens a file, so the root only has to be a path.
+    let root = PathBuf::from("/nonexistent/parachron/products");
+    // Falls back to UTC in a process that already has threads, which a test
+    // harness does. The countdown assertions below are built not to care.
+    let offset = crate::data::local_offset();
+
+    let viewer = Rc::new(crate::viewer::install(app, root.clone(), Lang::En));
+    let vault = crate::vault::install(
+        app,
+        root.clone(),
+        seeded_entries(),
+        SortMode::Added,
+        Lang::En,
+        offset,
+        Rc::clone(&viewer),
+    );
+    let details = crate::details::install(app, Rc::clone(&vault));
+    let editors = crate::editor::install(
+        app,
+        root,
+        Lang::En,
+        Rc::clone(&vault),
+        Rc::clone(&viewer),
+    );
+    let themes = crate::theme::install(app, Theme::Dark, Lang::En);
+    let language = crate::lang::install(
+        app,
+        Lang::En,
+        Rc::clone(&vault),
+        Rc::clone(&viewer),
+        editors,
+        Rc::clone(&themes),
+    );
+
+    Stack {
+        vault,
+        themes,
+        language,
+        _details: details,
+        _viewer: viewer,
+    }
+}
+
 #[test]
 fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     testing::init_no_event_loop();
@@ -124,8 +234,20 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     );
     crate::apply_strings(&app, Lang::En);
 
+    // ── Install the real owners ───────────────────────────────────────────
+    //
+    // Everything above drove the `.slint` side with a hand-built model, which is
+    // what Chron1's criteria are about. From here the Rust owners are wired up as
+    // `main` wires them, because Chron5's and Chron6's criteria are about what
+    // those owners push. The vault takes over the product list at this point and
+    // replaces the three rows above with its own.
+    //
+    // Installed once, in `main`'s order. A second `install` on the same window
+    // would silently replace a callback's only handler.
+    let stack = install_stack(&app);
+    let themes = Rc::clone(&stack.themes);
+
     // ── Chron5: the theme picker, criteria 1, 2 and 8 ─────────────────────
-    let themes = crate::theme::install(&app, Theme::Dark, Lang::En);
     let palette = app.global::<Palette>();
 
     // Installing paints the window, and the initializers in `palette.slint` are
@@ -168,17 +290,13 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     click(&rows[latte]);
 
     assert_eq!(themes.borrow().current(), Theme::Latte);
-    assert_eq!(
-        palette.get_bg(),
-        colour(Theme::Latte.palette().bg),
-        "the palette was pushed, not merely recorded"
-    );
-    assert_eq!(palette.get_text(), colour(Theme::Latte.palette().text));
-    assert_eq!(
-        palette.get_backdrop().alpha(),
-        (Theme::Latte.palette().backdrop >> 24) as u8,
-        "a light theme gets a light theme's scrim"
-    );
+
+    // Every one of the twelve roles, not a sample of them. `theme::apply` maps
+    // twelve struct fields onto twelve setters by hand, and a dropped or crossed
+    // pair — `set_selection` omitted, leaving Default Dark's selection on all
+    // eleven themes — would pass a spot check on `bg` and `text`, pass every
+    // contrast test (which reads the table, not the window) and pass every grep.
+    assert_palette_pushed(&app, Theme::Latte);
     let marked: Vec<usize> = app
         .get_theme_rows()
         .iter()
@@ -239,6 +357,130 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     // And Close dismisses it.
     click(&elements(&app, "ThemeSheet::close")[0]);
     assert!(elements(&app, "ThemeRow::touch").is_empty(), "Close closes the picker");
+
+    // ── Chron6: the language switch, criteria 1–5 ─────────────────────────
+    app.window().set_size(LogicalSize::new(1400.0, 900.0));
+    let strings = app.global::<crate::Strings>();
+
+    // Select a product first, so column 3 and the viewer have something to say.
+    // It has to happen with the menu closed: an open menu lays a full-window
+    // TouchArea over everything to catch the dismissing click, so a row click
+    // while it is up dismisses the menu instead of selecting anything.
+    let rows = elements(&app, "AppWindow::row-touch");
+    assert_eq!(rows.len(), 4, "the vault's own rows, not the hand-built ones");
+    // Insertion order, so: monitor, drive, charger, then the broken folder.
+    click(&rows[2]);
+    assert_eq!(app.get_selected_name(), "Şarj Cihazı", "Turkish name intact");
+
+    // Criterion 1: `Document ▾` lists both languages, the one in effect marked.
+    assert!(elements(&app, "AppWindow::menu-lang-en").is_empty(), "the menu starts closed");
+    click(&elements(&app, "AppWindow::menu-button")[0]);
+
+    assert_eq!(elements(&app, "AppWindow::menu-lang-en").len(), 1);
+    assert_eq!(elements(&app, "AppWindow::menu-lang-tr").len(), 1);
+    assert_eq!(app.get_lang_mode(), 0, "English is in effect and marked");
+
+    // What every composed string reads before the switch.
+    let before_detail = app.get_selected_detail().to_string();
+    let before_days = app.get_details_days_left().to_string();
+    assert!(
+        before_detail.contains(strings_get(Lang::En, Key::MissingFiles)),
+        "the incomplete product explains itself in English: {before_detail:?}"
+    );
+    assert!(
+        before_days.ends_with(strings_get(Lang::En, Key::DaysUnit)),
+        "the countdown is in English: {before_days:?}"
+    );
+
+    // Criterion 2 and 3: choosing Türkçe relabels the bound strings *and*
+    // everything Rust composed — without the product being reselected.
+    click(&elements(&app, "AppWindow::menu-lang-tr")[0]);
+
+    assert_eq!(stack.language.get(), Lang::Tr, "the session's language changed");
+    assert_eq!(app.get_lang_mode(), 1, "the tick moved to Türkçe");
+    assert_eq!(strings.get_nav_about(), strings_get(Lang::Tr, Key::NavAbout));
+    assert_eq!(strings.get_action_export(), strings_get(Lang::Tr, Key::ActionExport));
+
+    let after_detail = app.get_selected_detail().to_string();
+    let after_days = app.get_details_days_left().to_string();
+    assert!(
+        after_detail.contains(strings_get(Lang::Tr, Key::MissingFiles)),
+        "`Missing files` follows the switch: {after_detail:?}"
+    );
+    assert_ne!(before_detail, after_detail, "a composed row must not go stale");
+    assert!(
+        after_days.ends_with(strings_get(Lang::Tr, Key::DaysUnit)),
+        "the countdown follows the switch: {after_days:?}"
+    );
+    // Turkish takes no plural after a numeral, so only the unit word changes —
+    // the number in front of it must not.
+    assert_eq!(
+        before_days.trim_end_matches(strings_get(Lang::En, Key::DaysUnit)).trim(),
+        after_days.trim_end_matches(strings_get(Lang::Tr, Key::DaysUnit)).trim(),
+        "the switch changed the number of days, not just its unit"
+    );
+
+    // Criterion 4: the selection, the row and the open page are untouched.
+    assert_eq!(app.get_selected_index(), 2, "still the same row");
+    assert_eq!(app.get_selected_name(), "Şarj Cihazı");
+    assert_eq!(app.get_page_index(), 0);
+
+    // A broken folder's reason and an expired warranty both follow too.
+    click(&elements(&app, "AppWindow::row-touch")[3]);
+    assert!(app.get_selected_broken());
+    assert_eq!(
+        app.get_selected_detail(),
+        strings_get(Lang::Tr, Key::ErrMissingToml),
+        "a DataError is rendered through the table, not cached in English"
+    );
+    click(&elements(&app, "AppWindow::row-touch")[1]);
+    assert_eq!(
+        app.get_details_days_left(),
+        strings_get(Lang::Tr, Key::WarrantyExpired),
+        "an expired warranty reads as expired in Turkish"
+    );
+
+    // Chron5's picker rows are looked up in Rust, so they need re-pushing too —
+    // and two of the eleven translate.
+    let dark_row = Theme::ALL.iter().position(|t| *t == Theme::Dark).unwrap();
+    assert_eq!(
+        app.get_theme_rows().row_data(dark_row).unwrap().label,
+        strings_get(Lang::Tr, Key::ThemeDefaultDark),
+        "the picker's translatable rows follow the switch"
+    );
+    let mocha_row = Theme::ALL.iter().position(|t| *t == Theme::Mocha).unwrap();
+    assert_eq!(
+        app.get_theme_rows().row_data(mocha_row).unwrap().label,
+        strings_get(Lang::Tr, Key::ThemeCatppuccinMocha),
+        "and a proper noun stays itself"
+    );
+
+    // Criterion 5: switching to the language already in effect changes nothing.
+    // The check that matters is that it does not re-plan — a re-plan bumps the
+    // viewer's generation and asks for the page again, which on a large invoice
+    // is a visible blink for no reason.
+    click(&elements(&app, "AppWindow::menu-button")[0]);
+    let settled = app.get_details_days_left().to_string();
+    click(&elements(&app, "AppWindow::menu-lang-tr")[0]);
+    assert_eq!(stack.language.get(), Lang::Tr);
+    assert_eq!(app.get_details_days_left(), settled.as_str());
+
+    // And back to English, so the vault's rows end as they started.
+    click(&elements(&app, "AppWindow::menu-button")[0]);
+    click(&elements(&app, "AppWindow::menu-lang-en")[0]);
+    assert_eq!(stack.language.get(), Lang::En);
+    assert_eq!(app.get_lang_mode(), 0);
+    assert_eq!(
+        app.get_details_days_left(),
+        strings_get(Lang::En, Key::WarrantyExpired)
+    );
+
+    // Criterion 10: what is on disk is not UI copy and does not translate.
+    assert_eq!(
+        stack.vault.borrow().selected_folder().as_deref(),
+        Some("drive"),
+        "a folder name is an identity, not a label"
+    );
 }
 
 /// The Slint colour `theme.rs` would have pushed for an `0xRRGGBB` value.
@@ -249,6 +491,43 @@ fn colour(value: u32) -> slint::Color {
         (value >> 8) as u8,
         value as u8,
     )
+}
+
+/// `0xAARRGGBB`, for the one role that carries its own alpha.
+fn colour_argb(value: u32) -> slint::Color {
+    slint::Color::from_argb_u8(
+        (value >> 24) as u8,
+        (value >> 16) as u8,
+        (value >> 8) as u8,
+        value as u8,
+    )
+}
+
+/// Assert all twelve roles reached the `Palette` global.
+///
+/// Reads the window back rather than the table, so it fails if `theme::apply`
+/// forgets a setter or pairs two of them the wrong way round.
+fn assert_palette_pushed(app: &AppWindow, theme: Theme) {
+    let p = theme.palette();
+    let table = app.global::<Palette>();
+    let code = theme.code();
+
+    for (got, want, role) in [
+        (table.get_bg(), colour(p.bg), "bg"),
+        (table.get_panel(), colour(p.panel), "panel"),
+        (table.get_raised(), colour(p.raised), "raised"),
+        (table.get_border(), colour(p.border), "border"),
+        (table.get_text(), colour(p.text), "text"),
+        (table.get_muted(), colour(p.muted), "muted"),
+        (table.get_accent(), colour(p.accent), "accent"),
+        (table.get_danger(), colour(p.danger), "danger"),
+        (table.get_selection(), colour(p.selection), "selection"),
+        (table.get_paper(), colour(p.paper), "paper"),
+        (table.get_paper_edge(), colour(p.paper_edge), "paper-edge"),
+        (table.get_backdrop(), colour_argb(p.backdrop), "backdrop"),
+    ] {
+        assert_eq!(got, want, "{code}: {role} did not reach the Palette global");
+    }
 }
 
 fn strings_get(lang: Lang, key: Key) -> &'static str {

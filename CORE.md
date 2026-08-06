@@ -109,6 +109,10 @@ Columns are fixed-ratio; the content structure is identical for every product.
 
 **Localization.** All UI strings exist in **English and Turkish**, switchable at runtime, persisted as `lang = "en" | "tr"` in `config.toml`. Default is always `en` — the app never checks the system locale; switching to Turkish is a deliberate user action via the `Document ▾` menu. No hardcoded strings in `.slint` or Rust — everything goes through the string table.
 
+Two things about "switchable at runtime", settled in Chron6. Refilling the `Strings` global only relabels what is *bound* to it; roughly half the text on screen is composed in Rust and pushed into ordinary properties — list rows, a broken folder's reason, the warranty countdown, a document that will not open, the theme picker's rows — and none of it knows the language changed. All of it derives from the current selection, so one re-plan through the vault recomputes the lot; there is one route rather than several that could disagree. And what is *on disk* is not UI copy and never translates: folder names, file names, the tab labels derived from file stems, and the diagnostic tails of OS and TOML-parser messages.
+
+Language names are written in their own language in both tables (`English`, `Türkçe`), so a reader who has landed in a language they cannot read can still find their own. Turkish maps `i`→`İ` and `ı`→`I`, so any label that shouts is stored shouting and never passed through `to_uppercase` — `EXPORT` is `DIŞA AKTAR`, with a dotless capital.
+
 ### About view
 
 Anaphored from JADEITE's About. Selecting About in the column-1 footer swaps the content area (columns 2+3) for a single centered pane:

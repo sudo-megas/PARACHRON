@@ -321,6 +321,15 @@ impl Viewer {
     pub fn invalidate(&self, path: &Path) {
         self.renderer.invalidate(path);
     }
+
+    /// Chron6. Nothing is re-pushed here: the error text on screen was composed
+    /// from a `ViewError` this module no longer holds — only the window property
+    /// does — so re-translating it means re-planning, which the vault's own
+    /// re-push does a moment later. Setting the language and repainting are
+    /// therefore two calls rather than one, in that order.
+    pub fn set_lang(&self, lang: Lang) {
+        self.state.lock().unwrap().lang = lang;
+    }
 }
 
 /// Wire the viewer into the window: callbacks in, rendered pages out.

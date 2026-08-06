@@ -78,15 +78,22 @@ component SortChip inherits Rectangle {
 component MenuRow inherits Rectangle {
     in property <string> label;
     in property <bool> enabled: true;
+    /// Set on the language row that is in effect (Chron6). Document actions leave
+    /// it false — they are things to do, not states to be in.
+    in property <bool> active: false;
     callback clicked();
 
     height: 30px;
     border-radius: 4px;
-    background: root.enabled && touch.has-hover ? Palette.raised : transparent;
+    background: root.active
+        ? Palette.selection
+        : (root.enabled && touch.has-hover ? Palette.raised : transparent);
 
     accessible-role: button;
     accessible-label: root.label;
     accessible-enabled: root.enabled;
+    accessible-checkable: root.active;
+    accessible-checked: root.active;
     accessible-action-default => {
         root.clicked();
     }
@@ -94,9 +101,20 @@ component MenuRow inherits Rectangle {
     HorizontalLayout {
         padding-left: 10px;
         padding-right: 10px;
+        spacing: 8px;
         Text {
             text: root.label;
             color: root.enabled ? Palette.text : Palette.muted;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        // The same tick the theme picker marks its active row with.
+        Text {
+            text: root.active ? Strings.check-glyph : "";
+            color: Palette.accent;
             font-size: 13px;
             vertical-alignment: center;
         }
@@ -235,6 +253,13 @@ export component AppWindow inherits Window {
     // The rows carry their own labels and their own active flag, both filled by
     // `theme.rs`, so nothing on this side knows how many themes there are.
     in property <[ThemeItem]> theme-rows;
+
+    // ── Localization (Chron6) ────────────────────────────────────────────
+    //
+    // CORE §4 puts the language switch in `Document ▾`, and there are exactly
+    // two, so they are two rows rather than a model. 0 is English, 1 Turkish.
+    in property <int> lang-mode;
+    callback language-selected(int);
 
     // Menu state is nobody's business but this file's, and so is whether the
     // theme picker is up: opening it is a UI gesture, and the only thing Rust
@@ -650,6 +675,49 @@ export component AppWindow inherits Window {
                     clicked => {
                         root.menu-open = false;
                         root.edit-document();
+                    }
+                }
+
+                // ── Language (CORE §4) ───────────────────────────────────
+                //
+                // A hairline and a heading, so the two language rows do not read
+                // as two more document actions.
+                Rectangle {
+                    height: 7px;
+                    Rectangle {
+                        x: 4px;
+                        y: 3px;
+                        width: parent.width - 8px;
+                        height: 1px;
+                        background: Palette.border;
+                    }
+                }
+
+                Text {
+                    text: Strings.menu-language;
+                    color: Palette.muted;
+                    font-size: 11px;
+                    letter-spacing: 1px;
+                    height: 18px;
+                    vertical-alignment: center;
+                    x: 10px;
+                }
+
+                menu-lang-en := MenuRow {
+                    label: Strings.lang-english;
+                    active: root.lang-mode == 0;
+                    clicked => {
+                        root.menu-open = false;
+                        root.language-selected(0);
+                    }
+                }
+
+                menu-lang-tr := MenuRow {
+                    label: Strings.lang-turkish;
+                    active: root.lang-mode == 1;
+                    clicked => {
+                        root.menu-open = false;
+                        root.language-selected(1);
                     }
                 }
             }

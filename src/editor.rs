@@ -140,6 +140,18 @@ impl Editor {
         self.docs.iter().map(|doc| doc.name().to_string()).collect()
     }
 
+    /// Chron6. Nothing is re-pushed: the form's heading and its per-field
+    /// messages are only on screen while the sheet is up, and while the sheet is
+    /// up its backdrop covers the window — so `Document ▾` is unreachable and the
+    /// language cannot change underneath it. The next `open()` composes them
+    /// afresh in whatever language is then in effect.
+    ///
+    /// If a later milestone ever makes a sheet dismissable by clicking away, or
+    /// puts a menu above one, this is the paragraph that stops being true.
+    fn set_lang(&mut self, lang: Lang) {
+        self.lang = lang;
+    }
+
     /// Decide whether what was typed is a product.
     fn check(&self, typed: &Typed) -> Report {
         let text = |key| strings::get(self.lang, key).to_string();
@@ -231,6 +243,22 @@ impl Editor {
     }
 }
 
+/// What the language switch reaches the form through.
+///
+/// An opaque handle rather than the `Editor` itself, the same shape
+/// `details::Details` uses: the form's internals are nobody else's business and
+/// the only thing anything outside this module needs to do to it is tell it the
+/// language changed.
+pub struct Editors {
+    editor: Rc<RefCell<Editor>>,
+}
+
+impl Editors {
+    pub fn set_lang(&self, lang: Lang) {
+        self.editor.borrow_mut().set_lang(lang);
+    }
+}
+
 /// Wire the form into the window.
 pub fn install(
     app: &AppWindow,
@@ -238,7 +266,7 @@ pub fn install(
     lang: Lang,
     vault: Rc<RefCell<Vault>>,
     viewer: Rc<Viewer>,
-) {
+) -> Editors {
     let editor = Rc::new(RefCell::new(Editor {
         products_root,
         lang,
@@ -456,6 +484,8 @@ pub fn install(
             }
         }
     });
+
+    Editors { editor }
 }
 
 /// Fill the sheet and show it.

@@ -130,12 +130,21 @@ const CATPPUCCIN_LATTE: Palette = Palette {
     backdrop: SCRIM_LIGHT,
 };
 
+/// Catppuccin Frappé, whose ladder sits one step lower than its siblings'.
+///
+/// Frappé is the lightest of the three dark flavours, and putting `selection` on
+/// surface1 like Macchiato and Mocha do left its red at 2.70:1 on a selected row
+/// — which is what a broken folder's label is drawn in. `selection` takes
+/// surface0 instead, surface1 moves out to the hairlines, and the hover step
+/// between base and surface0 is interpolated because Catppuccin has no token
+/// there. Macchiato and Mocha clear the same floor on surface1 at 3.37 and 3.93,
+/// so they are unchanged; this is Frappé's own problem, not the mapping's.
 const CATPPUCCIN_FRAPPE: Palette = Palette {
     bg: 0x292c3c,
     panel: 0x303446,
-    raised: 0x414559,
-    selection: 0x51576d,
-    border: 0x626880,
+    raised: 0x394050,
+    selection: 0x414559,
+    border: 0x51576d,
     text: 0xc6d0f5,
     muted: 0xa5adce,
     accent: 0x8caaee,
@@ -176,6 +185,14 @@ const CATPPUCCIN_MOCHA: Palette = Palette {
 };
 
 /// Rosé Pine Dawn. `accent` is pine and `danger` is love.
+///
+/// The surfaces walk base, surface, overlay, highlight-med and highlight-high.
+/// The page's edge is `muted`, one step beyond the ladder, and it has to be:
+/// this is the palette with the least distance between white paper and its
+/// canvas — 1.09:1 — so the edge is carrying the page's boundary on its own. The
+/// first version reused highlight-high for both `border` and `paper_edge`, which
+/// made the page's frame the same colour as every hairline in the window and the
+/// faintest of the four light themes' edges.
 const ROSE_PINE: Palette = Palette {
     bg: 0xfaf4ed,
     panel: 0xfffaf3,
@@ -187,7 +204,7 @@ const ROSE_PINE: Palette = Palette {
     accent: 0x286983,
     danger: 0xb4637a,
     paper: PAPER,
-    paper_edge: 0xcecacd,
+    paper_edge: 0x9893a5,
     backdrop: SCRIM_LIGHT,
 };
 
@@ -221,12 +238,22 @@ const RUBY: Palette = Palette {
 /// Canonical's brand colours: Dark Aubergine as the canvas, Mid and Canonical
 /// Aubergine up the ladder, Warm Grey for the quiet text, Ubuntu Orange as the
 /// accent. `danger` is a plain red, which orange leaves room for.
+///
+/// This is the tightest palette of the eleven, and the reason is Canonical's own
+/// combination rather than anything here: Ubuntu Orange on aubergine is a
+/// genuinely low-contrast pairing. The first version used Canonical Aubergine
+/// `#772953` for `selection`, which put the orange at 2.58:1 against the one
+/// background a selected row and the picker's tick are ever drawn on. Mid
+/// Aubergine takes that slot instead and Canonical Aubergine moves out to the
+/// hairlines, which clears the floor without changing a brand colour.
 const UBUNTU_AUBERGINE: Palette = Palette {
     bg: 0x2c001e,
+    // No Canonical colour sits between Dark and Mid Aubergine, so the two middle
+    // steps of the ladder are interpolated.
     panel: 0x3b0d29,
-    raised: 0x5e2750,
-    selection: 0x772953,
-    border: 0x8d3a6a,
+    raised: 0x4a1a3c,
+    selection: 0x5e2750,
+    border: 0x772953,
     text: 0xf7f2f4,
     muted: 0xaea79f,
     accent: 0xe95420,
@@ -547,12 +574,36 @@ mod tests {
                 );
             }
 
-            for (colour, name) in [(p.muted, "muted"), (p.accent, "accent"), (p.danger, "danger")] {
-                let ratio = contrast(colour, p.panel);
+            // `selection` is a background too, and until this assertion existed
+            // nothing said so. A selected product row is drawn on it, and its
+            // label is `text`, or `accent` when files are missing, or `danger`
+            // when the folder will not parse; an active sort chip is `selection`
+            // filled with an `accent` outline; and the picker's tick is `accent`
+            // on the active row, which is the only background that tick ever has.
+            //
+            // Ubuntu Canonical Aubergine failed this when it was written, at
+            // 2.58:1 — Ubuntu Orange on Canonical Aubergine. The floor that was
+            // here measured `accent` against `panel`, a surface some of these are
+            // never drawn on, so it passed a palette whose most visible accent
+            // pairing was unreadable.
+            for surface in [p.panel, p.selection] {
+                let ratio = contrast(p.text, surface);
                 assert!(
-                    ratio >= QUIET_FLOOR,
-                    "{code}: {name} on panel is {ratio:.2}:1, below the {QUIET_FLOOR}:1 floor"
+                    ratio >= BODY_FLOOR,
+                    "{code}: text on {surface:#08x} is {ratio:.2}:1, below the \
+                     {BODY_FLOOR}:1 floor"
                 );
+            }
+
+            for (colour, name) in [(p.muted, "muted"), (p.accent, "accent"), (p.danger, "danger")] {
+                for (surface, where_) in [(p.panel, "panel"), (p.selection, "selection")] {
+                    let ratio = contrast(colour, surface);
+                    assert!(
+                        ratio >= QUIET_FLOOR,
+                        "{code}: {name} on {where_} is {ratio:.2}:1, below the \
+                         {QUIET_FLOOR}:1 floor"
+                    );
+                }
             }
 
             // A page has to be distinguishable from the pane behind it. It gets
@@ -595,13 +646,24 @@ mod tests {
     fn every_palette_walks_five_distinct_surfaces() {
         for &theme in Theme::ALL {
             let p = theme.palette();
-            let ladder = [p.bg, p.panel, p.raised, p.selection, p.border];
-            for (i, &a) in ladder.iter().enumerate() {
-                for &b in &ladder[i + 1..] {
+
+            // `paper_edge` is checked for distinctness with the surfaces but is
+            // deliberately *not* part of the ladder below: on a dark theme it sits
+            // beyond `bg` rather than between the steps, so including it in the
+            // monotonic check would fail every dark palette. It still must not be
+            // a copy of one of them — Rosé Pine's was a second `border`, which
+            // made the page's frame the same colour as every hairline in the
+            // window.
+            let distinct = [p.bg, p.panel, p.raised, p.selection, p.border, p.paper_edge];
+            let names = ["bg", "panel", "raised", "selection", "border", "paper-edge"];
+            for (i, &a) in distinct.iter().enumerate() {
+                for (j, &b) in distinct.iter().enumerate().skip(i + 1) {
                     assert_ne!(
                         a, b,
-                        "{}: two surface roles share {a:#08x}",
-                        theme.code()
+                        "{}: {} and {} are both {a:#08x}",
+                        theme.code(),
+                        names[i],
+                        names[j]
                     );
                 }
             }

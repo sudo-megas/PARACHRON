@@ -183,8 +183,20 @@ export component Viewer inherits Rectangle {
             if root.tabs.length > 0 && root.error-text == "": Flickable {
                 width: parent.width;
                 height: parent.height;
-                viewport-width: max(root.page-width, self.width);
-                viewport-height: max(root.page-height, self.height);
+                // The page *plus its edge*, which is the whole reason for the
+                // `+ 2px`. A `Flickable` clips hard to its own bounds and its
+                // viewport does not grow to contain a child that sticks out, so a
+                // viewport sized to the page alone cuts the edge off on whichever
+                // axis the page fills — and at 1× zoom the fitted page fills one
+                // axis exactly, by definition. A portrait invoice in a wide column
+                // therefore lost its top and bottom line, and above 1× zoom, where
+                // the page exceeds the pane on both axes, it lost all four.
+                //
+                // Panning does not rescue it: at scroll 0 the top line sits at −1,
+                // and scrolled fully down the bottom line sits at exactly the
+                // viewport's height. Both are outside the clip either way.
+                viewport-width: max(root.page-width + 2px, self.width);
+                viewport-height: max(root.page-height + 2px, self.height);
 
                 // The page's edge, so a white page does not read as a hole
                 // punched in the panel.

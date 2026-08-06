@@ -31,6 +31,43 @@ impl Lang {
             Lang::Tr => "tr",
         }
     }
+
+    /// Every language, in the order the menu lists them.
+    ///
+    /// Only the tests walk it, the same way only the tests walk [`Key::ALL`] —
+    /// `app.slint` lists the two rows literally because there are two and CORE §4
+    /// says there are two, so a model would be more machinery than the thing it
+    /// modelled. This exists so a test can state that.
+    #[allow(dead_code)]
+    pub const ALL: &'static [Lang] = &[Lang::En, Lang::Tr];
+
+    /// Which menu row is marked.
+    pub fn index(self) -> i32 {
+        match self {
+            Lang::En => 0,
+            Lang::Tr => 1,
+        }
+    }
+
+    /// The inverse of [`Lang::index`], for what a click asks for. Anything out of
+    /// range falls back to English, the same way `from_code` does.
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Lang::Tr,
+            _ => Lang::En,
+        }
+    }
+
+    /// The menu's label for this language (CORE §4: no literals outside the
+    /// table). Pushed by `apply_strings` under its own property, so this is the
+    /// mapping a test uses to say which property should hold which key.
+    #[allow(dead_code)]
+    pub fn name(self) -> Key {
+        match self {
+            Lang::En => Key::LangEnglish,
+            Lang::Tr => Key::LangTurkish,
+        }
+    }
 }
 
 /// Every user-visible string, by key.
@@ -117,6 +154,11 @@ pub enum Key {
     ThemeRuby,
     ThemeUbuntuAubergine,
     ThemePaperlike,
+
+    // Localization (Chron6)
+    MenuLanguage,
+    LangEnglish,
+    LangTurkish,
 
     // Broken and incomplete entries
     BrokenTitle,
@@ -208,6 +250,9 @@ impl Key {
         Key::ThemeRuby,
         Key::ThemeUbuntuAubergine,
         Key::ThemePaperlike,
+        Key::MenuLanguage,
+        Key::LangEnglish,
+        Key::LangTurkish,
         Key::BrokenTitle,
         Key::MissingFiles,
         Key::ErrNoHome,
@@ -287,7 +332,9 @@ fn table(key: Key) -> (&'static str, &'static str) {
         // Shown in the file dialog's type filter, so it is on screen like
         // anything else — same rule as the glyphs above.
         FilterPdf => ("PDF", "PDF"),
-        Checking => ("Checking…", "Denetleniyor…"),
+        // `Denetleniyor` is what this said, and it means "being audited" — the
+        // register of an inspection rather than of a program looking at a file.
+        Checking => ("Checking…", "Kontrol ediliyor…"),
         NoDocumentsYet => (
             "No documents attached yet.",
             "Henüz belge eklenmedi.",
@@ -340,6 +387,15 @@ fn table(key: Key) -> (&'static str, &'static str) {
             "Kâğıt görünümlü gradyan tema",
         ),
 
+        MenuLanguage => ("Language", "Dil"),
+        // Each language named in its own language, identically in both tables.
+        // Somebody who has landed in a language they cannot read needs to find
+        // their own name in the list, and `İngilizce` is no help to a reader of
+        // English. A key whose two sides are equal is not an unfinished
+        // translation — the glyph keys work the same way.
+        LangEnglish => ("English", "English"),
+        LangTurkish => ("Türkçe", "Türkçe"),
+
         BrokenTitle => ("Broken entry", "Bozuk kayıt"),
         MissingFiles => ("Missing files", "Eksik dosyalar"),
         ErrNoHome => (
@@ -349,6 +405,12 @@ fn table(key: Key) -> (&'static str, &'static str) {
         ErrUnreadable => ("Could not be read", "Okunamadı"),
         ErrMissingToml => ("No product.toml in this folder", "Bu klasörde product.toml yok"),
         ErrMalformed => ("product.toml is not valid", "product.toml geçerli değil"),
+        // Deliberately almost the same as `ErrDateInvalid`, and identical to it in
+        // Turkish. They say the same thing to the user because the same thing is
+        // wrong; they are two keys because one is a form refusing what was typed
+        // (a sentence, with a full stop) and the other is a manifest field being
+        // reported (a fragment, which gets the field name and the offending value
+        // appended). Not a duplicate to collapse.
         ErrInvalidDate => ("Not a valid date", "Geçerli bir tarih değil"),
         ErrConfigSave => ("Could not save config.toml", "config.toml kaydedilemedi"),
 
@@ -387,6 +449,78 @@ mod tests {
         }
     }
 
+    /// The keys whose two sides are meant to be the same string.
+    ///
+    /// Everything else has to differ, and the test below enforces it. Without a
+    /// list like this, "the Turkish is missing" and "the Turkish is a proper noun"
+    /// look identical from outside — which is how a table ends up half-translated
+    /// with nothing to show for it.
+    const SAME_IN_BOTH: &[Key] = &[
+        // The wordmark is the wordmark (CORE §1).
+        Key::AppTitle,
+        // Glyphs carry no words. They are in the table because they are on screen.
+        Key::BrokenPrefix,
+        Key::WarnPrefix,
+        Key::PrevGlyph,
+        Key::NextGlyph,
+        Key::CopyGlyph,
+        Key::RemoveGlyph,
+        Key::CheckGlyph,
+        // A file type and a two-letter range, neither of which is a word.
+        Key::FilterPdf,
+        Key::SortName,
+        // Theme names that are proper nouns (CORE §5). The two Default entries and
+        // the two carrying an English common noun are not in this list, because
+        // those do translate.
+        Key::ThemeNoctalia,
+        Key::ThemeCatppuccinLatte,
+        Key::ThemeCatppuccinFrappe,
+        Key::ThemeCatppuccinMacchiato,
+        Key::ThemeCatppuccinMocha,
+        Key::ThemeRosePine,
+        Key::ThemeUbuntuAubergine,
+        // Each language named in its own language, so a reader stranded in the
+        // wrong one can recognise their own.
+        Key::LangEnglish,
+        Key::LangTurkish,
+    ];
+
+    #[test]
+    fn every_key_that_should_translate_does() {
+        for &key in Key::ALL {
+            let (en, tr) = (get(Lang::En, key), get(Lang::Tr, key));
+            if SAME_IN_BOTH.contains(&key) {
+                assert_eq!(en, tr, "{key:?} is listed as identical but is not");
+            } else {
+                assert_ne!(
+                    en, tr,
+                    "{key:?} has the same string in both languages — either translate \
+                     it or add it to SAME_IN_BOTH with a reason"
+                );
+            }
+        }
+    }
+
+    /// Turkish uppercases `i` to `İ` and `ı` to `I`, so a label that shouts has to
+    /// be stored shouting. Passing these through `to_uppercase` in code would give
+    /// `DIŞA AKTAR` a dotted capital and be wrong in a way English never is.
+    #[test]
+    fn the_shouting_labels_are_stored_shouting() {
+        for key in [Key::ActionTheme, Key::ActionExport] {
+            for lang in [Lang::En, Lang::Tr] {
+                let text = get(lang, key);
+                assert_eq!(
+                    text,
+                    text.to_uppercase(),
+                    "{key:?} in {lang:?} is not stored in the case it is shown in"
+                );
+            }
+        }
+        // The specific trap, pinned: dotless I, because the stem is `dış`.
+        assert_eq!(get(Lang::Tr, Key::ActionExport), "DIŞA AKTAR");
+        assert!(!get(Lang::Tr, Key::ActionExport).contains('İ'));
+    }
+
     #[test]
     fn the_key_list_covers_the_whole_enum() {
         // `table()` matches exhaustively, so a key missing from `Key::ALL` is
@@ -397,7 +531,7 @@ mod tests {
         assert_eq!(before, seen.len(), "Key::ALL contains a duplicate");
         assert_eq!(
             Key::ALL.len(),
-            77,
+            80,
             "Key::ALL is out of step with the enum — add the new key to it"
         );
     }

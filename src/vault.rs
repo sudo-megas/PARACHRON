@@ -201,6 +201,23 @@ impl Vault {
     pub fn sort(&self) -> SortMode {
         self.sort
     }
+
+    /// Chron6. Every row's text — the `!` prefix, `Missing files: …`, a broken
+    /// folder's heading and its reason — is composed here, so the language has to
+    /// arrive before the rows are rebuilt.
+    pub fn set_lang(&mut self, lang: Lang) {
+        self.lang = lang;
+    }
+
+    /// The selected product's folder, which is its identity (CORE §3) and is on
+    /// disk rather than on screen — so nothing translates it.
+    ///
+    /// Read only by the test that says so; the app addresses the selection through
+    /// `plan` and never needs to ask.
+    #[allow(dead_code)]
+    pub fn selected_folder(&self) -> Option<String> {
+        self.selected.clone()
+    }
 }
 
 /// Wire the list into the window and fill it with what is on disk.
@@ -262,6 +279,21 @@ pub fn install(
 /// statement, before anything touches the window.
 pub fn rescan(vault: &Rc<RefCell<Vault>>, app: &AppWindow, viewer: &Viewer, select: Option<&str>) {
     let update = vault.borrow_mut().plan_rescan(select);
+    push(app, viewer, update);
+}
+
+/// Rebuild everything derived from the selection, without re-reading the disk.
+///
+/// What the language switch calls (Chron6). One pass through `plan` recomputes
+/// the rows, the details snapshot and the viewer's state, which between them are
+/// every string Rust composed rather than pushed through the `Strings` global —
+/// so there is one route rather than five refresh routines that could disagree
+/// about what is on screen.
+///
+/// `keep_view: true` for Chron3's reason: this is not a change of product.
+/// Whoever was reading page seven of an invoice is still reading it.
+pub fn relabel(vault: &Rc<RefCell<Vault>>, app: &AppWindow, viewer: &Viewer) {
+    let update = vault.borrow_mut().plan(true);
     push(app, viewer, update);
 }
 

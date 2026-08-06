@@ -1,7 +1,7 @@
 # Chron6 — Localization
 
 **Milestone:** 6 of ~9 (CORE §9)
-**Status:** planned
+**Status:** done
 **Builds against:** CORE §4 (localization, `Document ▾`, app-wide principles), §3 (`lang` in `config.toml`), §8 (conventions & development rules)
 
 ## Goal
@@ -30,7 +30,7 @@ Chron5 complete: the theme picker's eleven rows are labelled through the string 
 | `vault::describe` | every `DataError` — the reason under a broken folder |
 | `details::countdown` | `658 days` / `658 gün`, and `Expired` |
 | `viewer::describe` | every `ViewError` — the message in place of a page |
-| `theme.rs` | the eleven picker rows, two of which translate |
+| `theme.rs` | the eleven picker rows, four of which translate |
 
 All five are derived from the selection, which means all five are recomputed by the path the vault already owns: `plan(true)` produces a fresh `Update` from the entries, and `push` hands the rows, the details snapshot and the viewer's state over in one pass. So the switch is `apply_strings`, then four `set_lang` calls, then one re-push — not five separate refresh routines that could disagree about what is on screen.
 
@@ -43,30 +43,30 @@ All five are derived from the selection, which means all five are recomputed by 
 ```
 src/
 ├── lang.rs           # NEW — the switch: who is told, in what order
-├── main.rs           # + install the switch; persist() takes the session's language
+├── main.rs           # + install the switch; persist() reads every owner
 ├── vault.rs          # + set_lang
 ├── viewer.rs         # + set_lang
 ├── editor.rs         # + set_lang; install returns a handle so the switch can reach it
 ├── theme.rs          # + set_lang
 └── strings.rs        # + menu keys; the Turkish review
 ui/
-├── app.slint         # + the two language rows in `Document ▾`, the active one marked
+├── app.slint         # + the two language rows in `Document ▾`; MenuRow gains `active`
 └── strings.slint     # + menu keys
 ```
 
 ## Tasks
 
-- [ ] `strings.rs`: `MenuLanguage`, `LangEnglish`, `LangTurkish` — language names given in their own language, identical in both tables
-- [ ] `strings.rs`: walk all keys in Turkish; fix what is wrong, and comment anything that looks wrong and is not
-- [ ] `vault.rs`: `set_lang`, and a `relabel` that re-plans with `keep_view: true`
-- [ ] `viewer.rs`: `set_lang` on `State`
-- [ ] `editor.rs`: `set_lang`; `install` returns a handle instead of nothing
-- [ ] `theme.rs`: `set_lang`, and re-push the picker's rows
-- [ ] `lang.rs`: `install` — register `on_language_selected`, ignore a switch to the language already in effect, then `apply_strings` → four `set_lang` → one re-push
-- [ ] `app.slint`: `Document ▾` gains a Language section with English and Türkçe, the active one marked
-- [ ] `main.rs`: `persist` writes the session's language rather than the loaded one
-- [ ] `main.rs`: `apply_strings` gains every key the table has grown since Chron4 and stays exhaustive
-- [ ] A test that every key differs between the languages except where it must not, with the exceptions named
+- [x] `strings.rs`: `MenuLanguage`, `LangEnglish`, `LangTurkish` — language names given in their own language, identical in both tables
+- [x] `strings.rs`: walk all keys in Turkish; fix what is wrong, and comment anything that looks wrong and is not
+- [x] `vault.rs`: `set_lang`, and a `relabel` that re-plans with `keep_view: true`
+- [x] `viewer.rs`: `set_lang` on `State`
+- [x] `editor.rs`: `set_lang`; `install` returns a handle instead of nothing
+- [x] `theme.rs`: `set_lang`, and re-push the picker's rows
+- [x] `lang.rs`: `install` — register `on_language_selected`, ignore a switch to the language already in effect, then `apply_strings` → four `set_lang` → one re-push
+- [x] `app.slint`: `Document ▾` gains a Language section with English and Türkçe, the active one marked
+- [x] `main.rs`: `persist` writes the session's language rather than the loaded one
+- [x] `main.rs`: `apply_strings` gains every key the table has grown since Chron4 and stays exhaustive
+- [x] A test that every key differs between the languages except where it must not, with the exceptions named
 
 ## Acceptance criteria
 
@@ -101,7 +101,32 @@ ui/
 
 ## How the criteria were verified
 
-*(Filled in when the milestone lands.)*
+110 tests pass (`cargo test`), up from Chron5's 106, with no warnings from either `cargo test` **or** `cargo build`. The distinction matters and cost a moment here: two helpers only the tests use warn in the ordinary build and not in the test build, so checking one is not checking the other.
+
+**Automated.** The switch's own module tests that both languages round-trip through the menu index, that an index out of range lands on English the way an unknown `lang` code does, and that each language's name reads identically in both tables. `strings.rs` gained two tests that are the real content work of this milestone. The first walks every key and asserts the two languages **differ**, against an explicit list of the nineteen that are deliberately identical — the wordmark, eight glyphs, `PDF`, `A–Z`, the seven proper-noun theme names, and the two language names. Without that list, "the Turkish is missing" and "the Turkish is a proper noun" look the same from outside, which is how a table ends up half-finished with nothing to show for it. The second pins the Turkish uppercase trap: the two shouting labels are asserted to equal their own `to_uppercase`, and `DIŞA AKTAR` is asserted to contain no dotted `İ` — because Turkish maps `i` to `İ` and `ı` to `I`, so upper-casing that string in code would get it wrong in a way English never is.
+
+**Headless, through the real element tree.** `ui_tests.rs` now installs the owners `main` installs, in `main`'s order, and drives the switch by clicking. It selects the product whose file is missing, records what every Rust-composed string reads, opens `Document ▾`, clicks Türkçe, and asserts: the session's language changed, the tick moved, the bound strings followed, `Missing files` became `Eksik dosyalar`, the countdown's unit became `gün` **while the number in front of it stayed the same** — that last one is what would catch a switch that recomputed the date instead of just re-rendering it. Then that the selection, the row and the open page are untouched; that a broken folder's `DataError` and an expired warranty both follow; that the picker's `Default Dark` row became `Varsayılan Koyu` while `Catppuccin Mocha` stayed itself; that switching to Turkish again changes nothing; and that the selected product's folder is still `drive`, because a folder is an identity and not a label.
+
+**One thing the headless test taught about the menu.** Selecting a product has to happen with the menu closed. An open menu lays a full-window `TouchArea` over everything to catch the dismissing click, so a row click while it is up dismisses the menu rather than selecting anything. The first version of the test opened the menu first and got an empty `selected-name`, which looked like the vault failing to push and was the menu working exactly as designed.
+
+**By real clicks, on an isolated display, against a scratch vault** seeded with a live warranty, an expired one, a product whose file is not on disk, and a folder with no manifest — so every string that has to follow the switch is on screen at once. Confirmed against screenshots:
+
+| Action | Result |
+|---|---|
+| `Document ▾` in English | `Add Document`, `Edit Document…`, a rule, `Language`, then `English` ticked and `Türkçe` |
+| Click `Türkçe` | Title bar `Belge` / `Belge Ekle`; chips `A–Z` / `Tarih`; column 3 `Satın alma bağlantısı`, `Satın alma tarihi`, `Garanti başlangıcı`, `Garanti bitişi`, `Kalan garanti`; `TEMA` / `DIŞA AKTAR`; `Seri numarası`; `Yakınlaştırma`; `Hakkında` |
+| The same product, unchanged underneath | The viewer's `This file is not in the product folder` became `Bu dosya ürün klasöründe yok` — a `ViewError` composed in Rust, following the switch without the product being reselected |
+| The countdown | `26518 gün` — no plural after the numeral, and the number identical to what English showed |
+| The list | `! QD-OLED Monitor` keeps its warning prefix; `test-broken` keeps its folder name |
+| The tab | Still reads `Invoice`, because that is a file stem on disk and not UI copy (criterion 10, visible) |
+| `Document ▾` in Turkish | `Dil` as the heading, `English` and `Türkçe` both still in their own language, `Türkçe` ticked |
+| Back to `English` | Every one of the above returns to what it started as |
+
+`Yakınlaştırma` is four times the length of `Zoom` and was the label most likely to break a layout; it fits the control row at the 1000px floor with the slider intact, which the screenshot shows.
+
+**What the Turkish review changed.** Nothing was blank — all of Chron1 through Chron5's keys already carried Turkish — so this was reading them rather than filling them. One wording fix: `Checking…` was `Denetleniyor…`, which means "being audited", the register of an inspection rather than of a program looking at a file; it is `Kontrol ediliyor…`. One near-duplicate documented rather than collapsed: `ErrDateInvalid` and `ErrInvalidDate` are the same words in Turkish and nearly the same in English, and they stay two keys because one is a form refusing what was typed and the other is a manifest field being reported with its name and value appended. Everything else read correctly, including the two entries that look like oversights and are not — `DayUnit` and `DaysUnit` are both `gün`, and both language names are the same in both tables.
+
+**Not verified end to end: criteria 6 and 7,** for exactly the reason Chron5's criterion 3 was not. `xdotool windowclose` does not make the app exit under `Xvfb`, so `persist` never runs there and `config.toml` is never rewritten. Every link is tested separately: the headless test asserts a click updates the cell `lang::install` returns; `main.rs`'s test asserts `persist` writes the session's values over a file holding different ones and normalises an unrecognised `lang` to `en`; `config.rs` asserts the value reloads; `strings.rs` asserts an unknown code falls back to English. The gap is the same three lines in `main` that read the owners into `Session`.
 
 ## Done when
 

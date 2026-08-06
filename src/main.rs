@@ -11,6 +11,7 @@ mod data;
 mod details;
 mod editor;
 mod import;
+mod lang;
 mod render;
 mod strings;
 mod theme;
@@ -80,7 +81,25 @@ fn main() -> Result<(), slint::PlatformError> {
 
     // The add/edit sheet. It hands finished work to the vault, which is what
     // puts it on screen.
-    editor::install(&app, products_root, lang, Rc::clone(&vault), viewer);
+    let editors = editor::install(
+        &app,
+        products_root,
+        lang,
+        Rc::clone(&vault),
+        Rc::clone(&viewer),
+    );
+
+    // The language switch, last, because it is the only thing that needs to reach
+    // all four of the above. What it returns is where the session's language
+    // lives from here on — `lang` the local is only the value it started at.
+    let language = lang::install(
+        &app,
+        lang,
+        Rc::clone(&vault),
+        viewer,
+        editors,
+        Rc::clone(&themes),
+    );
 
     // Show first, then resize. Sizing an unshown window is silently discarded:
     // `preferred-width`/`preferred-height` from `app.slint` win when the window
@@ -102,15 +121,18 @@ fn main() -> Result<(), slint::PlatformError> {
     // reported, never fatal.
     if let Some(paths) = &paths {
         let size = app.window().size().to_logical(app.window().scale_factor());
+        // Every value read from its owner, never from the locals this function
+        // started with. That is the third time this mattered: the sort mode,
+        // then the theme, now the language.
         let session = Session {
-            lang,
+            lang: language.get(),
             sort: vault.borrow().sort(),
             theme: themes.borrow().current(),
             width: size.width,
             height: size.height,
         };
         if let Err(detail) = persist(&paths.config, session) {
-            eprintln!("{}: {detail}", tr(lang, Key::ErrConfigSave));
+            eprintln!("{}: {detail}", tr(session.lang, Key::ErrConfigSave));
         }
     }
 
@@ -120,9 +142,11 @@ fn main() -> Result<(), slint::PlatformError> {
 /// What this run changed, gathered at the moment the window closes.
 ///
 /// A struct rather than five positional arguments because `persist` had reached
-/// six and the next milestone adds one more. `lang` is a field for the same
-/// reason `theme` is: Chron6 makes it mutable, and reading it from one place is
-/// what stops a stale copy being written.
+/// six. Every field is read from whichever owner holds the live value — the sort
+/// mode from the vault, the theme from `Themes`, the language from the cell
+/// `lang::install` returns — because reading any of them from the local `main`
+/// computed at startup is exactly the bug that shipped three times.
+#[derive(Clone, Copy)]
 struct Session {
     lang: Lang,
     sort: SortMode,
@@ -231,6 +255,9 @@ fn apply_strings(app: &AppWindow, lang: Lang) {
     table.set_theme_title(tr(lang, Key::ThemeTitle).into());
     table.set_action_close(tr(lang, Key::ActionClose).into());
     table.set_check_glyph(tr(lang, Key::CheckGlyph).into());
+    table.set_menu_language(tr(lang, Key::MenuLanguage).into());
+    table.set_lang_english(tr(lang, Key::LangEnglish).into());
+    table.set_lang_turkish(tr(lang, Key::LangTurkish).into());
 }
 
 /// Shorthand for a string-table lookup.
