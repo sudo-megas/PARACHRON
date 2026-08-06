@@ -32,7 +32,8 @@ Everything lives in plain folders on your own disk — one folder per product, h
 the binary, which is the part people usually have to go and find. The Linux
 packages do depend on the graphics, font and D-Bus libraries your desktop is
 already built on; your package manager pulls them in for you. The Windows `.exe`
-is self-contained.
+carries everything of its own, and needs Microsoft's Visual C++ Redistributable,
+which most machines already have — see the Windows section below.
 
 **To build from source** you need:
 
@@ -109,9 +110,17 @@ Parachron will appear in your applications menu.
 
 ### Windows
 
-Download `parachron.exe` from [Releases](https://github.com/sudo-megas/PARACHRON/releases/latest) and run it. It is a single executable — there is nothing to install.
+Download `parachron.exe` from [Releases](https://github.com/sudo-megas/PARACHRON/releases/latest) and run it. It is a single executable — nothing to unpack, and no installer.
 
 The Windows build is produced by GitHub Actions from this repository, so its build log is public. It is not code-signed, so Windows may show a SmartScreen warning the first time; choose **More info → Run anyway**.
+
+**One thing it does need.** Parachron uses Microsoft's Visual C++ Redistributable, which Windows itself does not include. Most machines already have it — it arrives with Office, with games, and with a great many installers — so on a typical PC there is nothing to do. If yours does not have it, Parachron will not start and Windows will say which file is missing:
+
+```
+The code execution cannot proceed because VCRUNTIME140.dll was not found.
+```
+
+The fix is a small one-time download from Microsoft: [Visual C++ Redistributable for x64](https://aka.ms/vs/17/release/vc_redist.x64.exe). Install it, and Parachron will start.
 
 <details>
 <summary>If it closes immediately, or you are on a virtual machine or remote desktop</summary>
