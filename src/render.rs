@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 
+use mupdf::pdf::PdfDocument;
 use mupdf::{Colorspace, Document, Matrix};
 
 /// How much decoded page imagery to keep around, in bytes.
@@ -295,6 +296,40 @@ pub fn open_document(path: &Path) -> Result<Document, ViewError> {
         Err(e) => return Err(ViewError::NotAPdf(e.to_string())),
     }
 
+    Ok(document)
+}
+
+/// Open a document as a PDF, for export (Chron7).
+///
+/// The same three checks as [`open_document`], in the same order, mapped onto the
+/// same [`ViewError`] — because "is this a readable PDF" has to have exactly one
+/// answer in the app, and `import.rs` already argued that. It lives here rather
+/// than in `export.rs` for that reason.
+///
+/// The third check is why this function exists at all. `PdfDocument::open` does
+/// **not** refuse a password-protected file the way `Document::open` plus
+/// `needs_password` does: it returns `Ok`, and only then admits it needs one.
+/// Merging that would append a page whose content stream cannot be decrypted.
+/// Verified against the `encrypted.pdf` fixture rather than assumed.
+pub fn open_pdf(path: &Path) -> Result<PdfDocument, ViewError> {
+    if !path.is_file() {
+        return Err(ViewError::Missing);
+    }
+
+    let document = PdfDocument::open(path).map_err(|e| match e {
+        mupdf::Error::Io(io) => ViewError::Unreadable(io.to_string()),
+        other => ViewError::NotAPdf(other.to_string()),
+    })?;
+
+    match document.needs_password() {
+        Ok(true) => return Err(ViewError::Encrypted),
+        Ok(false) => {}
+        Err(e) => return Err(ViewError::NotAPdf(e.to_string())),
+    }
+
+    // `PdfDocument` dereferences to `Document`, so the page-count check is the
+    // same code the viewer runs rather than a second opinion about emptiness.
+    page_count(&document)?;
     Ok(document)
 }
 

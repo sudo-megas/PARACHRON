@@ -26,7 +26,7 @@ Single source of truth for the Parachron project. Every Chron milestone file bui
 | Language | Rust (stable) | edition 2021+ |
 | GUI | Slint | UI in `.slint` files; logic in Rust |
 | PDF render | MuPDF (`mupdf` crate) | pages rasterized to images for the preview pane; built with `default-features = false` plus `base14-fonts`, `system-fonts`, `brotli`, `img` — no OCR, no ebook formats, and **no PDF JavaScript execution** |
-| PDF export | MuPDF (reused) | generates summary page + merges product PDFs |
+| PDF export | MuPDF (reused) | generates summary page + merges product PDFs; text drawn through `mupdf::shape::Shape` with **composite** font registration (see §6 — a simple Latin encoding silently drops Turkish letters) |
 | Data format | TOML (`toml` + `serde`) | one file per product; `preserve_order` so hand-added keys keep the order they were written in |
 | Dates | `time` crate | Stored as native TOML dates (ISO `YYYY-MM-DD`); displayed as `DD-MM-YYYY`; days-left computed at runtime. Features `macros`, `formatting`, `parsing`, `local-offset` — and the offset **must** be read at the top of `main`, before any thread exists (Chron4) |
 | File picker | `rfd`, `default-features = false` + `xdg-portal` | Native dialogs with no GTK development headers, which keeps §7's three targets cheap. `wayland` is deliberately **off**: its window identifier roundtrips a second event queue on Slint's own display from a foreign thread, which risks a deadlock in exchange for cosmetic dialog parenting. Always driven through `AsyncFileDialog` — the blocking call parks the caller in an untimeouted D-Bus read |
@@ -162,6 +162,14 @@ Label in UI: **EXPORT**. Product-level action producing one all-covering PDF:
 1. MuPDF generates a clean summary page from the product's data — name, serial number, purchase date, warranty start/end, days left at time of export, purchase link. Searchable text, print-friendly, theme-independent.
 2. All of the product's PDFs are appended in tab order.
 3. Output: a single `Parachron-<product-name>-<date>.pdf`, save location chosen by the user via file dialog.
+
+Settled in Chron7. The summary page is A4 whatever the appended documents are, and appended pages keep their own sizes — rescaling somebody's invoice to match would be the export altering their evidence. The page is drawn in black on white and reads nothing from the theme, because a printed page is not a window. The countdown goes through the same `days_left` and `countdown` the details column uses, so the figure on the page and the figure on screen cannot disagree.
+
+**A document that cannot be included is skipped, not fatal.** A file listed in `product.toml` but absent, encrypted, or unreadable cannot be appended; the export still produces the summary and everything that could be read, and names what it left out **on the summary page itself**. A notice in the window is gone when the app closes; the exported file is what gets emailed to a shop six months later, so it carries its own gaps — the same principle that keeps broken folders visible in the list with a readable reason.
+
+**Every text run on the page is registered as a composite font, not a simple one.** This is not a detail. A base-14 font in its default Latin encoding silently drops `ğ ş ı İ` — no error, the words simply are not in the file — and product names and serial numbers are user data, so an English session has to export `Şarj Cihazı` correctly. `Ü` survives a Latin encoding because it is in Latin-1, which makes the bug easy to test around by accident. Composite everywhere, unconditionally.
+
+The output is written through `write_to` rather than `save`, which takes a `&str` and therefore cannot express a destination path that is not valid UTF-8 — on Linux a path is bytes, so that is a real file a user could pick. Nothing about export invalidates the render worker's cache: the output goes outside the vault and the product's own files are only read.
 
 ## 7. Packaging & CI
 

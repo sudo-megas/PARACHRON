@@ -160,6 +160,15 @@ pub enum Key {
     LangEnglish,
     LangTurkish,
 
+    // Export (Chron7). The summary page reuses the field labels the form and the
+    // details column already have; these are the ones only the export needs.
+    ExportSaveTitle,
+    ExportedOn,
+    ExportSkipped,
+    Exporting,
+    ExportDone,
+    ErrExportFailed,
+
     // Broken and incomplete entries
     BrokenTitle,
     MissingFiles,
@@ -253,6 +262,12 @@ impl Key {
         Key::MenuLanguage,
         Key::LangEnglish,
         Key::LangTurkish,
+        Key::ExportSaveTitle,
+        Key::ExportedOn,
+        Key::ExportSkipped,
+        Key::Exporting,
+        Key::ExportDone,
+        Key::ErrExportFailed,
         Key::BrokenTitle,
         Key::MissingFiles,
         Key::ErrNoHome,
@@ -396,6 +411,18 @@ fn table(key: Key) -> (&'static str, &'static str) {
         LangEnglish => ("English", "English"),
         LangTurkish => ("Türkçe", "Türkçe"),
 
+        ExportSaveTitle => ("Export PDF", "PDF Olarak Aktar"),
+        // On the summary page's footer, in front of the date.
+        ExportedOn => ("Exported", "Aktarma tarihi"),
+        ExportSkipped => ("Not included", "Eklenmeyen belgeler"),
+        Exporting => ("Exporting…", "Aktarılıyor…"),
+        // The status line after a successful export. Deliberately not the same
+        // word as `ExportedOn`, which sits on the page's footer in front of a date
+        // — that one is a label on an artefact, this one is a thing that just
+        // happened, and English would otherwise use "Exported" for both.
+        ExportDone => ("Saved", "Kaydedildi"),
+        ErrExportFailed => ("Could not export", "Dışa aktarılamadı"),
+
         BrokenTitle => ("Broken entry", "Bozuk kayıt"),
         MissingFiles => ("Missing files", "Eksik dosyalar"),
         ErrNoHome => (
@@ -531,7 +558,7 @@ mod tests {
         assert_eq!(before, seen.len(), "Key::ALL contains a duplicate");
         assert_eq!(
             Key::ALL.len(),
-            80,
+            86,
             "Key::ALL is out of step with the enum — add the new key to it"
         );
     }

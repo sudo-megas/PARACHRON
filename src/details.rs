@@ -69,7 +69,11 @@ impl Snapshot {
 /// Composed here rather than in the `.slint` file because the string table
 /// holds no interpolation — the same reason the viewer's page counter is built
 /// in Rust.
-fn countdown(days: i64, lang: Lang) -> String {
+///
+/// Chron7's summary page calls this rather than reimplementing the arithmetic, so
+/// the figure on the exported page and the figure in column 3 cannot disagree —
+/// which is the whole reason CORE §6 says "days left at time of export".
+pub fn countdown(days: i64, lang: Lang) -> String {
     if days == 0 {
         return strings::get(lang, Key::WarrantyExpired).to_string();
     }

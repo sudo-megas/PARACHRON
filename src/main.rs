@@ -10,6 +10,7 @@ mod config;
 mod data;
 mod details;
 mod editor;
+mod export;
 mod import;
 mod lang;
 mod render;
@@ -83,15 +84,19 @@ fn main() -> Result<(), slint::PlatformError> {
     // puts it on screen.
     let editors = editor::install(
         &app,
-        products_root,
+        products_root.clone(),
         lang,
         Rc::clone(&vault),
         Rc::clone(&viewer),
     );
 
+    // Column 3's other button. It reads the selected product from the vault and
+    // writes wherever the user points it, on a thread of its own.
+    let exports = export::install(&app, products_root, lang, offset, Rc::clone(&vault));
+
     // The language switch, last, because it is the only thing that needs to reach
-    // all four of the above. What it returns is where the session's language
-    // lives from here on — `lang` the local is only the value it started at.
+    // all five of the above. What it returns is where the session's language lives
+    // from here on — `lang` the local is only the value it started at.
     let language = lang::install(
         &app,
         lang,
@@ -99,6 +104,7 @@ fn main() -> Result<(), slint::PlatformError> {
         viewer,
         editors,
         Rc::clone(&themes),
+        exports,
     );
 
     // Show first, then resize. Sizing an unshown window is silently discarded:

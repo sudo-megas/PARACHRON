@@ -12,12 +12,18 @@
 //! | `details::countdown` | `658 days` / `658 gün`, and `Expired` |
 //! | `viewer::describe` | every `ViewError` — the message shown in place of a page |
 //! | `theme.rs` | the picker's eleven rows, four of which translate |
+//! | `export.rs` | the status line under EXPORT, which is cleared rather than re-composed |
 //!
-//! All five are derived from the current selection, so all five are recomputed by
-//! the path the vault already owns: one `plan` produces the rows, the details
-//! snapshot and the viewer's state together. So the switch is four `set_lang`
-//! calls, then `apply_strings`, then one re-push — not five refresh routines that
-//! could disagree about what is on screen.
+//! The first four are all derived from the current selection, so all four are
+//! recomputed by the path the vault already owns: one `plan` produces the rows,
+//! the details snapshot and the viewer's state together. So the switch is five
+//! `set_lang` calls, then `apply_strings`, then one re-push — not a refresh
+//! routine per row of that table, which could disagree about what is on screen.
+//!
+//! The last two are pushed rather than derived and say so themselves: the picker's
+//! rows come from a list Rust holds, and the export's status line is a sentence
+//! about something that already happened, so it is cleared rather than translated
+//! after the fact.
 //!
 //! The form is the one thing deliberately not in that table, and its absence is
 //! load-bearing rather than an oversight. Its heading and per-field messages are
@@ -33,6 +39,7 @@ use std::rc::Rc;
 use slint::ComponentHandle;
 
 use crate::editor::Editors;
+use crate::export::Exports;
 use crate::strings::Lang;
 use crate::theme::{self, Themes};
 use crate::vault::{self, Vault};
@@ -46,6 +53,7 @@ struct Owners {
     viewer: Rc<Viewer>,
     editors: Editors,
     themes: Rc<RefCell<Themes>>,
+    exports: Exports,
 }
 
 /// Change the language and repaint every string on screen.
@@ -61,6 +69,7 @@ fn switch(app: &AppWindow, owners: &Owners, lang: Lang) {
     owners.viewer.set_lang(lang);
     owners.editors.set_lang(lang);
     owners.themes.borrow_mut().set_lang(lang);
+    owners.exports.set_lang(app, lang);
 
     crate::apply_strings(app, lang);
     // The picker's rows are looked up in Rust, so they are pushed rather than
@@ -83,6 +92,7 @@ pub fn install(
     viewer: Rc<Viewer>,
     editors: Editors,
     themes: Rc<RefCell<Themes>>,
+    exports: Exports,
 ) -> Rc<Cell<Lang>> {
     let current = Rc::new(Cell::new(lang));
     let owners = Rc::new(Owners {
@@ -90,6 +100,7 @@ pub fn install(
         viewer,
         editors,
         themes,
+        exports,
     });
 
     app.set_lang_mode(lang.index());

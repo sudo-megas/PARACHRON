@@ -1,7 +1,7 @@
 # Chron7 — Export
 
 **Milestone:** 7 of ~9 (CORE §9)
-**Status:** planned
+**Status:** done
 **Builds against:** CORE §6 (export, in full), §2 (MuPDF is reused for this — no second PDF library), §3 (data model — the fields the summary page reads; dates), §4 (column 3's EXPORT button, app-wide principles), §7 (packaging — no new build dependency on any target), §8 (conventions & development rules)
 
 ## Goal
@@ -44,28 +44,32 @@ src/
 ├── main.rs           # + install export
 └── strings.rs        # + summary-page and export keys
 ui/
-├── details.slint     # EXPORT loses `enabled: false`; + a status line under the buttons
-└── strings.slint     # + export chrome
+├── details.slint     # EXPORT loses `enabled: false`; + a fixed-height status line
+└── app.slint         # + the export properties and its two callbacks
 ```
+
+`strings.slint` is untouched, which is worth a word: every string the export uses
+is either drawn onto the PDF or composed into the status line, so all of it is
+looked up in Rust and none of it needs a property on the Slint side.
 
 `export.rs` mirrors `import.rs` deliberately, down to the shape of its types: a `Job` that can cross to a thread, an `Outcome` that comes back, a `commit` that spawns and rings the window, and a `run` that is a plain function of a `Job` and is where all the tests point. The two modules are the same kind of thing — file I/O plus MuPDF, off the UI thread, reporting to a slot — and making the second one look like the first is cheaper to read than a second invention.
 
 ## Tasks
 
-- [ ] `render.rs`: `open_pdf(path) -> Result<PdfDocument, ViewError>` — `is_file`, open, `needs_password`, mapped exactly as `open_document` maps them
-- [ ] `export.rs`: `Job` — the product's folder, its `Draft`-shaped data, the documents in tab order, the language, today's date, the output path
-- [ ] `export.rs`: inspect every source *before* drawing anything, so the summary page can name what it had to leave out
-- [ ] `export.rs`: `summary(doc, job)` — the page, laid out top-down on A4, every run composite
-- [ ] `export.rs`: labels and values through the string table, dates through `fmt_date`, the counter through the same `countdown` the details column uses
-- [ ] `export.rs`: append each usable source with `insert_pdf`, in tab order
-- [ ] `export.rs`: write with `write_to` into a `File`, not `save(&str)`
-- [ ] `export.rs`: `suggested_name(product, today)` — `Parachron-<name>-<DD-MM-YYYY>.pdf`, sanitised but not slugged
-- [ ] `export.rs`: `pick_destination` — `rfd` save dialog behind `spawn_local`, the same thin edge `import::pick` is
-- [ ] `export.rs`: `commit` — thread, slot, `invoke_export_finished`
-- [ ] `details.rs`: `on_export`, gated on a selection with a parsed manifest; busy, done and failed states
-- [ ] `details.slint`: EXPORT live, with a status line that does not reflow the column when it appears
-- [ ] `strings.slint` / `strings.rs`: every summary-page label, notice and error through the table, both languages
-- [ ] Delete `tests/glyph_spike.rs`; its four findings live on as tests in `export.rs` and `render.rs`
+- [x] `render.rs`: `open_pdf(path) -> Result<PdfDocument, ViewError>` — `is_file`, open, `needs_password`, mapped exactly as `open_document` maps them
+- [x] `export.rs`: `Job` — the product's folder, its `Draft`-shaped data, the documents in tab order, the language, today's date, the output path
+- [x] `export.rs`: inspect every source *before* drawing anything, so the summary page can name what it had to leave out
+- [x] `export.rs`: `summary(doc, job)` — the page, laid out top-down on A4, every run composite
+- [x] `export.rs`: labels and values through the string table, dates through `fmt_date`, the counter through the same `countdown` the details column uses
+- [x] `export.rs`: append each usable source with `insert_pdf`, in tab order
+- [x] `export.rs`: write with `write_to` into a `File`, not `save(&str)`
+- [x] `export.rs`: `suggested_name(product, today)` — `Parachron-<name>-<DD-MM-YYYY>.pdf`, sanitised but not slugged
+- [x] `export.rs`: `pick_destination` — `rfd` save dialog behind `spawn_local`, the same thin edge `import::pick` is
+- [x] `export.rs`: `commit` — thread, slot, `invoke_export_finished`
+- [x] `details.rs`: `on_export`, gated on a selection with a parsed manifest; busy, done and failed states
+- [x] `details.slint`: EXPORT live, with a status line that does not reflow the column when it appears
+- [x] `strings.slint` / `strings.rs`: every summary-page label, notice and error through the table, both languages
+- [x] Delete `tests/glyph_spike.rs`; its four findings live on as tests in `export.rs` and `render.rs`
 
 ## Acceptance criteria
 
@@ -112,7 +116,25 @@ ui/
 
 ## How the criteria were verified
 
-*(Filled in when the milestone lands.)*
+124 tests pass (`cargo test`), up from Chron6's 110, with no warnings from `cargo test` or `cargo build`. Fourteen of the new ones are `export.rs`'s.
+
+**Every test reads the written file back.** `run` is a plain function of a `Job`, so each test builds a product folder in a temporary directory, exports it, reopens the output with `render::open_pdf`, and then asks the document what it says. That matters more here than anywhere else in the project, because the failure this milestone was built around produces a valid PDF that is simply missing words: a check for "did it write without erroring" would pass every time.
+
+**Automated.** A two-document product exports as five pages — summary, then one, then three — in tab order. Every field CORE §6 lists is found on page one by searching for it: the name, the serial, both warranty dates, the purchase date, the link, the countdown, and the wordmark. The counter is asserted to be `951 days`, checked against the calendar by hand, and to come from the same `countdown` column 3 calls. An expired warranty reads as expired and the page is asserted to contain no negative number. A Turkish session's page carries Turkish labels *and* is asserted not to also contain the English ones — which is what would catch a page half-composed from a stale language. A product with an encrypted PDF, a corrupt one, and one listed in the manifest but absent from disk exports the rest: three names come back in `skipped` with the right `ViewError` each, the output is two pages, and all three names are found on the summary page. A product with no documents at all exports one page. The summary page is A4 and the appended page is asserted to keep the size it already had, rather than being rescaled to match. A destination that cannot be written is reported rather than panicking, in both languages. And the suggested filename keeps `Şarj Cihazı` as written while stripping a slash and a control character, and still produces something writable from a name of nothing but dots.
+
+**The glyph test is the one this milestone exists for**, and it is written to be hard to fool. Each of the four letters a Latin encoding cannot carry is searched for inside a real word — `Şarj`, `Cihazı`, `İST`, `ĞŞ` — with the app in **English**, because product names are user data. Then `Ürün` is exported separately and pinned as the *near-miss*: `Ü` is in Latin-1 and survives a wrong encoding, so a test written around a word like that one would pass while the feature was broken. Both are in the file so nobody trusts the wrong one.
+
+**A test that rasterizes the page, because searchable text can be off the page.** The layout is hand-placed arithmetic, and `search` finds text in a content stream whether or not it falls inside the media box — so every other test here would pass a page whose footer had been drawn a hundred points below the paper. The page is rendered and inspected: it has ink in the top third, ink in the middle, ink in the bottom sixth, and it is more than 90% paper. That is the assertion that would catch a margin constant being changed by someone who then only ran the search tests.
+
+**`write_to` is verified on a path `save` could not have expressed.** A destination containing a lone `0xFF` byte — valid in a Unix filename, not valid UTF-8, and therefore inexpressible as the `&str` that `PdfDocument::save` takes — is exported to and the file is asserted to exist.
+
+**`render::open_pdf` is pinned against all five cases,** including the one that is the reason it exists: `encrypted.pdf` comes back as `Encrypted` rather than as a document that opens and only then admits it needs a password.
+
+**Headless, through the real element tree.** Criterion 13: with a healthy product selected the EXPORT button reports itself enabled; with the unparseable folder selected it reports itself disabled, `details-filled` is false, and clicking it anyway produces no status line and no panic. The button reads `filled` rather than a flag of its own, so this is testing that binding.
+
+**By eye, which no assertion replaces.** The summary page was rendered to an image and looked at, in both languages, for a product with a Turkish name and serial and two documents that could not be included. English: the wordmark quiet above `Şarj Cihazı` at full size, a rule, then serial `İST-0042-ĞŞ`, purchase date, warranty start and end, the link, `Warranty left / 951 days` as the largest thing on the page, then `Not included` with `gone.pdf — This file is not in the product folder` and `locked.pdf — This PDF is password-protected`, then a rule and `Exported 06-08-2026`. Turkish: the same page reading `Seri numarası`, `Satın alma tarihi`, `Garanti başlangıcı`, `Garanti bitişi`, `Satın alma bağlantısı`, `Kalan garanti / 951 gün`, `Eklenmeyen belgeler` and `Aktarma tarihi`. Both are black on white with no colour from any theme, and the two file names stay as they are on disk in both — they are not UI copy.
+
+**Not verified by machine: the save dialog itself,** and this is the same boundary Chron3 documented for the file picker. A portal dialog is drawn by the desktop's own portal service in the user's session, so it appears on the real display whatever `DISPLAY` says and cannot be driven under `Xvfb`. Everything behind it takes a `PathBuf` and is tested that way; the click that opens it needs a person. That also means criteria 11 and 12 — cancelling writes nothing, and the window keeps repainting while the dialog is open — rest on the dialog being wired exactly as `import::pick` is, which has been driven by hand since Chron3, plus the fact that `run` is never reached without a path.
 
 ## Done when
 

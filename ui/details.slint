@@ -47,8 +47,14 @@ export component Details inherits Rectangle {
     in property <bool> expired;
     in property <bool> link-copied;
 
+    /// Empty when there is nothing to say. Already composed in Rust — running,
+    /// saved, or why it failed — the same way the viewer's error text is.
+    in property <string> export-status;
+    in property <bool> export-failed;
+
     callback copy-link();
     callback open-theme();
+    callback export();
 
     background: Palette.panel;
 
@@ -56,21 +62,49 @@ export component Details inherits Rectangle {
         padding: 16px;
         spacing: 16px;
 
-        // THEME is live as of Chron5. EXPORT arrives in Chron7.
-        HorizontalLayout {
-            spacing: 8px;
-            theme-button := Btn {
-                label: Strings.action-theme;
-                clicked => {
-                    root.open-theme();
+        // Both live as of Chron7.
+        VerticalLayout {
+            spacing: 6px;
+
+            HorizontalLayout {
+                spacing: 8px;
+                theme-button := Btn {
+                    label: Strings.action-theme;
+                    clicked => {
+                        root.open-theme();
+                    }
+                }
+                export-button := Btn {
+                    label: Strings.action-export;
+                    // `filled` already means "a product is selected and its
+                    // manifest parsed", which is exactly when there is something
+                    // to export — so this needs no flag of its own. A folder that
+                    // will not parse has no product, and neither does an empty
+                    // selection.
+                    enabled: root.filled;
+                    clicked => {
+                        root.export();
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
                 }
             }
-            Btn {
-                label: Strings.action-export;
-                enabled: false;
-            }
+
+            // Fixed height whether or not there is anything to say, so the column
+            // below it never reflows when an export starts or finishes. Column 3
+            // has no room to spare and no scroll container (Chron4).
             Rectangle {
-                horizontal-stretch: 1;
+                height: 15px;
+                Text {
+                    text: root.export-status;
+                    color: root.export-failed ? Palette.danger : Palette.muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                    overflow: elide;
+                }
             }
         }
 

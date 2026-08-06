@@ -156,12 +156,19 @@ fn install_stack(app: &AppWindow) -> Stack {
     let details = crate::details::install(app, Rc::clone(&vault));
     let editors = crate::editor::install(
         app,
-        root,
+        root.clone(),
         Lang::En,
         Rc::clone(&vault),
         Rc::clone(&viewer),
     );
     let themes = crate::theme::install(app, Theme::Dark, Lang::En);
+    let exports = crate::export::install(
+        app,
+        root,
+        Lang::En,
+        offset,
+        Rc::clone(&vault),
+    );
     let language = crate::lang::install(
         app,
         Lang::En,
@@ -169,6 +176,7 @@ fn install_stack(app: &AppWindow) -> Stack {
         Rc::clone(&viewer),
         editors,
         Rc::clone(&themes),
+        exports,
     );
 
     Stack {
@@ -481,6 +489,36 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
         Some("drive"),
         "a folder name is an identity, not a label"
     );
+
+    // ── Chron7: EXPORT is gated on there being something to export ────────
+    //
+    // Criterion 13. The button reads `filled`, which already means "a product is
+    // selected and its manifest parsed", so this is checking that binding rather
+    // than a flag of its own.
+    let export_button = || {
+        elements(&app, "Details::export-button")
+            .pop()
+            .expect("column 3 has an EXPORT button")
+    };
+
+    // A healthy product: live.
+    click(&elements(&app, "AppWindow::row-touch")[0]);
+    assert!(app.get_details_filled());
+    assert!(export_button().accessible_enabled().unwrap_or(false));
+
+    // A folder whose manifest will not parse: inert.
+    click(&elements(&app, "AppWindow::row-touch")[3]);
+    assert!(app.get_selected_broken());
+    assert!(!app.get_details_filled());
+    assert!(
+        !export_button().accessible_enabled().unwrap_or(true),
+        "a folder that will not parse has no product to export"
+    );
+
+    // Clicking it anyway does nothing at all — no status, no panic.
+    click(&export_button());
+    assert_eq!(app.get_export_status(), "");
+    assert!(!app.get_export_failed());
 }
 
 /// The Slint colour `theme.rs` would have pushed for an `0xRRGGBB` value.

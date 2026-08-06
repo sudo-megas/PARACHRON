@@ -243,6 +243,14 @@ export component AppWindow inherits Window {
     in property <bool> details-expired;
     in property <bool> link-copied;
 
+    // ── Export (Chron7) ──────────────────────────────────────────────────
+    in property <string> export-status;
+    in property <bool> export-failed;
+    callback export();
+    /// Rung from the export thread once it has finished. Carries nothing: the
+    /// outcome waits in a slot, because the export cannot cross a thread boundary.
+    callback export-finished();
+
     /// 0 as added, 1 alphabetical, 2 purchase date. CORE §4 describes two
     /// toggles over a default, which is what this is: clicking the active chip
     /// clears it back to 0.
@@ -616,6 +624,8 @@ export component AppWindow inherits Window {
                     days-left: root.details-days-left;
                     expired: root.details-expired;
                     link-copied: root.link-copied;
+                    export-status: root.export-status;
+                    export-failed: root.export-failed;
 
                     copy-link => {
                         root.copy-link();
@@ -623,6 +633,9 @@ export component AppWindow inherits Window {
                     open-theme => {
                         root.menu-open = false;
                         root.theme-open = true;
+                    }
+                    export => {
+                        root.export();
                     }
                 }
             }
