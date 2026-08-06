@@ -30,6 +30,14 @@ use vault::SortMode;
 
 slint::include_modules!();
 
+/// CORE §1's app id, and the name of the desktop entry CORE §7 installs.
+///
+/// One constant because the two have to be the same string to work at all: the
+/// window announces this to the compositor, and the compositor goes looking for
+/// `<this>.desktop` to find out what the window is called and which icon to draw
+/// for it. A typo in either half is not a compile error, it is a blank icon.
+const APP_ID: &str = "org.parachron.Parachron";
+
 fn main() -> Result<(), slint::PlatformError> {
     // First, before anything spawns a thread. `time` will not work the local
     // offset out once the process has more than one, and the render worker
@@ -47,6 +55,24 @@ fn main() -> Result<(), slint::PlatformError> {
     let theme = Theme::from_code(&settings.theme);
 
     let app = AppWindow::new()?;
+
+    // CORE §1's app id, told to the compositor. Without it winit falls back to
+    // the executable's name, `parachron`, and a desktop that looks the window
+    // up by app id finds no entry named that — which is why the window carried
+    // the generic placeholder icon in the task bar rather than its own.
+    //
+    // The two lines around this one are both load-bearing. It has to come
+    // *after* `AppWindow::new`, because the call reaches for a platform that
+    // only exists once a window has asked for one and returns `NoPlatform`
+    // before that; and *before* `app.show`, because the winit window reads the
+    // id when it is first mapped and never looks again. Between the two is the
+    // whole window this call has.
+    //
+    // Naming the id here rather than leaving the fallback to match is also what
+    // lets the desktop entry keep the reverse-DNS filename CORE §7 specifies:
+    // the entry is found by app id, so the id is the half that has to agree.
+    slint::set_xdg_app_id(APP_ID)?;
+
     apply_strings(&app, lang);
 
     // Colours before anything measures or draws. `palette.slint`'s initializers

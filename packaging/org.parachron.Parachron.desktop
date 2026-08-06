@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Parachron
+Comment=Invoices, warranty documents and serial numbers in one place, with the warranty counted down
+Comment[tr]=Faturalar, garanti belgeleri ve seri numaraları tek yerde, garanti geri sayımıyla
+Exec=parachron
+Icon=parachron
+Terminal=false
+Categories=Utility;Office;
+StartupNotify=true
