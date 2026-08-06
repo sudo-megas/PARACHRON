@@ -113,6 +113,28 @@ Download `parachron.exe` from [Releases](https://github.com/sudo-megas/PARACHRON
 
 The Windows build is produced by GitHub Actions from this repository, so its build log is public. It is not code-signed, so Windows may show a SmartScreen warning the first time; choose **More info → Run anyway**.
 
+<details>
+<summary>If it closes immediately, or you are on a virtual machine or remote desktop</summary>
+
+Parachron draws with your graphics driver. On a machine with no real OpenGL —
+a VM, some remote-desktop sessions, a server — it will exit at once with:
+
+```
+Failed to initialize OpenGL driver: Could not locate glCreateShader symbol
+```
+
+Set one environment variable to draw in software instead, and it will start:
+
+```
+set SLINT_BACKEND=winit-software
+parachron.exe
+```
+
+Everything works the same; it just uses the processor rather than the graphics
+card. On an ordinary desktop you should never need this.
+
+</details>
+
 ---
 
 ## How to use

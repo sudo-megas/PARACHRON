@@ -286,6 +286,18 @@ The licence text ships at **the path each distribution's own tooling reads**, wh
 
 MuPDF note: AGPL-3.0 obligations are satisfied by the public repo; CI must build MuPDF statically or bundle its library per target. `release.yml` asserts this on the artefact rather than trusting the intention — `ldd` on the two Linux binaries and `dumpbin /dependents` on the `.exe`, each failing the job if anything named `mupdf` appears.
 
+### What the Windows spike settled (Chron11)
+
+**MuPDF per target.** `mupdf-sys` vendors and statically links MuPDF on all three targets with no per-target special-casing. It builds under MSVC on `windows-latest` in **ten to twelve minutes** (484s and 712s on two runs) against roughly 1m40s on Linux, and needs `LIBCLANG_PATH` set explicitly — LLVM is on the image but `bindgen` does not find it unaided. No asset depends on a MuPDF the user installs.
+
+**The renderer, and this one has a user-facing consequence.** Slint's default FemtoVG renderer needs an OpenGL driver with shader support. On a machine that has none — a headless runner, a VM, some remote-desktop sessions — the binary exits immediately with `Failed to initialize OpenGL driver: Could not locate glCreateShader symbol`. `SLINT_BACKEND=winit-software` runs correctly on the same machine.
+
+The decision is **a documented environment variable, not a build feature**. Forcing the software renderer into the release build would make every ordinary install slower to rescue an unusual one, and the failure is loud rather than silent — it names the missing symbol and exits non-zero, which is not the "opens to nothing" case that would have justified changing the default. The README carries the variable in its Windows section.
+
+**Open, and named rather than fixed: the Visual C++ runtime.** The `.exe` imports `MSVCP140.dll`, `VCRUNTIME140.dll` and `VCRUNTIME140_1.dll`, which Windows does not ship. That is in tension with §7's own "no local Windows machine" position and with the README's "there is nothing to install". The remedy is `-C target-feature=+crt-static` *together with* forcing `mupdf-sys`'s C and C++ build to `/MT`, since mixing runtimes is its own class of bug — so it is a spike of its own rather than a line in a workflow, and it is left open deliberately.
+
+**Arch packaging requires `options=(!lto)`.** Arch's stock `makepkg.conf` enables GCC link-time optimisation for every package on the machine, so `mupdf-sys`'s `cc` build emits GCC LTO bytecode instead of native objects, and `rust-lld` — which cannot read it — reports every MuPDF symbol as undefined. This is a default rather than a local preference, so it would have broken both the documented `makepkg -si` route and the CI-built `.pkg.tar.zst` on their first real run. Rust's own LTO in `[profile.release]` is unaffected and still applies.
+
 ### Runtime dependencies are two lists, and the second is invisible (Chron11)
 
 `ldd target/release/parachron` reports twelve libraries. Slint's winit backend and `rfd` open **thirteen more** with `dlopen` at runtime, and a `dlopen`ed library appears in no `ldd` output and is missed by `dpkg-shlibdeps`, which is what `cargo-deb`'s `$auto` runs. A dependency list built from `ldd` alone therefore produces a package that installs cleanly, appears in the menu, and then does nothing when it is clicked.
