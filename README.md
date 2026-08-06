@@ -60,7 +60,7 @@ sudo apt install build-essential clang python3 libfontconfig1-dev
 
 ## Installation
 
-> Packaged downloads (`.pkg.tar.zst`, `.deb`, `.exe`) arrive with the first tagged release. Until then, **Build from source** below works today.
+> **1.0.0 is out.** The `.deb` and the `.exe` are on the [Releases](https://github.com/sudo-megas/PARACHRON/releases/latest) page. The Arch package is not attached to it yet — see below.
 
 ### Build from source
 
@@ -90,9 +90,11 @@ cd PARACHRON/packaging
 makepkg -si
 ```
 
-**From a release**
+**From a release** — *not available for 1.0.0 yet*
 
-Download `parachron-*.pkg.tar.zst` from [Releases](https://github.com/sudo-megas/PARACHRON/releases/latest), then:
+The `.pkg.tar.zst` is not attached to the 1.0.0 release. GitHub Actions was in a major incident when 1.0.0 was cut and could not give the packaging job a runner, and a package built without a public log is not the same artefact. Use the PKGBUILD above; it is the route this page lists first and it works today.
+
+Once the package is attached, this is the command:
 
 ```bash
 sudo pacman -U parachron-*.pkg.tar.zst

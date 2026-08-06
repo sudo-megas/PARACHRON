@@ -1,7 +1,7 @@
 # Chron11 — Packaging and CI
 
 **Milestone:** 11 of ~11 (CORE §9)
-**Status:** in progress — every file this milestone owes exists and everything checkable on this laptop is checked; what remains is not writing but *observing*, and it needs CI and a person. See **How the criteria were verified**.
+**Status:** released, not closed — **Parachron 1.0.0 is published** with two of its three assets, and the third is held back for provenance rather than for a packaging fault. What is left is not writing: an Arch package with a public build log, and a person running the `.exe` on real Windows. See **How the criteria were verified**.
 **Builds against:** CORE §1 (identity — app id, binary name, icons, licence, repo), §2 (stack — every dependency has to exist on three platforms), §3 (data model — where the vault lives on a target that is not Linux, and where it lives once the user has chosen), §7 (packaging & CI, in full), §8 (conventions & development rules, including who is allowed to be the author of a release), §9 (roadmap — the README lands here)
 
 **Renumbered during Chron9:** this file was Chron9 until the roadmap's last two rows swapped places. A release is the one step that hands artefacts to people who did not build them, and the milestone that lets a user choose which disk the vault lives on changes where their documents are — that cannot land *after* a version has shipped expecting them somewhere else. So the save-location milestone took the 9 slot and packaging moved to 10. Releases are the last step. CORE §9's table records the move; the eight earlier files that say "packaging (Chron9)" in their **Out** lists are left as written, because they were true when written and this project annotates rather than rewrites.
@@ -319,7 +319,13 @@ The genre is Chron8's, as this file already specified: a bolded noun phrase, wha
 
 ### Not verified. And these are the honest ones.
 
-- **Criterion 1 — a pushed `v*` tag producing a release with three assets.** No tag has been pushed, deliberately: this file lists "a tag has to be pushed by a person" as a human prerequisite and `release.yml` triggers on nothing else. What exists instead is a workflow that has never run, read carefully and guarded against the two ways it could produce silent nonsense — a tag disagreeing with `Cargo.toml`, and an asset count other than three. A guard that has never fired is not a guard that works.
+- **Criterion 1 — a pushed `v*` tag producing a release with three assets. Partly met, and the shortfall is worth more than the success.** `v1.0.0` was tagged and **Parachron 1.0.0 is published**, carrying two of the three assets: `parachron.exe` and `parachron_1.0.0-1_amd64.deb`, both built by the workflow with public logs. The `.pkg.tar.zst` is not on it.
+
+  Not for a packaging reason. GitHub Actions spent the evening in a major incident — throttled to processing about 15% of webhooks — and the Arch job was never handed a runner across three attempts, each dying on `The job was not acquired by Runner of type hosted`. It builds: `makepkg` produced it twice on this laptop the same evening from the same `PKGBUILD`, tests and all. What it lacks is a public build log, and shipping a Linux package built on the maintainer's own machine beside two that were not is a provenance mismatch nobody downloading it could see. So it was left off, and the README's "From a release" route for Arch says so rather than pointing at a file that is not there.
+
+  **The tag never triggered the workflow either.** Three pushes of `v1.0.0`, three times no run created — same 15% webhook throttle. What did work was `gh workflow run release.yml --ref v1.0.0`, because a manual dispatch goes through the REST API rather than a webhook. That trigger did not exist when the tag was first pushed; it was added mid-release for exactly this reason, and it is the single most useful thing this milestone learned about its own release path. A workflow whose only door is an event with no retry is a workflow that can be locked out of its own repository.
+
+  The guards did fire, and they passed: the tag-versus-manifest check ran and agreed on every attempt. The composition check in `publish` never ran, because `publish` never ran.
 - **Criteria 2 and 4's install halves.** `pacman -U` and `apt install` both need root, and the second needs a Debian machine this project does not have. The *layouts* are read out of both archives, which is the argument standing in for the observation. It is not the observation: "installs to `/usr/bin/parachron`" and "an archive containing `usr/bin/parachron`" are different sentences, and only the first one covers a `postinst` that fails or a file conflict with another package.
 - **Criterion 2 and 4's "launches from the menu" halves.** Nothing here has launched Parachron from a desktop menu out of an installed package. The dependency lists are now measured rather than assumed, which is the specific failure that would have caused this, and the app-id chain is checked in three places by CI. Still an argument.
 - **Criterion 5, entirely.** No Windows machine. The `.exe` has never been run, so "runs on a clean Windows machine", "opens no console window" and "shows its own icon in Explorer and the taskbar" are all unobserved. `windows_subsystem = "windows"` covers the console clause on paper and `main.rs:7` has carried it since before this milestone; the icon is in the binary as a linked resource. Neither statement is a screenshot.
@@ -330,7 +336,7 @@ The genre is Chron8's, as this file already specified: a bolded noun phrase, wha
 
 ### The ratio, stated plainly
 
-Of thirteen criteria: **three are closed** — 8 (green in CI on Windows, and locally on Linux), 12 and 13. Three are verified in their layout or build half and open in their install half (2, 3, 4). One is half verified (7). Four are not verified at all (1, 5, 6, 11), and one has its mechanism proved and its observation outstanding (9). Criterion 10 is struck with the AUR, which removes a row rather than answering one.
+Of thirteen criteria: **three are closed** — 8 (green in CI on both Linux and Windows), 12 and 13. One is **two-thirds met**: criterion 1, with a published release carrying two of three assets. Three are verified in their layout or build half and open in their install half (2, 3, 4). One is half verified (7). Three are not verified at all (5, 6, 11), and one has its mechanism proved and its observation outstanding (9). Criterion 10 is struck with the AUR, which removes a row rather than answering one.
 
 That is not a milestone that passed. It is a milestone whose every writable part is written and whose every locally-checkable part is checked, waiting on two things no amount of further work here can supply: a Windows machine, and a person deciding to cut a release.
 
@@ -346,7 +352,9 @@ All acceptance criteria pass, which for the first time means "pass in CI and on 
 
 **The status is not `done`, and this is the deliberate part.** Three things stand between here and it, and none of them is writing:
 
-1. **A person pushes a `v*` tag.** Criterion 1 cannot begin without it, and criteria 2, 3, 4, 5, 7 and 11 all depend on assets that only a tag produces. This file has listed it as a human prerequisite from the first draft and `release.yml` triggers on nothing else.
+1. ~~**A person pushes a `v*` tag.**~~ — **done.** `v1.0.0` was pushed and Parachron 1.0.0 is published with two of three assets. What remains of this row is the third: attaching the `.pkg.tar.zst` once a runner can build it.
+
+   **And it must be attached rather than released again.** `release.yml`'s publish step calls `gh release create`, which refuses a release that already exists — so re-running the whole workflow against `v1.0.0` now fails at the last step even if every build succeeds. The remedy is `gh release upload v1.0.0 <file>` against a package the workflow built, or a `publish` job taught to fall back from `create` to `upload`. That is a real gap in a file this milestone otherwise read line by line, and it was invisible until a release existed to collide with.
 2. **Somebody runs the `.exe` on a real Windows machine** — for criterion 5 entirely, and for criterion 6's dialog half. The spike's artefact exists so this costs a download rather than a build.
 3. **The Visual C++ runtime question is answered** — `+crt-static` with a matching `/MT` C build, spiked and proven, or a README sentence conceding the redistributable. Right now criterion 5 has two blockers rather than one, and the second was discovered by reading an import table nobody had asked about.
 
