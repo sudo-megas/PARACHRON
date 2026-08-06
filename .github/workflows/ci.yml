@@ -110,12 +110,31 @@ jobs:
       - name: Report the cache result
         shell: bash
         run: |
+          # `cache-hit` is true **only** for an exact key match. A `restore-keys`
+          # prefix match restores the files anyway and saves most of the build,
+          # and the first version of this step reported that as a flat "MISS" —
+          # so a run that restored a cache and finished in three minutes instead
+          # of eighteen announced that its cache had missed. Criterion 9 asks
+          # for confirmation that the cache is hit rather than assumed, and a
+          # label that cannot tell a prefix restore from a cold build is not
+          # confirmation of anything.
+          #
+          # So the three states are distinguished, and the last line is an
+          # observation of the filesystem rather than an inference from a flag.
           if [ "${{ steps.mupdf-cache.outputs.cache-hit }}" = "true" ]; then
-            echo "MuPDF cache: HIT (exact key) — this run should not rebuild MuPDF."
+            echo "MuPDF cache: HIT on the exact key — nothing should rebuild."
           else
-            echo "MuPDF cache: MISS — MuPDF will be compiled from vendored source."
+            echo "MuPDF cache: no exact-key hit (lockfile or build.rs changed)."
           fi
+          echo "primary key: ${{ steps.mupdf-cache.outputs.cache-primary-key }}"
           echo "matched key: ${{ steps.mupdf-cache.outputs.cache-matched-key }}"
+
+          if [ -d target ]; then
+            echo "restored target/: $(du -sh target | cut -f1), $(find target -type f | wc -l) files"
+            echo "→ a prefix restore still happened; this is not a cold build."
+          else
+            echo "no target/ restored — this is a genuinely cold build."
+          fi
 
       - name: Formatting
         run: cargo fmt --all --check
