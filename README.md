@@ -75,12 +75,6 @@ The first build takes a few minutes — it compiles MuPDF from source. Later bui
 
 ### Arch Linux / CachyOS
 
-**From the AUR**
-
-```bash
-paru -S parachron      # or: yay -S parachron
-```
-
 **From the repository's PKGBUILD**
 
 ```bash
