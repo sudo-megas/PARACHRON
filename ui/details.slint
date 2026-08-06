@@ -9,29 +9,9 @@
 
 import { Palette } from "palette.slint";
 import { Strings } from "strings.slint";
-import { Btn } from "widgets.slint";
-
-/// A label above its value. Three of these, all the same shape.
-component DetailRow inherits VerticalLayout {
-    in property <string> label;
-    in property <string> value;
-
-    spacing: 4px;
-
-    Text {
-        text: root.label;
-        color: Palette.muted;
-        font-size: 12px;
-        letter-spacing: 1px;
-    }
-
-    Text {
-        text: root.value;
-        color: Palette.text;
-        font-size: 14px;
-        overflow: elide;
-    }
-}
+// `DetailRow` moved to `widgets.slint` in Chron8, when the About pane became its
+// second user.
+import { Btn, DetailRow } from "widgets.slint";
 
 export component Details inherits Rectangle {
     /// False when nothing is selected, or the selection is a folder that would

@@ -109,10 +109,11 @@ pub struct Manifest {
 
 /// A validated product (CORE §3 schema).
 ///
-/// The struct mirrors the schema in full. `link`, `warranty_start` and
-/// `warranty_end` have no reader until the details column in Chron4, which is
-/// what the allowance below is for; it comes off there.
-#[allow(dead_code)]
+/// The struct mirrors the schema in full. It carried an `#[allow(dead_code)]`
+/// from Chron1, for `link`, `warranty_start` and `warranty_end`, whose comment
+/// said it would come off in Chron4 when the details column gained readers for
+/// them. Chron4 shipped and the allowance did not; it comes off here, which is
+/// the compiler confirming those readers really do exist rather than us saying so.
 #[derive(Debug, Clone)]
 pub struct Product {
     /// Folder name under `products/` — the stable identity of the product.
@@ -246,9 +247,8 @@ fn first_line(message: &str) -> String {
 /// Render a date the way Parachron shows dates: `DD-MM-YYYY` (CORE §3).
 ///
 /// Storage stays ISO — this is the display half of that rule and the single
-/// place the conversion happens. Its first caller in the UI is the details
-/// column in Chron4; the tests below pin the behaviour until then.
-#[allow(dead_code)]
+/// place the conversion happens. Called by the details column, the export's
+/// summary page, and the About pane's release row.
 pub fn fmt_date(date: Date) -> String {
     let format = time::macros::format_description!("[day]-[month]-[year]");
     date.format(&format).unwrap_or_default()
@@ -440,6 +440,31 @@ pub fn folder_slug(name: &str) -> String {
     } else {
         slug.to_string()
     }
+}
+
+/// Fold a string for matching: the same letter mapping `folder_slug` uses, and
+/// none of its slugging.
+///
+/// Chron7 refused `folder_slug` for the export's suggested filename, and this is
+/// the same refusal for the same reason. Slugging lowercases, folds to ASCII
+/// *and* hyphenates — right for a directory that has to survive being rsynced
+/// onto Windows, wrong for anything a person reads or types. Search wants the
+/// folding half only, applied to both sides, so `sarj` finds `Şarj Cihazı` and
+/// `ŞARJ` finds it too.
+///
+/// The İ/ı mapping is not a nicety here either. `"İ".to_lowercase()` yields `i`
+/// followed by a combining dot above, so a serial like `İST-0042-ĞŞ` would be
+/// unmatchable by anything typed on a keyboard. [`fold`] already solves that
+/// once, for folder names; this is its second caller.
+///
+/// Folding happens *before* lowercasing, because `fold` maps both cases of every
+/// letter it knows to a single lowercase ASCII one — doing it the other way round
+/// would hand `İ` to `to_lowercase` and reintroduce the combining mark.
+pub fn search_fold(text: &str) -> String {
+    text.chars()
+        .map(|ch| fold(ch).unwrap_or(ch))
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
 }
 
 /// A folder name under `products_root` that nothing else has taken.
@@ -860,5 +885,142 @@ last_checked = 2026-07-01
                 ..
             }]
         ));
+    }
+
+    // ── Search folding (Chron8) ──────────────────────────────────────────
+
+    /// The property the search bar rests on. Query and field go through the same
+    /// fold, so any casing or accent combination of the query still reaches the
+    /// product. A fold applied to one side only is the bug that passes every
+    /// English fixture — `sarj` against a raw `Şarj Cihazı` fails, and so does a
+    /// folded query against a raw field — so both directions are asserted here.
+    #[test]
+    fn a_folded_query_finds_a_folded_field_in_any_casing_the_user_types() {
+        // The field as it sits in the vault, typed properly.
+        let field = search_fold("Şarj Cihazı");
+        for query in ["sarj", "ŞARJ", "Şarj", "SARJ", "şarj", "Cihaz", "cihazı"] {
+            let folded = search_fold(query);
+            assert!(
+                field.contains(&folded),
+                "{query:?} folded to {folded:?}, which is not inside {field:?}"
+            );
+        }
+
+        // The other direction: the field is the half that was typed carelessly,
+        // shouting and dotless, and a properly typed query still has to find it.
+        let shouted = search_fold("ŞARJ CİHAZI");
+        assert_eq!(
+            shouted, field,
+            "the same words in different cases must fold to the same string"
+        );
+        for query in ["şarj", "cihazı", "Cihazı"] {
+            let folded = search_fold(query);
+            assert!(
+                shouted.contains(&folded),
+                "{query:?} folded to {folded:?}, which is not inside {shouted:?}"
+            );
+        }
+    }
+
+    /// The Turkish dotted capital, pinned on its own, because Rust's
+    /// `"İ".to_lowercase()` yields `i` followed by U+0307 COMBINING DOT ABOVE.
+    /// A serial folded that way holds a character no keyboard produces, so
+    /// `İST-0042-ĞŞ` would be unmatchable by the very person who owns it.
+    /// [`fold`] runs *before* the lowercasing precisely so `to_lowercase` never
+    /// sees the letter; folding the other way round would reintroduce the mark
+    /// and this test is what would notice.
+    #[test]
+    fn a_dotted_capital_i_folds_to_a_bare_ascii_i_with_no_combining_mark() {
+        let dotted = search_fold("İ");
+        assert_eq!(dotted, "i");
+        assert!(
+            !dotted.contains('\u{0307}'),
+            "the fold left a combining dot above behind: {:?}",
+            dotted.chars().collect::<Vec<_>>()
+        );
+
+        let serial = search_fold("İST-0042-ĞŞ");
+        assert_eq!(serial, "ist-0042-gs");
+        assert!(
+            !serial.contains('\u{0307}'),
+            "a serial no keyboard can match: {:?}",
+            serial.chars().collect::<Vec<_>>()
+        );
+        // Typed off a keyboard, and typed by someone being careful. Both find it.
+        for query in ["ist", "İST", "İst", "0042", "ğş", "ĞŞ"] {
+            let folded = search_fold(query);
+            assert!(
+                serial.contains(&folded),
+                "{query:?} folded to {folded:?}, which is not inside {serial:?}"
+            );
+        }
+    }
+
+    /// Folding is not slugging, and the distinction is worth a test of its own
+    /// because reaching for `folder_slug` is a recurring mistake: Chron7 refused
+    /// it for the export's suggested filename and Chron8 refuses it again here,
+    /// one milestone later. Slugging lowercases, folds to ASCII *and*
+    /// hyphenates — right for a directory that has to survive being rsynced onto
+    /// Windows, wrong for anything a person reads or types. A search that
+    /// slugged its input would hyphenate the space and stop matching the moment
+    /// somebody typed two words.
+    #[test]
+    fn folding_keeps_what_a_person_typed_where_slugging_would_rewrite_it() {
+        let folded = search_fold("Şarj Cihazı");
+        assert_eq!(folded, "sarj cihazi", "the space is part of what was typed");
+        assert_eq!(folder_slug("Şarj Cihazı"), "sarj-cihazi");
+        assert_ne!(
+            folded,
+            folder_slug("Şarj Cihazı"),
+            "if these two ever agree, one of them has taken on the other's job"
+        );
+        // The consequence, stated as the search sees it: a two-word query.
+        assert!(folded.contains(&search_fold("arj Cih")));
+
+        // Punctuation survives instead of collapsing into hyphens, so a serial
+        // can be searched for the way it is printed on the box.
+        assert_eq!(search_fold("Dell // U2724D!!"), "dell // u2724d!!");
+        assert_eq!(folder_slug("Dell // U2724D!!"), "dell-u2724d");
+
+        // No truncation either. A slug is capped at SLUG_MAX because a path has
+        // a length limit; a query has no such thing, and a cap here would mean a
+        // long product name stopped matching its own tail.
+        let long = "very long name ".repeat(40);
+        assert!(long.len() > SLUG_MAX);
+        assert_eq!(search_fold(&long), long, "the fold shortened a long field");
+
+        // A script the fold table has no entry for passes through unchanged
+        // rather than landing on `SLUG_FALLBACK` — a folder needs *a* name, but
+        // a query that turned into "product" would match every product there is.
+        assert_eq!(search_fold("日本語"), "日本語");
+        assert_eq!(folder_slug("日本語"), SLUG_FALLBACK);
+    }
+
+    /// An empty query folds to an empty string rather than to a fallback name.
+    /// That is what lets the caller read "nothing typed" as "match everything":
+    /// every string contains `""`. `folder_slug` substitutes `SLUG_FALLBACK`
+    /// here, which as a query would match only the products whose names happen
+    /// to contain the word.
+    #[test]
+    fn an_empty_string_folds_to_an_empty_string_and_not_to_a_fallback() {
+        assert_eq!(search_fold(""), "");
+        assert_eq!(folder_slug(""), SLUG_FALLBACK);
+        assert!(search_fold("QD-OLED Monitor").contains(&search_fold("")));
+    }
+
+    /// The English path, which must not regress while the Turkish one is being
+    /// served: an ASCII string comes back with its case lowered and nothing else
+    /// touched — spaces, digits and hyphens all still where they were typed.
+    #[test]
+    fn an_ascii_string_is_unchanged_apart_from_its_case() {
+        assert_eq!(search_fold("QD-OLED Monitor"), "qd-oled monitor");
+        assert_eq!(search_fold("IronWolf Pro 6TB"), "ironwolf pro 6tb");
+        assert_eq!(search_fold("ABC123XYZ"), "abc123xyz");
+        assert_eq!(search_fold("  spaced   out  "), "  spaced   out  ");
+
+        // Folding is a fixed point on its own output, which is what makes it
+        // safe for a caller to fold a string it is not sure was folded already.
+        let once = search_fold("Şarj Cihazı");
+        assert_eq!(search_fold(&once), once);
     }
 }

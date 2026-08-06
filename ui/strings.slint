@@ -17,7 +17,7 @@ export global Strings {
     // Product list
     in property <string> list-empty;
 
-    // Placeholders (the details column is fleshed out in Chron4)
+    // Shown in place of a column that has nothing to say yet
     in property <string> select-prompt;
     in property <string> details-placeholder;
 
@@ -72,4 +72,29 @@ export global Strings {
     in property <string> menu-language;
     in property <string> lang-english;
     in property <string> lang-turkish;
+
+    // Search (Chron8). The query is user data and lives on the window, not here.
+    in property <string> search-placeholder;
+    in property <string> search-no-matches;
+    in property <string> search-clear;
+
+    // About (Chron8). Labels only. The version, the build date and the licence id
+    // come from `Cargo.toml` and `build.rs` and arrive as window properties, and
+    // the bundled licence text arrives the same way — none of the four is UI copy
+    // and none of them translates.
+    in property <string> about-glyph;
+    in property <string> about-wordmark;
+    in property <string> about-subtitle;
+    in property <string> about-maker;
+    in property <string> about-maker-name;
+    in property <string> about-version;
+    in property <string> about-released;
+    in property <string> about-source;
+    in property <string> about-source-url;
+    in property <string> about-docs;
+    in property <string> about-docs-url;
+    in property <string> about-not-links;
+    in property <string> about-license;
+    in property <string> about-read-license;
+    in property <string> about-motto;
 }

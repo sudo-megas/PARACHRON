@@ -77,11 +77,22 @@ impl SortMode {
 
 pub struct Vault {
     products_root: PathBuf,
-    /// In display order — the same order as the rows on screen, so the index a
-    /// click carries indexes this directly.
+    /// Every entry on disk, in sort order.
+    ///
+    /// **Not** the same order as the rows on screen since Chron8: the search bar
+    /// filters, so a row index and an entry index are two different numbers.
+    /// [`Vault::visible`] is the map between them, and every index handed to or
+    /// taken from the window goes through it.
     entries: Vec<Entry>,
     sort: SortMode,
+    /// What the search bar holds. Session state: never written to `config.toml`,
+    /// because a sort that survives a restart reorders and a filter that survives
+    /// one *hides*.
+    query: String,
     /// Folder of the selected product, or `None`.
+    ///
+    /// Independent of the filter. A query that excludes the open product narrows
+    /// the list, not the app — the invoice stays on screen.
     selected: Option<String>,
     lang: Lang,
     /// Read once at startup, while the process was still single-threaded.
@@ -94,7 +105,27 @@ pub struct Vault {
 /// has been dropped.
 struct Update {
     rows: Vec<ProductItem>,
+    /// Which row is highlighted, or `-1` for none.
+    ///
+    /// Since Chron8 this is a row index rather than an entry index, and `-1` no
+    /// longer means "nothing is selected" — a filter can hide the selected
+    /// product's row while the product is still open. `open` is that question.
     index: i32,
+    /// Whether a product is selected at all, whatever the filter is showing.
+    ///
+    /// This gates the viewer, and `index` no longer can. Chron3 recorded that
+    /// `selected-index` passing through `-1` tears the viewer down and rebuilds
+    /// it at the cost of the resize debounce; before the search bar, `-1` and
+    /// "no selection" were the same state, and now they are not.
+    open: bool,
+    /// Whether the viewer needs to hear about this update at all.
+    ///
+    /// False for a query change. Typing cannot change which product is selected,
+    /// so the document, its page and its zoom are all still right — and Chron6
+    /// found that a re-plan bumps the viewer's generation token and issues a
+    /// fresh render, "a visible blink for no reason" on a large invoice. At the
+    /// rate a query is typed that would be one blink per keystroke.
+    view: bool,
     /// The three `selected-*` values the row click writes optimistically on the
     /// Slint side, which go stale the moment the model is rebuilt.
     name: SharedString,
@@ -120,37 +151,69 @@ impl Vault {
     }
 
     /// Point the vault at the product on row `index`.
+    ///
+    /// `index` is a row on screen. Since Chron8 that is not an index into
+    /// `entries` — the filter sits between them — so it is mapped back through
+    /// the same visible set the rows were built from. Getting this wrong does not
+    /// crash; it selects a different product than the one clicked, which is why
+    /// there is a test that clicks a row in a filtered list and asserts on the
+    /// folder that comes back.
     fn plan_select(&mut self, index: usize) -> Update {
         self.selected = self
-            .entries
+            .visible()
             .get(index)
-            .map(|entry| entry.folder().to_string());
+            .map(|&entry| self.entries[entry].folder().to_string());
         self.plan(false)
     }
 
-    /// Sort, rebuild the rows, and work out everything the window needs.
+    /// The entries the query lets through, as indices into `entries`, in the
+    /// order they appear on screen.
+    ///
+    /// Does not sort: `plan` sorts before it calls this, and `plan_select` is
+    /// looking up a row that the last `plan` already laid out, so the order is
+    /// the one the user clicked on.
+    fn visible(&self) -> Vec<usize> {
+        let needle = data::search_fold(&self.query);
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| matches(entry, &needle))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Sort, filter, rebuild the rows, and work out everything the window needs.
     fn plan(&mut self, keep_view: bool) -> Update {
+        self.plan_with(keep_view, true)
+    }
+
+    /// [`Vault::plan`], with a say in whether the viewer is told.
+    fn plan_with(&mut self, keep_view: bool, view: bool) -> Update {
         sort_entries(&mut self.entries, self.sort);
 
-        let rows: Vec<ProductItem> = self
-            .entries
+        let visible = self.visible();
+        let rows: Vec<ProductItem> = visible
             .iter()
-            .map(|entry| row(entry, self.lang))
+            .map(|&entry| row(&self.entries[entry], self.lang))
             .collect();
 
-        let position = self
+        // Two different questions, and only the first one clears the selection.
+        // Is the selected folder still on disk? Then the product stays open even
+        // if the query is hiding its row. Is it gone — deleted outside the app,
+        // or renamed? Then everything about it goes, `broken` included: a stale
+        // `true` would paint the "select a product" prompt in the error colour.
+        let entry = self
             .selected
             .as_deref()
             .and_then(|folder| self.entries.iter().position(|e| e.folder() == folder));
 
-        let Some(index) = position else {
-            // The selection is gone — deleted outside the app, or renamed. Every
-            // part of it goes, `broken` included: a stale `true` would paint the
-            // "select a product" prompt in the error colour.
+        let Some(entry) = entry else {
             self.selected = None;
             return Update {
                 rows,
                 index: -1,
+                open: false,
+                view,
                 name: SharedString::new(),
                 detail: SharedString::new(),
                 broken: false,
@@ -161,9 +224,19 @@ impl Vault {
             };
         };
 
-        let item = &rows[index];
+        // Where that entry sits among the rows, if the query is showing it at
+        // all. `None` means the product is open and its row is filtered out.
+        let index = visible
+            .iter()
+            .position(|&candidate| candidate == entry)
+            .map(|row| row as i32)
+            .unwrap_or(-1);
+
+        // Built from the entry rather than read out of `rows`, because `rows` may
+        // legitimately not contain it.
+        let item = row(&self.entries[entry], self.lang);
         let (name, detail, broken) = (item.name.clone(), item.detail.clone(), item.broken);
-        let doc = match &self.entries[index] {
+        let doc = match &self.entries[entry] {
             Entry::Ok(product) => Some(DocSet::of(product)),
             // A folder that will not parse has no documents to show; column 2
             // keeps Chron1's reason display instead of the viewer.
@@ -173,11 +246,13 @@ impl Vault {
         // Today is re-read here rather than cached at startup, so a window left
         // open overnight shows the right countdown in the morning.
         let details =
-            details::Snapshot::of(self.entries.get(index), self.lang, data::today(self.offset));
+            details::Snapshot::of(self.entries.get(entry), self.lang, data::today(self.offset));
 
         Update {
             rows,
-            index: index as i32,
+            index,
+            open: true,
+            view,
             name,
             detail,
             broken,
@@ -186,6 +261,16 @@ impl Vault {
             sort: self.sort.chip(),
             keep_view,
         }
+    }
+
+    /// Narrow the list.
+    ///
+    /// Not a change of product, and deliberately not a change to the viewer: the
+    /// document on screen stays open at the same page and zoom even when the
+    /// query hides its row.
+    fn plan_query(&mut self, query: String) -> Update {
+        self.query = query;
+        self.plan_with(true, false)
     }
 
     /// Reorder the list. `Added` is CORE §4's default and what an active chip
@@ -236,6 +321,10 @@ pub fn install(
         products_root,
         entries,
         sort,
+        // Always empty at startup. The query is not persisted, so the app never
+        // opens showing three of eleven products with a filter the user has
+        // forgotten they typed.
+        query: String::new(),
         selected: None,
         lang,
         offset,
@@ -265,6 +354,19 @@ pub fn install(
         move |mode| {
             let Some(app) = weak.upgrade() else { return };
             let update = vault.borrow_mut().plan_sort(SortMode::from_chip(mode));
+            push(&app, &viewer, update);
+        }
+    });
+
+    app.on_search_changed({
+        let vault = Rc::clone(&vault);
+        let viewer = Rc::clone(&viewer);
+        let weak = app.as_weak();
+        move |query| {
+            let Some(app) = weak.upgrade() else { return };
+            // Same two-phase shape as every other handler: compute while
+            // borrowed, push once the borrow is gone.
+            let update = vault.borrow_mut().plan_query(query.to_string());
             push(&app, &viewer, update);
         }
     });
@@ -321,13 +423,18 @@ fn push(app: &AppWindow, viewer: &Viewer, update: Update) {
     // Before the index, so the broken pane can never compose an old name with
     // a new reason.
     app.set_selected_broken(update.broken);
-    // Straight to its final value. Passing through -1 on the way would gate off
-    // the conditional that hosts the viewer, tearing it down and paying the
-    // resize debounce to build it again.
+    // Before the index too, and this is the one that hosts the viewer. Chron3's
+    // warning — that `selected-index` passing through -1 tears the viewer down
+    // and pays the resize debounce to build it again — is why the gate moved off
+    // the index in Chron8: a filter can legitimately send the index to -1 while
+    // the product stays open, and the document must not flicker when it does.
+    app.set_selected_open(update.open);
     app.set_selected_index(update.index);
     app.set_sort_mode(update.sort);
     details::show(app, &update.details);
-    viewer.show(app, update.doc, update.keep_view);
+    if update.view {
+        viewer.show(app, update.doc, update.keep_view);
+    }
 
     // Scroll last, and only after a layout pass. The list still reports the
     // previous model's height until it has laid out again, so scrolling here
@@ -339,6 +446,33 @@ fn push(app: &AppWindow, viewer: &Viewer, update: Update) {
             app.invoke_scroll_row_into_view(index);
         }
     });
+}
+
+/// Whether `entry` survives the folded query `needle`.
+///
+/// A product matches on its **name** or its **serial number** — the two things a
+/// person has in front of them when they go looking for a receipt. The purchase
+/// link is deliberately not matched: a row matching on text column 1 cannot show
+/// is a row the user cannot explain.
+///
+/// A broken folder matches on its **folder name**, which is the only text its row
+/// has. Hiding the entry somebody is hunting for would be the one thing this list
+/// has never done — Chron1 made a folder that will not parse visible on purpose,
+/// and a filter is not a licence to take that back.
+///
+/// An empty query matches everything, which is the case that has to be cheap: it
+/// is what the list is in for all but a few seconds of its life.
+fn matches(entry: &Entry, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    match entry {
+        Entry::Ok(product) => {
+            data::search_fold(&product.name).contains(needle)
+                || data::search_fold(&product.serial).contains(needle)
+        }
+        Entry::Broken { folder, .. } => data::search_fold(folder).contains(needle),
+    }
 }
 
 /// Order the list.
@@ -489,6 +623,246 @@ mod tests {
 
     fn folders(entries: &[Entry]) -> Vec<&str> {
         entries.iter().map(|entry| entry.folder()).collect()
+    }
+
+    /// A product with a serial, for the half of the search that column 1 never
+    /// shows. `product` leaves the serial empty because ordering never reads it.
+    fn serialled(folder: &str, name: &str, serial: &str) -> Entry {
+        let Entry::Ok(mut p) = product(folder, name, 1, 1) else {
+            unreachable!("product() builds an Ok entry")
+        };
+        p.serial = serial.to_string();
+        Entry::Ok(p)
+    }
+
+    fn a_vault(entries: Vec<Entry>) -> Vault {
+        Vault {
+            products_root: PathBuf::from("/nonexistent"),
+            entries,
+            sort: SortMode::Added,
+            query: String::new(),
+            selected: None,
+            lang: Lang::En,
+            offset: UtcOffset::UTC,
+        }
+    }
+
+    /// The folders behind the rows an update carries, in the order they appear.
+    fn shown(vault: &mut Vault) -> Vec<String> {
+        vault
+            .visible()
+            .into_iter()
+            .map(|entry| vault.entries[entry].folder().to_string())
+            .collect()
+    }
+
+    /// The rarest row in the app: `Paths::resolve` failed, so `main` synthesises
+    /// a broken entry with no folder name to put on it.
+    ///
+    /// It has always fallen back to the generic heading rather than rendering
+    /// blank — `row` branches on exactly this. Pinned here because an empty
+    /// `folder` in `main.rs` reads like a defect until you follow it, and this is
+    /// the assertion that answers the question without anybody having to.
+    #[test]
+    fn a_failure_with_no_folder_behind_it_still_reads() {
+        let entry = Entry::Broken {
+            folder: String::new(),
+            reason: DataError::NoHome,
+        };
+        let item = row(&entry, Lang::En);
+        let heading = strings::get(Lang::En, Key::BrokenTitle);
+
+        assert!(!item.label.is_empty());
+        assert!(item.label.as_str().contains(heading));
+        assert_eq!(item.name.as_str(), heading);
+        // The reason is the half that says what actually went wrong.
+        assert_eq!(item.detail.as_str(), strings::get(Lang::En, Key::ErrNoHome));
+        assert!(item.broken);
+        // And no orphaned separator where the folder name would have gone.
+        assert!(!item.name.as_str().ends_with(": "));
+    }
+
+    #[test]
+    fn an_empty_query_shows_everything() {
+        let mut vault = a_vault(vault());
+        let update = vault.plan(false);
+        assert_eq!(update.rows.len(), 4);
+    }
+
+    #[test]
+    fn a_query_narrows_the_list_to_matching_names() {
+        let mut vault = a_vault(vault());
+        let update = vault.plan_query("iron".to_string());
+        assert_eq!(update.rows.len(), 1);
+        assert_eq!(shown(&mut vault), ["drive"]);
+    }
+
+    /// The serial is the other half of CORE §4's "name and serial", and it is the
+    /// half that matters when somebody is holding a warranty card: the number
+    /// printed on it is not shown in column 1 at all, so a search that only
+    /// matched what is visible would miss the one field they can read out.
+    #[test]
+    fn a_query_matches_a_serial_the_list_never_shows() {
+        let mut vault = a_vault(vec![
+            serialled("mouse", "Wireless Mouse", "MX-9182-QT"),
+            serialled("dock", "Thunderbolt Dock", "TB-4471-KL"),
+        ]);
+        let update = vault.plan_query("4471".to_string());
+        assert_eq!(update.rows.len(), 1);
+        assert_eq!(shown(&mut vault), ["dock"]);
+    }
+
+    /// Chron1 made a folder that will not parse visible on purpose, and a filter
+    /// is not a licence to take that back. Its folder name is the only text its
+    /// row carries, so that is what it matches on.
+    #[test]
+    fn a_broken_folder_matches_on_its_folder_name() {
+        let mut vault = a_vault(vault());
+        let update = vault.plan_query("broken".to_string());
+        assert_eq!(update.rows.len(), 1);
+        assert_eq!(shown(&mut vault), ["test-broken"]);
+    }
+
+    /// Both sides are folded, so any casing or accenting of the query finds the
+    /// product. The dotless-ı case is the one that would otherwise be
+    /// unreachable from a keyboard.
+    #[test]
+    fn matching_is_folded_on_both_sides() {
+        let mut vault = a_vault(vec![serialled("sarj", "Şarj Cihazı", "İST-0042-ĞŞ")]);
+
+        for query in ["sarj", "ŞARJ", "Şarj", "cihazi", "CIHAZI"] {
+            let update = vault.plan_query(query.to_string());
+            assert_eq!(update.rows.len(), 1, "{query:?} did not find Şarj Cihazı");
+        }
+
+        // And the serial, whose İ would become `i` plus a combining dot under a
+        // plain `to_lowercase` and stop matching anything typeable.
+        for query in ["ist", "İST", "0042"] {
+            let update = vault.plan_query(query.to_string());
+            assert_eq!(update.rows.len(), 1, "{query:?} did not find the serial");
+        }
+    }
+
+    /// The defect a filter introduces that does not crash.
+    ///
+    /// With the query on, row 0 is entry 2. Selecting "the first row" has to
+    /// resolve to `drive`; an implementation that indexed `entries` directly
+    /// would quietly select `keyboard` instead, and nothing would look wrong
+    /// until the user noticed they were reading the wrong invoice.
+    #[test]
+    fn a_row_index_is_not_an_entry_index_once_a_filter_is_on() {
+        let mut vault = a_vault(vault());
+        vault.plan_query("iron".to_string());
+
+        // The unfiltered order, so the test states the trap rather than assuming
+        // the reader will spot it.
+        assert_eq!(
+            folders(&vault.entries),
+            ["keyboard", "monitor", "drive", "test-broken"]
+        );
+
+        let update = vault.plan_select(0);
+        assert_eq!(vault.selected.as_deref(), Some("drive"));
+        assert_eq!(update.index, 0);
+        assert!(update.open);
+    }
+
+    /// A query that excludes the open product narrows the *list*, not the app.
+    ///
+    /// `index` goes to -1 because no row is highlighted, and `open` stays true
+    /// because the invoice is still on screen. Before Chron8 those were one flag,
+    /// and Chron3 recorded what conflating them costs: the viewer is torn down
+    /// and rebuilt through the resize debounce.
+    #[test]
+    fn a_filter_that_hides_the_selection_keeps_the_product_open() {
+        let mut vault = a_vault(vault());
+        vault.plan_query(String::new());
+        vault.plan_select(1);
+        assert_eq!(vault.selected.as_deref(), Some("monitor"));
+
+        let update = vault.plan_query("iron".to_string());
+        assert_eq!(update.index, -1, "no row should be highlighted");
+        assert!(update.open, "the product is still open behind the filter");
+        assert_eq!(vault.selected.as_deref(), Some("monitor"));
+        // And the pane still describes the product it is showing, not nothing.
+        assert!(update.name.contains("Monitor"));
+
+        // Clearing the query brings its row back, and the selection never moved.
+        let update = vault.plan_query(String::new());
+        assert_eq!(vault.selected.as_deref(), Some("monitor"));
+        assert!(update.index >= 0, "the row should be back");
+        assert!(update.open);
+    }
+
+    /// The other reason `index` can be -1, which has to keep behaving as it did:
+    /// the folder is gone from disk, so the selection really is nothing.
+    #[test]
+    fn a_selection_that_left_the_vault_is_cleared_rather_than_kept_open() {
+        let mut vault = a_vault(vault());
+        // `plan_select` maps a row through the *current* order, and only `plan`
+        // establishes one — so sort before clicking, exactly as the window does.
+        vault.plan(false);
+        vault.plan_select(1);
+        assert_eq!(vault.selected.as_deref(), Some("monitor"));
+
+        vault.entries.retain(|entry| entry.folder() != "monitor");
+        let update = vault.plan(false);
+
+        assert_eq!(update.index, -1);
+        assert!(!update.open, "nothing is selected any more");
+        assert_eq!(vault.selected, None);
+        assert!(update.name.is_empty());
+        // `broken` has to go with it, or the "select a product" prompt renders in
+        // the error colour.
+        assert!(!update.broken);
+    }
+
+    /// Typing cannot change which product is selected, so the viewer is not told.
+    ///
+    /// Chron6 found that a re-plan bumps the viewer's generation token and issues
+    /// a fresh render — "a visible blink for no reason" on a large invoice. At the
+    /// rate a query is typed that would be one blink per keystroke. Every other
+    /// route still tells the viewer, which is what the second half asserts: this
+    /// is a narrow exemption, not the viewer being cut out of the loop.
+    #[test]
+    fn a_query_change_leaves_the_viewer_alone_and_nothing_else_does() {
+        let mut vault = a_vault(vault());
+
+        assert!(!vault.plan_query("iron".to_string()).view);
+        assert!(!vault.plan_query(String::new()).view);
+
+        assert!(vault.plan_select(0).view);
+        assert!(vault.plan_sort(SortMode::Name).view);
+        assert!(vault.plan(true).view);
+    }
+
+    /// A query nothing matches empties the list rather than falling back to
+    /// showing everything, which is the tempting way to "helpfully" recover and
+    /// would leave the user unable to tell that their query did anything at all.
+    #[test]
+    fn a_query_nothing_matches_shows_no_rows() {
+        let mut vault = a_vault(vault());
+        let update = vault.plan_query("zzzznothing".to_string());
+        assert!(update.rows.is_empty());
+    }
+
+    /// The filter and the sort compose: narrowing does not reshuffle what is
+    /// left, and re-sorting does not un-narrow it.
+    #[test]
+    fn the_filter_and_the_sort_do_not_interfere() {
+        let mut vault = a_vault(vault());
+        vault.plan_sort(SortMode::Name);
+        let update = vault.plan_query("o".to_string());
+
+        let rows = shown(&mut vault);
+        assert_eq!(update.rows.len(), rows.len());
+
+        // Alphabetical by name — Alice Keyboard, IronWolf Pro, QD-OLED Monitor —
+        // with the broken folder still last. It survives the query on its folder
+        // name (`test-broken` has an `o` in it), which is the point: filtering
+        // does not lift the rule that an unreadable folder sinks to the end
+        // rather than being buried halfway down an alphabetical list.
+        assert_eq!(rows, ["keyboard", "drive", "monitor", "test-broken"]);
     }
 
     #[test]

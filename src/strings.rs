@@ -2,7 +2,14 @@
 //!
 //! CORE §4: every user-visible string in Parachron lives here and nowhere
 //! else — no literals in `.slint` files, none in the rest of the Rust code.
-//! English is complete; Turkish keys are all present and may lag until Chron6.
+//! Both languages are complete and have been since Chron6; a key whose two
+//! sides are the same string is a deliberate entry in `SAME_IN_BOTH`, not an
+//! unfinished translation.
+//!
+//! One thing on screen is not in this table, by decision rather than omission:
+//! the AGPL text the About pane shows. It is a legal instrument quoted verbatim
+//! from the repository's own `LICENSE`, not UI copy, and paraphrasing it into an
+//! `(en, tr)` pair would be a misrepresentation. See `about.rs`.
 
 /// The two languages Parachron ships (CORE §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -86,7 +93,7 @@ pub enum Key {
     BrokenPrefix,
     WarnPrefix,
 
-    // Placeholders (the details column is fleshed out in Chron4)
+    // Shown in place of a column that has nothing to say yet
     SelectPrompt,
     DetailsPlaceholder,
 
@@ -187,6 +194,33 @@ pub enum Key {
     ErrEncrypted,
     ErrNoPages,
     ErrRenderFailed,
+
+    // Search (Chron8). The query itself is user data and never translates; these
+    // three are the chrome around it.
+    SearchPlaceholder,
+    SearchNoMatches,
+    SearchClear,
+
+    // About (Chron8). The wordmark, the maker's name, the two addresses and the
+    // glyph are the same in both tables — see `SAME_IN_BOTH` for why each one is.
+    // The version, the build date and the licence id are *not* here at all: they
+    // come from `Cargo.toml` and `build.rs`, so writing them down again is the
+    // one thing that could make the pane disagree with the manifest.
+    AboutGlyph,
+    AboutWordmark,
+    AboutSubtitle,
+    AboutMaker,
+    AboutMakerName,
+    AboutVersion,
+    AboutReleased,
+    AboutSource,
+    AboutSourceUrl,
+    AboutDocs,
+    AboutDocsUrl,
+    AboutNotLinks,
+    AboutLicense,
+    AboutReadLicense,
+    AboutMotto,
 }
 
 impl Key {
@@ -285,6 +319,24 @@ impl Key {
         Key::ErrEncrypted,
         Key::ErrNoPages,
         Key::ErrRenderFailed,
+        Key::SearchPlaceholder,
+        Key::SearchNoMatches,
+        Key::SearchClear,
+        Key::AboutGlyph,
+        Key::AboutWordmark,
+        Key::AboutSubtitle,
+        Key::AboutMaker,
+        Key::AboutMakerName,
+        Key::AboutVersion,
+        Key::AboutReleased,
+        Key::AboutSource,
+        Key::AboutSourceUrl,
+        Key::AboutDocs,
+        Key::AboutDocsUrl,
+        Key::AboutNotLinks,
+        Key::AboutLicense,
+        Key::AboutReadLicense,
+        Key::AboutMotto,
     ];
 }
 
@@ -470,6 +522,60 @@ fn table(key: Key) -> (&'static str, &'static str) {
         ),
         ErrNoPages => ("This PDF has no pages", "Bu PDF hiç sayfa içermiyor"),
         ErrRenderFailed => ("This page could not be shown", "Bu sayfa görüntülenemedi"),
+
+        // An imperative in both, because it sits inside the box it describes and
+        // is an instruction rather than a title. `ara` is the imperative of
+        // *aramak*; the noun would be `arama`.
+        SearchPlaceholder => ("Search products", "Ürünlerde ara"),
+        // Deliberately not `ListEmpty`. That one means "there is nothing in your
+        // vault", and telling somebody their vault is empty because they mistyped
+        // four characters is the most alarming sentence this app could produce.
+        SearchNoMatches => (
+            "No products match your search.",
+            "Aramanızla eşleşen ürün yok.",
+        ),
+        SearchClear => ("Clear search", "Aramayı temizle"),
+
+        // The strip's glyph in CORE §4's wireframe: `[ⓘ About]`. A glyph, so the
+        // same in both, like `‹` and `⧉`.
+        AboutGlyph => ("ⓘ", "ⓘ"),
+        // The wordmark, letter-spaced by the pane rather than by the string, so
+        // the spacing is a layout decision and not something a translator could
+        // accidentally change.
+        AboutWordmark => ("P A R A C H R O N", "P A R A C H R O N"),
+        // CORE §10, settled in Chron8.
+        AboutSubtitle => ("Paper Vault", "Belge Kasası"),
+        AboutMaker => ("Maker", "Yapımcı"),
+        // A GitHub account name (CORE §1). Not a word in either language.
+        AboutMakerName => ("sudo-megas", "sudo-megas"),
+        AboutVersion => ("Version", "Sürüm"),
+        AboutReleased => ("Release date", "Yayın tarihi"),
+        AboutSource => ("Source code", "Kaynak kodu"),
+        AboutSourceUrl => (
+            "https://github.com/sudo-megas/PARACHRON",
+            "https://github.com/sudo-megas/PARACHRON",
+        ),
+        // `Dokümantasyon` rather than `Belgeler`: `Belgeler` is already what
+        // `FieldDocuments` calls a product's PDFs, and using it for a link to the
+        // project's documentation would make one word mean two things in one app.
+        AboutDocs => ("Docs", "Dokümantasyon"),
+        AboutDocsUrl => (
+            "https://github.com/sudo-megas/PARACHRON#readme",
+            "https://github.com/sudo-megas/PARACHRON#readme",
+        ),
+        // CORE §4's app-wide principle, said to the user rather than only in the
+        // specification: Parachron never opens an external address.
+        AboutNotLinks => (
+            "These addresses are not links. Parachron never opens external \
+             addresses — copy one and paste it into your browser.",
+            "Bu adresler bağlantı değildir. Parachron hiçbir zaman dış adres \
+             açmaz — birini kopyalayıp tarayıcınıza yapıştırın.",
+        ),
+        AboutLicense => ("License", "Lisans"),
+        AboutReadLicense => ("Read the full license", "Tam lisansı oku"),
+        // CORE §10, settled in Chron8. JADEITE's motto, carried across as a
+        // maker's signature rather than a second description of the app.
+        AboutMotto => ("Built with Reason and Passion", "Akıl ve Tutkuyla"),
     }
 }
 
@@ -528,6 +634,15 @@ mod tests {
         // wrong one can recognise their own.
         Key::LangEnglish,
         Key::LangTurkish,
+        // About (Chron8). The wordmark is the wordmark; `sudo-megas` is a GitHub
+        // account name; the two addresses are addresses, and CORE §4 has the app
+        // never open one, so they are shown as text and copied as text; and the
+        // strip's glyph carries no word, like every other glyph above.
+        Key::AboutWordmark,
+        Key::AboutMakerName,
+        Key::AboutSourceUrl,
+        Key::AboutDocsUrl,
+        Key::AboutGlyph,
     ];
 
     #[test]
@@ -566,17 +681,50 @@ mod tests {
         assert!(!get(Lang::Tr, Key::ActionExport).contains('İ'));
     }
 
+    /// Whether `keys` lists anything twice, adjacent or not.
+    fn has_duplicate(keys: &[Key]) -> bool {
+        let mut seen: Vec<Key> = keys.to_vec();
+        let before = seen.len();
+        seen.sort_by_key(|key| format!("{key:?}"));
+        seen.dedup();
+        before != seen.len()
+    }
+
+    /// The duplicate check has to catch a repeat that is not adjacent, which is
+    /// the case the first version of it silently passed: `Vec::dedup` collapses
+    /// consecutive equal elements only, so `[A, B, A]` survived it untouched.
+    #[test]
+    fn a_duplicate_is_caught_wherever_it_sits() {
+        assert!(!has_duplicate(&[Key::AppTitle, Key::NavAbout, Key::ListEmpty]));
+        // Adjacent — caught by the old version too.
+        assert!(has_duplicate(&[Key::AppTitle, Key::AppTitle]));
+        // Separated, which is the one that used to get through.
+        assert!(has_duplicate(&[
+            Key::AppTitle,
+            Key::NavAbout,
+            Key::ListEmpty,
+            Key::AppTitle,
+        ]));
+    }
+
     #[test]
     fn the_key_list_covers_the_whole_enum() {
         // `table()` matches exhaustively, so a key missing from `Key::ALL` is
         // the only way a string can go untested. Catch it by counting.
         let mut seen: Vec<Key> = Key::ALL.to_vec();
         let before = seen.len();
+        // Sorted before the dedup, which is the whole point of this line.
+        // `Vec::dedup` removes *consecutive* repeats only, so the first version
+        // of this test — a bare `dedup()` on the declaration-ordered list — would
+        // have passed a key listed twice with anything at all between the two
+        // copies. `Key` is not `Ord`, so sort by the discriminant's debug name,
+        // which is stable and unique per variant.
+        seen.sort_by_key(|key| format!("{key:?}"));
         seen.dedup();
         assert_eq!(before, seen.len(), "Key::ALL contains a duplicate");
         assert_eq!(
             Key::ALL.len(),
-            88,
+            106,
             "Key::ALL is out of step with the enum — add the new key to it"
         );
     }

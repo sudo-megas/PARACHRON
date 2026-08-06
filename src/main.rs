@@ -6,6 +6,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod about;
 mod config;
 mod data;
 mod details;
@@ -79,6 +80,10 @@ fn main() -> Result<(), slint::PlatformError> {
     // Column 3. The vault computes its contents while it is already deciding
     // what the list looks like; this only wires up copying the link.
     let _details = details::install(&app, Rc::clone(&vault));
+
+    // The About pane. Four values pushed once and two clipboard callbacks — it
+    // takes no language, because nothing it pushes is UI copy.
+    let _about = about::install(&app);
 
     // The add/edit sheet. It hands finished work to the vault, which is what
     // puts it on screen.
@@ -264,6 +269,24 @@ fn apply_strings(app: &AppWindow, lang: Lang) {
     table.set_menu_language(tr(lang, Key::MenuLanguage).into());
     table.set_lang_english(tr(lang, Key::LangEnglish).into());
     table.set_lang_turkish(tr(lang, Key::LangTurkish).into());
+    table.set_search_placeholder(tr(lang, Key::SearchPlaceholder).into());
+    table.set_search_no_matches(tr(lang, Key::SearchNoMatches).into());
+    table.set_search_clear(tr(lang, Key::SearchClear).into());
+    table.set_about_glyph(tr(lang, Key::AboutGlyph).into());
+    table.set_about_wordmark(tr(lang, Key::AboutWordmark).into());
+    table.set_about_subtitle(tr(lang, Key::AboutSubtitle).into());
+    table.set_about_maker(tr(lang, Key::AboutMaker).into());
+    table.set_about_maker_name(tr(lang, Key::AboutMakerName).into());
+    table.set_about_version(tr(lang, Key::AboutVersion).into());
+    table.set_about_released(tr(lang, Key::AboutReleased).into());
+    table.set_about_source(tr(lang, Key::AboutSource).into());
+    table.set_about_source_url(tr(lang, Key::AboutSourceUrl).into());
+    table.set_about_docs(tr(lang, Key::AboutDocs).into());
+    table.set_about_docs_url(tr(lang, Key::AboutDocsUrl).into());
+    table.set_about_not_links(tr(lang, Key::AboutNotLinks).into());
+    table.set_about_license(tr(lang, Key::AboutLicense).into());
+    table.set_about_read_license(tr(lang, Key::AboutReadLicense).into());
+    table.set_about_motto(tr(lang, Key::AboutMotto).into());
 }
 
 /// Shorthand for a string-table lookup.

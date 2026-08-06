@@ -29,6 +29,10 @@ toml = { version = "1.1.4", features = ["preserve_order"] }
 
 [build-dependencies]
 slint-build = "1.17.1"
+# `build.rs` stamps the date the binary was built, for the About pane's release
+# row (CORE §4). Already a dependency of the crate itself, so this costs a
+# feature resolution and no new download.
+time = { version = "0.3.55", features = ["macros", "formatting"] }
 
 [dev-dependencies]
 i-slint-backend-testing = "1.17.1"

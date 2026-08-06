@@ -10,6 +10,152 @@
 // things on screen that Chron5 could not theme.
 
 import { Palette } from "palette.slint";
+import { Strings } from "strings.slint";
+
+/// A label above its value.
+///
+/// Lived in `details.slint` while column 3 was its only user. The About pane is
+/// the second, and Chron5's rule is to lift a shared recipe on the second use
+/// rather than the third — "the cheap moment", and the one Chron1's and Chron2's
+/// two button copies went past before `Btn` existed.
+export component DetailRow inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+
+    spacing: 4px;
+
+    Text {
+        text: root.label;
+        color: Palette.muted;
+        font-size: 12px;
+        letter-spacing: 1px;
+    }
+
+    Text {
+        text: root.value;
+        color: Palette.text;
+        font-size: 14px;
+        overflow: elide;
+    }
+}
+
+/// The product list's search bar (CORE §4).
+///
+/// Full column width and a fixed height, for the reason CORE §10 records for the
+/// serial strip: it holds one line of text, and a bar that grew with the window
+/// would be absurd on a tall one. A fixed *width* inside a column that is itself
+/// a quarter of the window would sit in a widening pool of empty panel on any
+/// large monitor, which is the other half of the same argument.
+///
+/// Not `Field`: that one is form-shaped, with a label above and an error line
+/// below, and a search bar wants neither. What they share is the inner
+/// `TextInput` and its configuration.
+export component SearchBar inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    /// Emitted on every keystroke. The caller is expected to make this cheap —
+    /// `vault::plan_query` deliberately does not touch the viewer.
+    callback edited(string);
+    callback cleared();
+
+    height: 40px;
+    background: Palette.panel;
+
+    Rectangle {
+        x: 12px;
+        y: (parent.height - 28px) / 2;
+        width: parent.width - 24px;
+        height: 28px;
+        border-radius: 5px;
+        border-width: 1px;
+        border-color: input.has-focus ? Palette.accent : Palette.border;
+        background: Palette.bg;
+
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 4px;
+            spacing: 4px;
+
+            input := TextInput {
+                color: Palette.text;
+                font-size: 13px;
+                vertical-alignment: center;
+                single-line: true;
+                horizontal-stretch: 1;
+                accessible-label: Strings.search-placeholder;
+
+                edited => {
+                    root.edited(self.text);
+                }
+
+                key-pressed(event) => {
+                    // Escape clears rather than closing anything, because there
+                    // is nothing here to close. A filter the user cannot see the
+                    // end of is the thing worth having a key for.
+                    if (event.text == Key.Escape && self.text != "") {
+                        self.text = "";
+                        root.edited("");
+                        root.cleared();
+                        return accept;
+                    }
+                    reject
+                }
+            }
+
+            // Occupies no width until there is something to clear, so the field
+            // does not reflow as the first character is typed.
+            if root.text != "": clear := Rectangle {
+                width: 20px;
+
+                Text {
+                    text: Strings.remove-glyph;
+                    color: clear-touch.has-hover ? Palette.accent : Palette.muted;
+                    font-size: 12px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
+
+                clear-touch := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => {
+                        input.text = "";
+                        root.edited("");
+                        root.cleared();
+                    }
+                }
+
+                accessible-role: button;
+                accessible-label: Strings.search-clear;
+                accessible-action-default => {
+                    input.text = "";
+                    root.edited("");
+                    root.cleared();
+                }
+            }
+        }
+
+        // Behind the text, the way `Field`'s hint is, so an empty bar shows what
+        // it is for without spending a row on a label.
+        if input.text == "": Text {
+            x: 8px;
+            text: Strings.search-placeholder;
+            color: Palette.muted;
+            font-size: 13px;
+            vertical-alignment: center;
+            height: parent.height;
+        }
+    }
+
+    // Bottom hairline, matching the sort row above it.
+    Rectangle {
+        x: 0;
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: Palette.border;
+    }
+}
 
 /// A text button.
 export component Btn inherits Rectangle {

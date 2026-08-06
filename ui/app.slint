@@ -1,8 +1,9 @@
 // Parachron — main window (CORE §4).
 //
-// Three fixed columns at 25 / 50 / 25, minimum 1000×700. This milestone builds
-// the skeleton only: the list is live, the viewer and details panes are
-// placeholders that later Chrons fill in.
+// Three fixed columns at 25 / 50 / 25, minimum 1000×700. Column 1 holds the
+// sort chips, the search bar and the product list, with the About strip pinned
+// to its foot; column 2 is the document viewer; column 3 is the details panel.
+// About opens over columns 2 and 3 and leaves column 1 live.
 
 import { ListView } from "std-widgets.slint";
 import { Palette } from "palette.slint";
@@ -11,7 +12,8 @@ import { Viewer, DocTab } from "viewer.slint";
 import { FormSheet, FormDoc } from "form.slint";
 import { ThemeSheet, ThemeItem } from "theme.slint";
 import { Details } from "details.slint";
-import { Btn } from "widgets.slint";
+import { About, LicenseSheet } from "about.slint";
+import { Btn, SearchBar } from "widgets.slint";
 
 // Re-exported so Rust can reach the globals and the structs.
 //
@@ -133,8 +135,17 @@ export component AppWindow inherits Window {
     // Filled from Rust at startup.
     in property <[ProductItem]> products;
 
-    // Selection state. -1 means nothing is selected yet.
+    // Selection state.
+    //
+    // `selected-index` is which *row* is highlighted, and -1 means none is. Since
+    // Chron8 that is no longer the same question as whether a product is open:
+    // the search bar can hide the selected product's row while the product stays
+    // on screen, so -1 happens with a document still open. `selected-open` is the
+    // question the viewer is gated on, and it has to be, because Chron3 recorded
+    // that gating on the index makes a momentary -1 tear the viewer down and pay
+    // the resize debounce to rebuild it.
     in-out property <int> selected-index: -1;
+    in-out property <bool> selected-open: false;
     in-out property <string> selected-name;
     in-out property <string> selected-detail;
     in-out property <bool> selected-broken;
@@ -272,11 +283,38 @@ export component AppWindow inherits Window {
     in property <int> lang-mode;
     callback language-selected(int);
 
+    // ── Search (Chron8) ──────────────────────────────────────────────────
+    //
+    // `in-out` because the user types into it and the clear affordance writes it
+    // back to empty. What the user typed is their data, not UI copy: it never
+    // translates and it is never persisted.
+    in-out property <string> search-query;
+    callback search-changed(string);
+
+    // ── About (Chron8) ───────────────────────────────────────────────────
+    //
+    // Values, not labels. The labels live in the `Strings` global and follow a
+    // language switch; these four come from `Cargo.toml`, `build.rs` and the
+    // bundled `LICENSE`, and are language-independent — which is exactly why the
+    // About pane needs no refresh path even though column 1 stays live behind it.
+    in property <string> app-version;
+    in property <string> app-released;
+    in property <string> app-license-id;
+    in property <string> app-license-text;
+    in property <bool> about-source-copied;
+    in property <bool> about-docs-copied;
+    callback about-copy-source();
+    callback about-copy-docs();
+
     // Menu state is nobody's business but this file's, and so is whether the
     // theme picker is up: opening it is a UI gesture, and the only thing Rust
-    // needs to hear about is a row being chosen.
+    // needs to hear about is a row being chosen. About and its licence sheet are
+    // the same kind of thing — Rust fills them once and never needs to know
+    // whether they are on screen.
     property <bool> menu-open: false;
     property <bool> theme-open: false;
+    property <bool> about-open: false;
+    property <bool> license-open: false;
 
     callback theme-selected(int);
     callback product-selected(int);
@@ -442,6 +480,19 @@ export component AppWindow inherits Window {
                         }
                     }
 
+                    // ── Search (CORE §4) ─────────────────────────────
+                    //
+                    // Directly above the entries, under the sort chips. The
+                    // query goes straight to Rust on every keystroke; the vault
+                    // filters and rebuilds the rows without telling the viewer,
+                    // so typing never disturbs the open document.
+                    search := SearchBar {
+                        text <=> root.search-query;
+                        edited(query) => {
+                            root.search-changed(query);
+                        }
+                    }
+
                     Rectangle {
                         vertical-stretch: 1;
                         clip: true;
@@ -472,30 +523,50 @@ export component AppWindow inherits Window {
                                     mouse-cursor: MouseCursor.pointer;
                                     clicked => {
                                         root.selected-index = idx;
+                                        root.selected-open = true;
                                         root.selected-name = item.name;
                                         root.selected-detail = item.detail;
                                         root.selected-broken = item.broken;
+                                        // Choosing a product is choosing to look
+                                        // at it, so About steps out of the way.
+                                        // Otherwise the click lands, the
+                                        // selection changes, and nothing visible
+                                        // happens — a list that looks broken.
+                                        root.about-open = false;
                                         root.product-selected(idx);
                                     }
                                 }
                             }
                         }
 
+                        // Two empty lists, two different sentences. An empty
+                        // vault means "there is nothing here yet"; an empty
+                        // result means "nothing matched what you typed". Sharing
+                        // one string would tell somebody their vault was empty
+                        // because they mistyped four characters, which for an app
+                        // whose promise is keeping their documents is the most
+                        // alarming thing it could say.
                         if root.products.length == 0: Text {
                             x: 14px;
                             y: 18px;
                             width: parent.width - 28px;
-                            text: Strings.list-empty;
+                            text: root.search-query == ""
+                                ? Strings.list-empty
+                                : Strings.search-no-matches;
                             color: Palette.muted;
                             font-size: 13px;
                             wrap: word-wrap;
                         }
                     }
 
-                    // Fixed About strip (CORE §4). Inert until Chron8.
-                    Rectangle {
+                    // Fixed About strip (CORE §4), live since Chron8. It toggles:
+                    // the strip is both the way in and one of the ways out, so
+                    // there is never a pane on screen with no visible way back.
+                    about-strip := Rectangle {
                         height: 42px;
-                        background: Palette.panel;
+                        background: root.about-open
+                            ? Palette.selection
+                            : (about-touch.has-hover ? Palette.raised : Palette.panel);
 
                         Rectangle {
                             x: 0;
@@ -508,12 +579,40 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             padding-left: 14px;
                             padding-right: 14px;
+                            spacing: 6px;
+
                             Text {
-                                text: Strings.nav-about;
-                                color: Palette.muted;
+                                text: Strings.about-glyph;
+                                color: root.about-open ? Palette.text : Palette.muted;
                                 font-size: 13px;
                                 vertical-alignment: center;
                             }
+
+                            Text {
+                                text: Strings.nav-about;
+                                color: root.about-open ? Palette.text : Palette.muted;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        about-touch := TouchArea {
+                            mouse-cursor: MouseCursor.pointer;
+                            clicked => {
+                                root.about-open = !root.about-open;
+                            }
+                        }
+
+                        accessible-role: button;
+                        accessible-label: Strings.nav-about;
+                        accessible-checkable: true;
+                        accessible-checked: root.about-open;
+                        accessible-action-default => {
+                            root.about-open = !root.about-open;
                         }
                     }
                 }
@@ -538,12 +637,12 @@ export component AppWindow inherits Window {
 
                 // Nothing selected, or a folder that would not parse — the
                 // viewer has nothing to open, so Chron1's reason display stays.
-                if root.selected-index < 0 || root.selected-broken: VerticalLayout {
+                if !root.selected-open || root.selected-broken: VerticalLayout {
                     padding: 20px;
                     spacing: 12px;
 
                     Text {
-                        text: root.selected-index >= 0 ? root.selected-name : Strings.select-prompt;
+                        text: root.selected-open ? root.selected-name : Strings.select-prompt;
                         color: root.selected-broken ? Palette.danger : Palette.text;
                         font-size: 20px;
                         wrap: word-wrap;
@@ -559,7 +658,7 @@ export component AppWindow inherits Window {
                     Rectangle { vertical-stretch: 1; }
                 }
 
-                if root.selected-index >= 0 && !root.selected-broken: viewer := Viewer {
+                if root.selected-open && !root.selected-broken: viewer := Viewer {
                     x: 1px;
                     width: parent.width - 1px;
                     height: parent.height;
@@ -642,6 +741,49 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+
+            // ── About (CORE §4) ──────────────────────────────────────────
+            //
+            // Covers columns 2 and 3 exactly, declared after them so it draws
+            // over them. Column 1 stays live underneath, which is what CORE §4
+            // asks for: About replaces the *content*, not the app.
+            //
+            // Covering rather than replacing is deliberate, and it is the reason
+            // this is four lines instead of a restructure. Column 3's width is
+            // the remainder of what columns 1 and 2 left, so rounding can never
+            // open a seam — which means `col3` references `col2` by id, and an
+            // element inside an `if` cannot be referenced by id from a sibling.
+            // Wrapping both columns in one conditional would work and would cost
+            // a level of nesting through two hundred lines; not putting them in a
+            // conditional at all costs nothing and keeps every id exactly where
+            // `assert_columns` looks for it.
+            //
+            // It also means the viewer is never torn down by opening About, so
+            // coming back is instant rather than paying the resize debounce to
+            // rebuild a document that was already open — the same cost Chron3
+            // recorded for a `selected-index` that passes through -1.
+            if root.about-open: About {
+                x: col1.width;
+                y: 0;
+                width: body.width - col1.width;
+                height: body.height;
+
+                version: root.app-version;
+                released: root.app-released;
+                license-id: root.app-license-id;
+                source-copied: root.about-source-copied;
+                docs-copied: root.about-docs-copied;
+
+                copy-source => {
+                    root.about-copy-source();
+                }
+                copy-docs => {
+                    root.about-copy-docs();
+                }
+                read-license => {
+                    root.license-open = true;
+                }
+            }
         }
     }
 
@@ -687,7 +829,7 @@ export component AppWindow inherits Window {
                     label: Strings.action-edit-document;
                     // A folder whose manifest will not parse is repaired in a
                     // text editor, not guessed at by a form.
-                    enabled: root.selected-index >= 0 && !root.selected-broken;
+                    enabled: root.selected-open && !root.selected-broken;
                     clicked => {
                         root.menu-open = false;
                         root.edit-document();
@@ -794,6 +936,23 @@ export component AppWindow inherits Window {
         }
         closed => {
             root.theme-open = false;
+        }
+    }
+
+    // The bundled licence (CORE §4). A sheet rather than part of the About pane
+    // because it is the one thing here that has to scroll — 34KB of legal text
+    // in a pane sized for eleven short rows would be neither.
+    //
+    // Declared last so it draws over everything, About included: it is opened
+    // from the pane and returns to it.
+    if root.license-open: LicenseSheet {
+        width: root.width;
+        height: root.height;
+
+        text: root.app-license-text;
+
+        closed => {
+            root.license-open = false;
         }
     }
 }

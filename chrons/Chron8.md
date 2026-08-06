@@ -20,7 +20,7 @@ Chron9 then packages what this milestone leaves.
 
 ## Scope
 
-**In:** the About pane, swapped into the content area · the full licence text, bundled and readable in the app · `build.rs` stamping a build date · version and licence id read from the manifest at compile time · the column-1 search bar, matching name and serial, folded · the vault filtering as well as ordering · a no-matches state distinct from the empty-vault one · about twenty-five new string keys in both languages · CORE §10's two wording items closed · the 1000×700 floor enforced where a test can see it · the stale `#[allow(dead_code)]` allowances and stale doc comments cleared · the copy confirmation told the truth · the exhaustiveness test's duplicate hole closed · the `Paths::resolve` failure row given a folder to name.
+**In:** the About pane, swapped into the content area · the full licence text, bundled and readable in the app · `build.rs` stamping a build date · version and licence id read from the manifest at compile time · the column-1 search bar, matching name and serial, folded · the vault filtering as well as ordering · a no-matches state distinct from the empty-vault one · about twenty-five new string keys in both languages · CORE §10's two wording items closed · the 1000×700 floor enforced where a test can see it · the stale `#[allow(dead_code)]` allowances and stale doc comments cleared · the exhaustiveness test's duplicate hole closed · the `Paths::resolve` failure row given a folder to name.
 
 **Out (explicitly):** packaging, CI, the `.desktop` file, the `README.md` and everything that ships an artefact (Chron9) · searching *inside* documents, which is full-text search over PDFs and a different feature with an index behind it · matching the purchase link, which would let a row match on text column 1 cannot show · fuzzy or typo-tolerant matching, which turns "why did that match?" into a question with no answer a user can check · regular expressions · search history, saved searches, or persisting the query across a restart (Technical notes) · a keyboard shortcut to focus the bar, which is a shortcut scheme this app does not otherwise have and should not grow one corner of · a settings or preferences screen — theme and language have their routes already and CORE §4 describes no third one · a changelog or release-notes pane, which is what the repo is for · checking for updates, which is a network call in an app that has none · opening either URL, which CORE §4 forbids outright · a twelfth theme, a third language, deleting a product, warranty reminders, drag-and-drop — all refused by earlier milestones with their reasons, and none of them become polish by being listed under it · replacing column 1's `ListView` (see the open question below, which is the one thing in this file that is a question rather than a plan).
 
@@ -34,17 +34,15 @@ Seven milestones of honest bookkeeping, collected. Each item names where it was 
 
 **3. Four doc comments describe shipped milestones as forthcoming.** `strings.rs:5` still says Turkish "may lag until Chron6"; `config.rs:24` still says "the switch arrives in Chron6"; `app.slint:5` still calls the viewer and details panes "placeholders that later Chrons fill in"; `strings.rs:89` and `strings.slint:22` still head a group with "the details column is fleshed out in Chron4". Every one of them is now false, and a false comment is worse than none because it is read as current.
 
-**4. The copy confirmation fires whether or not anything was copied.** Chron4 decided clipboard failure is "a silent no-op — the text is on screen either way", and that decision is right about not raising a dialog. It is not right about the tick. `arboard` returns a `Result`, the confirmation is a boolean pushed on a timer regardless, and a user on a session where the clipboard is unavailable gets told their serial was copied and then pastes the last thing they actually copied. Saying nothing is a defensible silence; saying "copied" is a false statement.
+**4. `Key::ALL`'s duplicate check only catches adjacent duplicates.** The test dedups a `Vec` and compares lengths, and `Vec::dedup` removes *consecutive* repeats only. A key listed twice with anything between the two copies passes, and the count assertion beside it passes too because the count is bumped by hand to whatever the list is. The test's own comment calls the missing key "the one mistake this table invites" — this is the other one.
 
-**5. `Key::ALL`'s duplicate check only catches adjacent duplicates.** The test dedups a `Vec` and compares lengths, and `Vec::dedup` removes *consecutive* repeats only. A key listed twice with anything between the two copies passes, and the count assertion beside it passes too because the count is bumped by hand to whatever the list is. The test's own comment calls the missing key "the one mistake this table invites" — this is the other one.
+**5. A `Paths::resolve` failure is handled and untested.** `main.rs` synthesises an `Entry::Broken` with an empty `folder` when the data directory cannot be resolved. The row that comes out of that is fine — `vault::row` already branches on an empty folder and falls back to the `BrokenTitle` heading, so the list shows `⚠ Broken entry` with the reason under it rather than a blank. What it has never had is a test, which is why the state was easy to mistake for a defect. The work here is the test, not a fix.
 
-**6. A `Paths::resolve` failure produces a broken row with an empty folder name.** `main.rs` synthesises an `Entry::Broken` when the data directory cannot be resolved, and it has nothing to put in `folder`, so the list renders a broken entry labelled with nothing. It is the rarest state in the app and the only one with no name on it, and it has no test.
+**6. `ErrConfigSave` is printed to a stream that does not exist on one of the three targets.** It goes to `stderr`, after `app.hide()`, so on Linux it lands in a terminal the user probably did not launch from — and `main.rs:7` sets `windows_subsystem = "windows"` in release, so on Windows there is no stderr at all. The string is written, translated and unreachable. "Report, never fatal" is the right stance; reporting into a closed pipe is not reporting.
 
-**7. `ErrConfigSave` is printed to a stream that does not exist on one of the three targets.** It goes to `stderr`, after `app.hide()`, so on Linux it lands in a terminal the user probably did not launch from — and `main.rs:7` sets `windows_subsystem = "windows"` in release, so on Windows there is no stderr at all. The string is written, translated and unreachable. "Report, never fatal" is the right stance; reporting into a closed pipe is not reporting.
+**7. Two things nobody has watched happen.** Chron4: the countdown across midnight — "nobody left the app running overnight to watch it change." Chron2 criterion 7: the window staying responsive under a genuinely large render — "follows from the architecture … but was not measured under load." Both are named here so that Chron9 does not inherit them silently. Only one of them is cheap to close, and this milestone closes that one.
 
-**8. Two things nobody has watched happen.** Chron4: the countdown across midnight — "nobody left the app running overnight to watch it change." Chron2 criterion 7: the window staying responsive under a genuinely large render — "follows from the architecture … but was not measured under load." Both are named here so that Chron9 does not inherit them silently. Only one of them is cheap to close, and this milestone closes that one.
-
-**9. Persistence has never been verified end to end.** Chron5's criterion 3 and Chron6's criteria 6 and 7 all failed to close for the same mechanical reason: `xdotool windowclose` does not make the app exit under `Xvfb`, because `WM_DELETE_WINDOW` needs a window manager to route it, so `persist` never ran and `config.toml` was never rewritten. Three milestones have now written "an honest gap rather than a claim" about the same three lines in `main`. Clamping the loaded size (item 1) puts a second reader on that path, which makes it worth closing properly rather than for a fourth time.
+**8. Persistence has never been verified end to end.** Chron5's criterion 3 and Chron6's criteria 6 and 7 all failed to close for the same mechanical reason: `xdotool windowclose` does not make the app exit under `Xvfb`, because `WM_DELETE_WINDOW` needs a window manager to route it, so `persist` never ran and `config.toml` was never rewritten. Three milestones have now written "an honest gap rather than a claim" about the same three lines in `main`. Clamping the loaded size (item 1) puts a second reader on that path, which makes it worth closing properly rather than for a fourth time.
 
 ## Prerequisites
 
@@ -61,7 +59,6 @@ src/
 ├── vault.rs          # + the query beside the sort; plan() filters before it orders
 ├── main.rs           # + install about; + clamp the loaded window size
 ├── strings.rs        # + the About and search keys, SAME_IN_BOTH, the count
-├── details.rs        # copy confirmations tell the truth
 ├── config.rs         # the floor as a constant the loader can reach
 ├── data.rs           # + matching fold; the stale allowance off
 └── ui_tests.rs       # + the About and search sections
@@ -128,10 +125,9 @@ ui/
 
 - [ ] `config.rs`: `MIN_WIDTH` / `MIN_HEIGHT` constants beside the defaults, and `load` clamps `window_width`/`window_height` up to them
 - [ ] `main.rs`: size the shown window from the clamped values, so the floor holds without a window manager's help
-- [ ] `details.rs`: the copy confirmation is shown only when the clipboard write succeeded; a failure stays silent, as Chron4 decided, but stops claiming otherwise
 - [ ] `data.rs`: `#[allow(dead_code)]` off `Product`; audit the other five and remove each one that no longer allows anything
 - [ ] `strings.rs`, `config.rs`, `app.slint`, `strings.slint`: the four stale doc comments corrected to describe what shipped
-- [ ] `main.rs`: the `Paths::resolve` broken row carries a name, through the string table, and gains a test
+- [ ] `vault.rs`: a test pinning the row a `Paths::resolve` failure produces — a readable heading and a readable reason, from an entry with no folder name at all
 - [ ] `main.rs`: `ErrConfigSave` reaches somewhere a user could see it, or the code says plainly why it cannot (Technical notes)
 - [ ] Close the persistence gap: a test that exercises the load → clamp → size → read-back → `persist` path without needing a window manager to deliver a close event
 
@@ -156,12 +152,11 @@ ui/
 17. Escape with the bar focused clears the query, and so does the clear affordance; both restore the full list.
 18. The query survives a sort toggle, a language switch, an add and an edit, and is gone after a restart — `config.toml` has no field for it.
 19. A `config.toml` holding `window_width = 300`, `window_height = 200` opens a window of at least 1000×700, and the file is rewritten with what was actually used.
-20. A clipboard write that fails shows no confirmation, and the app carries on.
-21. The data directory failing to resolve produces a broken entry with a readable name and a readable reason, not a blank row.
-22. `cargo build` and `cargo test` are both warning-free — the distinction Chron6 paid for, and worth re-checking in a milestone that removes allowances.
-23. `grep -rn` for user-visible literals in `.slint`/`.rs` finds none outside `strings.rs`, with the bundled licence text the single stated exception (Technical notes).
-24. `grep -rn` for colour literals in `ui/` still finds none outside `palette.slint`.
-25. `git log` shows only `sudo-megas` as author and no AI attribution anywhere.
+20. The data directory failing to resolve produces a broken entry with a readable name and a readable reason, not a blank row.
+21. `cargo build` and `cargo test` are both warning-free — the distinction Chron6 paid for, and worth re-checking in a milestone that removes allowances.
+22. `grep -rn` for user-visible literals in `.slint`/`.rs` finds none outside `strings.rs`, with the bundled licence text the single stated exception (Technical notes).
+23. `grep -rn` for colour literals in `ui/` still finds none outside `palette.slint`.
+24. `git log` shows only `sudo-megas` as author and no AI attribution anywhere.
 
 ## Technical notes
 
@@ -201,7 +196,13 @@ ui/
 
 **This milestone is now the largest in the project, and that is a real cost.** Chron3 and Chron4 were written as one design and shipped as two commits; Chron5, Chron6 and Chron7 were written as one and shipped as three. Chron8 is one file with three subjects, and the honest thing to say is that if the search bar turns out to be more than its task list suggests — most likely at the index-remapping described above — it should be split out and given its own Chron rather than quietly enlarging this one. CORE §9 permits that in as many words. The reason not to pre-split it is that the About view and the search bar touch the same column, the same `strings.rs` groups and the same headless test function, and two files describing edits to the same three places would have to be read together anyway.
 
-**The confirmation is a claim, so it needs to be true.** Chron4 chose silence for a clipboard failure and gave a good reason: the text is on screen either way, and a dialog for a failed copy would be noise. The tick is a different thing from a dialog — it is the app saying the clipboard now holds this. `arboard` already returns a `Result` and the call site already discards it; showing the confirmation only on `Ok` costs one branch and changes a false statement into no statement, which is what Chron4 actually decided.
+**Two defects this milestone was going to fix, and did not need to.** Both were written into the first draft of this file from a survey of the code rather than from the code, and both are recorded here as removed rather than quietly deleted — each is the kind of plausible bug that gets re-reported by the next person who greps for it and does not read four lines further.
+
+The first: that the "copied" confirmation fired whether or not the clipboard write succeeded, so a user on a session without a clipboard would be told their serial was copied and then paste something else. Not true. Both call sites — `details.rs`'s `on_copy_link` and `viewer.rs`'s serial strip — already take `arboard`'s `Result`, bind it to `ok`, and `return` before the confirmation when it is an error, each with a comment saying why silence is the right failure. Chron4 decided that silence and also implemented it.
+
+The second: that a `Paths::resolve` failure rendered a row labelled with nothing, because the synthetic `Entry::Broken` it produces carries an empty `folder`. Also not true. `vault::row` branches on exactly that, and falls back to the `BrokenTitle` heading for both the row's label and its name — the comment above the branch says so. What was missing was a test, and that is what this milestone adds.
+
+The pattern is worth naming, because it cost a string-table key that had to be taken back out again: a claim about code is not a finding until the code has been read at the line the claim is about. Three of the four defects this file inherited from its own first draft survived that check. The two above did not, and neither did Chron9's opening claim about `rfd`.
 
 **Removing an allowance is a test, not a tidy-up.** `#[allow(dead_code)]` on `Product` was correct when written and has been wrong since Chron4; taking it off asks the compiler whether the fields really do have readers now. If one of them does not, that is a finding and not a reason to put the allowance back. The same applies to the other five: an allowance that no longer allows anything is a comment claiming a state of affairs that ended.
 

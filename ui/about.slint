@@ -1,0 +1,290 @@
+// The About view (CORE §4).
+//
+// Same boundary as the viewer and the details column: data in as properties,
+// intent out as callbacks, no text of its own. Every label comes from the
+// `Strings` global and follows a language switch immediately; every *value* —
+// the version, the build date, the licence id, the two URLs — is
+// language-independent and pushed once at startup, so this pane needs no
+// `set_lang` and no row in `lang.rs`'s table of things a switch has to re-say.
+//
+// That matters more here than it looks. The form and the theme picker are
+// sheets, and Chron6 relies on their backdrops covering `Document ▾` to prove
+// they cannot go stale. About is a *pane*: column 1 and the title bar stay live
+// underneath it, so the language really can change while it is on screen. The
+// answer is not a refresh path, it is having nothing that needs one.
+//
+// The bundled licence text is the one exception to CORE §4's no-literals rule,
+// and it is not an exception at all on inspection: it arrives as a property from
+// `include_str!("../LICENSE")`. It is a legal instrument quoted verbatim, not UI
+// copy, and translating or paraphrasing it in a `(en, tr)` tuple would be a
+// misrepresentation.
+
+import { Palette } from "palette.slint";
+import { Strings } from "strings.slint";
+import { Btn, DetailRow } from "widgets.slint";
+import { Sheet } from "sheet.slint";
+
+/// A label above an address, with the copy affordance the purchase link and the
+/// serial strip both use. CORE §4: this copies, it never opens.
+component LinkRow inherits VerticalLayout {
+    in property <string> label;
+    in property <string> url;
+    in property <bool> copied;
+    callback copy();
+
+    spacing: 4px;
+
+    Text {
+        text: root.label;
+        color: Palette.muted;
+        font-size: 12px;
+        letter-spacing: 1px;
+    }
+
+    Rectangle {
+        height: 20px;
+
+        HorizontalLayout {
+            spacing: 6px;
+
+            Text {
+                text: root.url;
+                color: Palette.text;
+                font-size: 13px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            Text {
+                text: Strings.copy-glyph;
+                color: touch.has-hover ? Palette.accent : Palette.muted;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+
+            // Reserves no space when absent, so a row does not reflow as the
+            // confirmation comes and goes.
+            if root.copied: Text {
+                text: Strings.copied;
+                color: Palette.accent;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+
+        touch := TouchArea {
+            mouse-cursor: MouseCursor.pointer;
+            clicked => {
+                root.copy();
+            }
+        }
+
+        accessible-role: button;
+        accessible-label: root.label;
+        accessible-action-default => {
+            root.copy();
+        }
+    }
+}
+
+export component About inherits Rectangle {
+    /// Pushed once at startup. None of these is UI copy, so none translates.
+    in property <string> version;
+    in property <string> released;
+    in property <string> license-id;
+
+    in property <bool> source-copied;
+    in property <bool> docs-copied;
+
+    callback copy-source();
+    callback copy-docs();
+    callback read-license();
+
+    background: Palette.bg;
+    clip: true;
+
+    // A Flickable rather than a plain layout, because this is the one surface
+    // whose height is the sum of eleven rows of translated text. At the 1000×700
+    // floor the content fits with room to spare in both languages; the Flickable
+    // is what keeps that true if a later translation is longer than both of the
+    // ones measured, instead of clipping the motto off the bottom.
+    Flickable {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        viewport-width: parent.width;
+        viewport-height: content.preferred-height;
+
+        content := VerticalLayout {
+            padding: 28px;
+            spacing: 14px;
+            alignment: start;
+
+            Image {
+                source: @image-url("../build/icons/parachron-256.png");
+                width: 72px;
+                height: 72px;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: Strings.about-wordmark;
+                color: Palette.text;
+                font-size: 22px;
+                letter-spacing: 4px;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: Strings.about-subtitle;
+                color: Palette.muted;
+                font-size: 14px;
+                horizontal-alignment: center;
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Palette.border;
+            }
+
+            DetailRow {
+                label: Strings.about-maker;
+                value: Strings.about-maker-name;
+            }
+
+            DetailRow {
+                label: Strings.about-version;
+                value: root.version;
+            }
+
+            DetailRow {
+                label: Strings.about-released;
+                value: root.released;
+            }
+
+            LinkRow {
+                label: Strings.about-source;
+                url: Strings.about-source-url;
+                copied: root.source-copied;
+                copy => {
+                    root.copy-source();
+                }
+            }
+
+            LinkRow {
+                label: Strings.about-docs;
+                url: Strings.about-docs-url;
+                copied: root.docs-copied;
+                copy => {
+                    root.copy-docs();
+                }
+            }
+
+            Text {
+                text: Strings.about-not-links;
+                color: Palette.muted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Palette.border;
+            }
+
+            DetailRow {
+                label: Strings.about-license;
+                value: root.license-id;
+            }
+
+            HorizontalLayout {
+                Btn {
+                    label: Strings.about-read-license;
+                    clicked => {
+                        root.read-license();
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            Text {
+                text: Strings.about-motto;
+                color: Palette.muted;
+                font-size: 13px;
+                font-italic: true;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}
+
+/// The full AGPL text, in a sheet because it is the one thing here that has to
+/// scroll. `Sheet`'s `min-card-height` exists for exactly this (Chron5).
+export component LicenseSheet inherits Sheet {
+    /// `include_str!("../LICENSE")`, verbatim. Not UI copy — see the note at the
+    /// top of this file.
+    in property <string> text;
+
+    callback closed();
+
+    card-width: 720px;
+    min-card-height: 520px;
+
+    dismissed => {
+        root.closed();
+    }
+
+    Text {
+        text: Strings.about-license;
+        color: Palette.text;
+        font-size: 18px;
+        font-weight: 700;
+    }
+
+    Rectangle {
+        vertical-stretch: 1;
+        clip: true;
+
+        Flickable {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            viewport-width: parent.width;
+            viewport-height: body.preferred-height;
+
+            body := Text {
+                width: parent.width;
+                text: root.text;
+                color: Palette.text;
+                // Monospace because the licence is laid out in fixed-width
+                // paragraphs and its section numbering only lines up in one.
+                font-family: "monospace";
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        Btn {
+            label: Strings.action-close;
+            primary: true;
+            clicked => {
+                root.closed();
+            }
+        }
+    }
+}
