@@ -97,11 +97,19 @@ export component About inherits Rectangle {
     in property <string> released;
     in property <string> license-id;
 
+    /// Where the vault is (Chron9). CORE §3 promises no hidden state, and a
+    /// location the user chose through a dialog and cannot read back afterwards
+    /// is hidden state — they would have to open `config.toml` to answer "where
+    /// are my documents".
+    in property <string> vault-path;
+
     in property <bool> source-copied;
     in property <bool> docs-copied;
+    in property <bool> vault-copied;
 
     callback copy-source();
     callback copy-docs();
+    callback copy-vault();
     callback read-license();
     /// Escape was pressed. The pane is not a sheet, so it cannot borrow
     /// `Sheet`'s key handling and needs its own scope.
@@ -203,6 +211,21 @@ export component About inherits Rectangle {
             DetailRow {
                 label: Strings.about-released;
                 value: root.released;
+            }
+
+            // Through `LinkRow`, which is the pane's one gesture: text you can
+            // copy, and nothing that opens anything. CORE §4's no-external-opens
+            // rule is written about addresses and a filesystem path is not a
+            // URL — but this pane has exactly one gesture applied to every
+            // address in it, and a folder-opening button would be the first
+            // exception in a surface whose whole argument is that it has none.
+            LinkRow {
+                label: Strings.about-vault;
+                url: root.vault-path;
+                copied: root.vault-copied;
+                copy => {
+                    root.copy-vault();
+                }
             }
 
             LinkRow {

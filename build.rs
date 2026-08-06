@@ -19,7 +19,7 @@ fn main() {
 /// never touches a file.
 ///
 /// An existing `PARACHRON_BUILD_DATE` in the environment wins. That is the seam
-/// Chron9 needs: a source build honestly reports the day it was compiled, and a
+/// Chron11 needs: a source build honestly reports the day it was compiled, and a
 /// tagged release build has its workflow set the variable to the tag's date, so
 /// the asset a user downloads shows the date it was released rather than the
 /// date a runner happened to pick it up.

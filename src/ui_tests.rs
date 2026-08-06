@@ -110,8 +110,20 @@ fn seeded_entries() -> Vec<Entry> {
 
     vec![
         // Warranty ending well past any date this test could run on.
-        product("monitor", "QD-OLED Monitor", 1, day(2099, Month::March, 14), Vec::new()),
-        product("drive", "IronWolf Pro", 2, day(2025, Month::January, 1), Vec::new()),
+        product(
+            "monitor",
+            "QD-OLED Monitor",
+            1,
+            day(2099, Month::March, 14),
+            Vec::new(),
+        ),
+        product(
+            "drive",
+            "IronWolf Pro",
+            2,
+            day(2025, Month::January, 1),
+            Vec::new(),
+        ),
         product(
             "charger",
             "Şarj Cihazı",
@@ -162,13 +174,23 @@ fn install_stack(app: &AppWindow) -> Stack {
         Rc::clone(&viewer),
     );
     let themes = crate::theme::install(app, Theme::Dark, Lang::En);
-    let exports = crate::export::install(
+    let exports = crate::export::install(app, root.clone(), Lang::En, offset, Rc::clone(&vault));
+
+    // Chron9. The vault-location entry needs a `Paths`, and `Paths::resolve`
+    // would reach the real home directory — so this is built against the same
+    // nonexistent root the rest of the stack uses. Nothing in the headless test
+    // opens the picker; what is asserted is that the menu entry exists and is
+    // labelled from the string table.
+    let relocations = crate::relocate::install(
         app,
-        root,
+        crate::data::Paths::for_test(PathBuf::from("/nonexistent/parachron")),
         Lang::En,
-        offset,
         Rc::clone(&vault),
+        Rc::clone(&viewer),
+        editors.clone(),
+        exports.clone(),
     );
+
     let language = crate::lang::install(
         app,
         Lang::En,
@@ -177,7 +199,12 @@ fn install_stack(app: &AppWindow) -> Stack {
         editors,
         Rc::clone(&themes),
         exports,
+        Some(relocations),
     );
+
+    // `root` is what every owner above was built with; naming it here keeps the
+    // unused-variable warning honest rather than silencing it with an underscore.
+    let _ = root;
 
     Stack {
         vault,
@@ -265,7 +292,10 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     // Criterion 1: THEME opens a picker listing every theme in CORE §5, with the
     // one in effect marked. The picker is only reachable by clicking, because
     // whether it is open is the `.slint` side's business.
-    assert!(elements(&app, "ThemeRow::touch").is_empty(), "the picker starts closed");
+    assert!(
+        elements(&app, "ThemeRow::touch").is_empty(),
+        "the picker starts closed"
+    );
     let button = elements(&app, "Details::theme-button");
     assert_eq!(button.len(), 1, "column 3 has exactly one THEME button");
     click(&button[0]);
@@ -291,7 +321,11 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
         .filter(|(_, row)| row.active)
         .map(|(i, _)| i)
         .collect();
-    assert_eq!(marked, [1], "exactly the active theme is marked, and it is Dark");
+    assert_eq!(
+        marked,
+        [1],
+        "exactly the active theme is marked, and it is Dark"
+    );
 
     // Criterion 2: choosing one repaints at once, and the rows follow.
     let latte = Theme::ALL.iter().position(|t| *t == Theme::Latte).unwrap();
@@ -347,7 +381,11 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     );
 
     let rows = elements(&app, "ThemeRow::touch");
-    assert_eq!(rows.len(), Theme::ALL.len(), "every row is realised at the floor");
+    assert_eq!(
+        rows.len(),
+        Theme::ALL.len(),
+        "every row is realised at the floor"
+    );
     for (index, row) in rows.iter().enumerate() {
         let (top, size) = (row.absolute_position(), row.size());
         assert!(size.height > 0.0, "row {index} has no height");
@@ -364,7 +402,10 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
 
     // And Close dismisses it.
     click(&elements(&app, "ThemeSheet::close")[0]);
-    assert!(elements(&app, "ThemeRow::touch").is_empty(), "Close closes the picker");
+    assert!(
+        elements(&app, "ThemeRow::touch").is_empty(),
+        "Close closes the picker"
+    );
 
     // ── Chron6: the language switch, criteria 1–5 ─────────────────────────
     app.window().set_size(LogicalSize::new(1400.0, 900.0));
@@ -375,13 +416,24 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     // TouchArea over everything to catch the dismissing click, so a row click
     // while it is up dismisses the menu instead of selecting anything.
     let rows = elements(&app, "AppWindow::row-touch");
-    assert_eq!(rows.len(), 4, "the vault's own rows, not the hand-built ones");
+    assert_eq!(
+        rows.len(),
+        4,
+        "the vault's own rows, not the hand-built ones"
+    );
     // Insertion order, so: monitor, drive, charger, then the broken folder.
     click(&rows[2]);
-    assert_eq!(app.get_selected_name(), "Şarj Cihazı", "Turkish name intact");
+    assert_eq!(
+        app.get_selected_name(),
+        "Şarj Cihazı",
+        "Turkish name intact"
+    );
 
     // Criterion 1: `Document ▾` lists both languages, the one in effect marked.
-    assert!(elements(&app, "AppWindow::menu-lang-en").is_empty(), "the menu starts closed");
+    assert!(
+        elements(&app, "AppWindow::menu-lang-en").is_empty(),
+        "the menu starts closed"
+    );
     click(&elements(&app, "AppWindow::menu-button")[0]);
 
     assert_eq!(elements(&app, "AppWindow::menu-lang-en").len(), 1);
@@ -404,10 +456,20 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     // everything Rust composed — without the product being reselected.
     click(&elements(&app, "AppWindow::menu-lang-tr")[0]);
 
-    assert_eq!(stack.language.get(), Lang::Tr, "the session's language changed");
+    assert_eq!(
+        stack.language.get(),
+        Lang::Tr,
+        "the session's language changed"
+    );
     assert_eq!(app.get_lang_mode(), 1, "the tick moved to Türkçe");
-    assert_eq!(strings.get_nav_about(), strings_get(Lang::Tr, Key::NavAbout));
-    assert_eq!(strings.get_action_export(), strings_get(Lang::Tr, Key::ActionExport));
+    assert_eq!(
+        strings.get_nav_about(),
+        strings_get(Lang::Tr, Key::NavAbout)
+    );
+    assert_eq!(
+        strings.get_action_export(),
+        strings_get(Lang::Tr, Key::ActionExport)
+    );
 
     let after_detail = app.get_selected_detail().to_string();
     let after_days = app.get_details_days_left().to_string();
@@ -415,7 +477,10 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
         after_detail.contains(strings_get(Lang::Tr, Key::MissingFiles)),
         "`Missing files` follows the switch: {after_detail:?}"
     );
-    assert_ne!(before_detail, after_detail, "a composed row must not go stale");
+    assert_ne!(
+        before_detail, after_detail,
+        "a composed row must not go stale"
+    );
     assert!(
         after_days.ends_with(strings_get(Lang::Tr, Key::DaysUnit)),
         "the countdown follows the switch: {after_days:?}"
@@ -423,8 +488,12 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     // Turkish takes no plural after a numeral, so only the unit word changes —
     // the number in front of it must not.
     assert_eq!(
-        before_days.trim_end_matches(strings_get(Lang::En, Key::DaysUnit)).trim(),
-        after_days.trim_end_matches(strings_get(Lang::Tr, Key::DaysUnit)).trim(),
+        before_days
+            .trim_end_matches(strings_get(Lang::En, Key::DaysUnit))
+            .trim(),
+        after_days
+            .trim_end_matches(strings_get(Lang::Tr, Key::DaysUnit))
+            .trim(),
         "the switch changed the number of days, not just its unit"
     );
 
@@ -630,7 +699,8 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     };
     // A `Text` labels itself for accessibility, so the sentence actually on
     // screen can be read back rather than inferred from the properties behind it.
-    let on_screen = |text: &str| testing::ElementHandle::find_by_accessible_label(&app, text).count();
+    let on_screen =
+        |text: &str| testing::ElementHandle::find_by_accessible_label(&app, text).count();
 
     // Criterion 12, and criterion 13 with it: the query narrows the list to what
     // matched, and the fold runs on both sides — `sarj`, typed on a keyboard
@@ -638,7 +708,11 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     // instead would leave that product findable only by somebody who can already
     // type `Ş`, which is the one person who does not need the bar.
     search("sarj");
-    assert_eq!(names(), ["Şarj Cihazı"], "one entry matched, and it is that one");
+    assert_eq!(
+        names(),
+        ["Şarj Cihazı"],
+        "one entry matched, and it is that one"
+    );
     assert_eq!(
         elements(&app, "AppWindow::row-touch").len(),
         1,
@@ -692,9 +766,17 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     // chain the click exercises on the way back out.
     search("sarj");
     let clear = elements(&app, "SearchBar::clear");
-    assert_eq!(clear.len(), 1, "there is something to clear, so there is a way to");
+    assert_eq!(
+        clear.len(),
+        1,
+        "there is something to clear, so there is a way to"
+    );
     click(&clear[0]);
-    assert_eq!(app.get_search_query(), "", "the affordance did not empty the bar");
+    assert_eq!(
+        app.get_search_query(),
+        "",
+        "the affordance did not empty the bar"
+    );
     assert_eq!(names(), all, "and the list did not come back with it");
     assert!(
         elements(&app, "SearchBar::clear").is_empty(),
@@ -737,7 +819,11 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
         app.get_selected_open(),
         "the query narrowed the list, not the app — the product is still open"
     );
-    assert_eq!(app.get_selected_name(), "IronWolf Pro", "a keystroke changed product");
+    assert_eq!(
+        app.get_selected_name(),
+        "IronWolf Pro",
+        "a keystroke changed product"
+    );
     assert_eq!(
         stack.vault.borrow().selected_folder().as_deref(),
         Some("drive"),
@@ -845,13 +931,20 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
             .pop()
             .expect("column 1 has an About strip")
     };
-    assert!(elements(&app, "About::content").is_empty(), "About starts closed");
+    assert!(
+        elements(&app, "About::content").is_empty(),
+        "About starts closed"
+    );
     assert_eq!(strip().accessible_checked(), Some(false));
 
     // Criterion 1: the strip opens the pane and reads as the active view.
     click(&strip());
     assert_eq!(strip().accessible_checked(), Some(true));
-    assert_eq!(elements(&app, "About::content").len(), 1, "the pane is on screen");
+    assert_eq!(
+        elements(&app, "About::content").len(),
+        1,
+        "the pane is on screen"
+    );
 
     // Criterion 1's other half. About *covers* columns 2 and 3 rather than
     // replacing them, so all three ids are still where `assert_columns` looks for
@@ -896,16 +989,51 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
         1,
         "and the product it chose is what is now on screen"
     );
+
+    // ── Chron9: the vault-location entry, criteria 3 and 12 ───────────────
+    //
+    // The picker itself cannot be driven here — it is a portal dialog drawn by
+    // the desktop's own service, the boundary Chron3 documented and Chron7
+    // restated. What can be asserted is everything up to the click: that the
+    // entry is in `Document ▾`, that it is labelled from the string table in
+    // both languages, and that it is enabled — a menu row that exists but is
+    // dead is the shape this would fail in, since `relocate::install` is what
+    // turns it on and is skipped entirely when there is no vault to move from.
+    click(&elements(&app, "AppWindow::menu-button")[0]);
+    let vault_entry = elements(&app, "AppWindow::menu-vault");
+    assert_eq!(
+        vault_entry.len(),
+        1,
+        "Document ▾ has no vault-location entry"
+    );
+    assert_eq!(
+        vault_entry[0].accessible_label().as_deref(),
+        Some(strings_get(Lang::En, Key::ActionVaultLocation)),
+        "the entry is labelled from the string table, not from a literal"
+    );
+    assert_eq!(
+        vault_entry[0].accessible_enabled(),
+        Some(true),
+        "the entry is dead, which is what a skipped relocate::install looks like"
+    );
+
+    // And in Turkish, because a key added to one table and not the other is the
+    // one mistake `strings.rs`'s exhaustiveness test cannot catch on its own —
+    // it proves both sides exist, not that the window reads the right one.
+    click(&elements(&app, "AppWindow::menu-lang-tr")[0]);
+    click(&elements(&app, "AppWindow::menu-button")[0]);
+    assert_eq!(
+        elements(&app, "AppWindow::menu-vault")[0]
+            .accessible_label()
+            .as_deref(),
+        Some(strings_get(Lang::Tr, Key::ActionVaultLocation)),
+    );
+    click(&elements(&app, "AppWindow::menu-lang-en")[0]);
 }
 
 /// The Slint colour `theme.rs` would have pushed for an `0xRRGGBB` value.
 fn colour(value: u32) -> slint::Color {
-    slint::Color::from_argb_u8(
-        0xff,
-        (value >> 16) as u8,
-        (value >> 8) as u8,
-        value as u8,
-    )
+    slint::Color::from_argb_u8(0xff, (value >> 16) as u8, (value >> 8) as u8, value as u8)
 }
 
 /// `0xAARRGGBB`, for the one role that carries its own alpha.

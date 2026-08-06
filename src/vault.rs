@@ -290,6 +290,14 @@ impl Vault {
     /// Chron6. Every row's text — the `!` prefix, `Missing files: …`, a broken
     /// folder's heading and its reason — is composed here, so the language has to
     /// arrive before the rows are rebuilt.
+    /// Chron9. The vault moved; the next rescan reads the new root.
+    ///
+    /// One of four owners of the products root — see
+    /// `viewer::Viewer::set_products_root` for why they are copies.
+    pub fn set_products_root(&mut self, root: std::path::PathBuf) {
+        self.products_root = root;
+    }
+
     pub fn set_lang(&mut self, lang: Lang) {
         self.lang = lang;
     }
@@ -578,6 +586,17 @@ pub fn describe(lang: Lang, error: &DataError) -> String {
                 strings::get(lang, Key::ErrInvalidDate)
             )
         }
+        // Chron9. Both carry a path or a file name rather than a parser's
+        // grumble, and both are shown with the folder they name beside them —
+        // which is the whole point of these two existing separately from
+        // `Unreadable`. A user can act on "that drive is not mounted" and can do
+        // nothing at all with an empty list.
+        DataError::VaultMissing(path) => {
+            format!("{}: {path}", strings::get(lang, Key::ErrVaultMissing))
+        }
+        DataError::ConfigUnreadable(detail) => {
+            format!("{}: {detail}", strings::get(lang, Key::ErrConfigUnreadable))
+        }
     }
 }
 
@@ -856,8 +875,15 @@ mod tests {
         assert_eq!(vault.query, "iron");
 
         // And a rescan, which is what a save comes back through.
-        assert_eq!(vault.plan_rescan(None).rows.len(), 0, "the scratch root is empty");
-        assert_eq!(vault.query, "iron", "a rescan is not a reason to clear it either");
+        assert_eq!(
+            vault.plan_rescan(None).rows.len(),
+            0,
+            "the scratch root is empty"
+        );
+        assert_eq!(
+            vault.query, "iron",
+            "a rescan is not a reason to clear it either"
+        );
     }
 
     /// A query nothing matches empties the list rather than falling back to
@@ -893,21 +919,30 @@ mod tests {
     fn insertion_order_is_the_default_and_reads_the_added_date() {
         let mut entries = vault();
         sort_entries(&mut entries, SortMode::Added);
-        assert_eq!(folders(&entries), ["keyboard", "monitor", "drive", "test-broken"]);
+        assert_eq!(
+            folders(&entries),
+            ["keyboard", "monitor", "drive", "test-broken"]
+        );
     }
 
     #[test]
     fn alphabetical_order_ignores_case() {
         let mut entries = vault();
         sort_entries(&mut entries, SortMode::Name);
-        assert_eq!(folders(&entries), ["keyboard", "drive", "monitor", "test-broken"]);
+        assert_eq!(
+            folders(&entries),
+            ["keyboard", "drive", "monitor", "test-broken"]
+        );
     }
 
     #[test]
     fn purchase_order_puts_the_oldest_first() {
         let mut entries = vault();
         sort_entries(&mut entries, SortMode::Purchase);
-        assert_eq!(folders(&entries), ["drive", "monitor", "keyboard", "test-broken"]);
+        assert_eq!(
+            folders(&entries),
+            ["drive", "monitor", "keyboard", "test-broken"]
+        );
     }
 
     #[test]
@@ -970,7 +1005,10 @@ mod tests {
         let item = row(&broken("test-broken"), Lang::En);
         assert!(item.broken);
         assert!(item.label.contains("test-broken"));
-        assert!(!item.detail.is_empty(), "the reason is what makes it fixable");
+        assert!(
+            !item.detail.is_empty(),
+            "the reason is what makes it fixable"
+        );
     }
 
     #[test]

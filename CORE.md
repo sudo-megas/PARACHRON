@@ -53,6 +53,27 @@ Data lives under the XDG data dir: `~/.local/share/parachron/`.
 
 One folder per product; the folder holds `product.toml` plus that product's PDFs. The app scans `products/` at startup and builds its list from what actually exists on disk. The data must outlive the app: everything human-readable, rsync-friendly, no hidden state.
 
+### Where the vault is (Chron9)
+
+The tree above is the default, not the only arrangement. Parachron *copies* documents into the vault rather than referencing them where it found them, so a vault grows with the paperwork put into it — and the default puts that growth on whatever disk `$HOME` sits on. `config.toml` therefore carries an optional `vault` key naming a directory, and `products/` lives under it.
+
+**`config.toml` does not move, and cannot.** It holds the key that says where the vault is, so it cannot live inside the vault: the app would need the location in order to read the setting that gives it the location. The two split accordingly, and only one of them travels:
+
+| Path | Holds | Moves |
+|---|---|---|
+| `<data dir>/config.toml` | theme, language, sort mode, window size, `vault` | never |
+| `<vault>/products/` | one folder per product, with its PDFs | yes |
+
+`vault` absent, or present and empty, means the vault **is** the data directory — which resolves `products/` to `~/.local/share/parachron/products/`, exactly what every install had before the key existed. There is no migration and nothing a user who does not want this has to notice. Moving the vault back to the default writes no key rather than the default path spelled out, so the file matches what a fresh install would have.
+
+**A configured vault is checked, never created.** The default vault is created on first run; its parent is the platform's own data directory and exists on any machine with a home. A configured one is only ever looked for. If `vault` names a path under a mount point and the drive is not mounted, that mount point is an ordinary empty directory on the root filesystem — creating the vault there would put documents on the system disk while their owner believed they were on the drive bought for exactly this, and mounting the drive afterwards would hide the lot underneath it. So a missing configured vault puts its path on screen, creates nothing, and does **not** fall back to the default, because a silent fall back is indistinguishable from total data loss to whoever is reading the window.
+
+The same rule reaches one file further out. A `config.toml` that will not parse used to degrade to the defaults, which cost a theme; with a `vault` key it would cost sight of the vault, so it is now reported as a broken entry naming the file rather than guessed at. "No `vault` key" and "this file did not parse" are different answers.
+
+A relocation is a **move**, not a repointing: `fs::rename` where it works, and copy → verify → remove where it does not, which is the cross-filesystem case the feature exists for. The source is removed only after the copy verifies, so a failure at any point leaves the original vault complete and `config.toml` still naming it.
+
+Two consequences worth stating rather than discovering. "Back up the vault" and "back up everything" stopped being the same sentence once the two can be in different places — settings are small and reproducible, documents are neither — which is why the About pane names the vault's location, as plain text with copy-to-clipboard and nothing that opens. And a vault that cannot be found is not a vault that is empty: the list has never hidden a folder it could not read, and it does not start with the folder that holds all of them.
+
 ### product.toml schema
 
 ```toml
@@ -65,6 +86,19 @@ warranty_end = 2029-03-14         # TOML date (entered directly, not computed)
 pdfs = ["invoice.pdf", "warranty.pdf"]   # order = tab order in the viewer
 added = 2026-08-05                # when the entry was created (insertion order)
 ```
+
+### config.toml schema
+
+```toml
+lang = "en"                       # "en" | "tr"
+theme = "default-dark"            # one of §5's eleven ids
+sort = "added"                    # "added" | "name" | "purchase"
+window_width = 1280
+window_height = 800
+vault = "/mnt/ironwolf/parachron" # optional (Chron9); absent means the data dir
+```
+
+A path is bytes on Linux and a TOML string is UTF-8, so a vault path that is not valid UTF-8 cannot be written here at all. It is refused when it is chosen, rather than lossily converted into a similar-looking path that would be wrong every time it was read back.
 
 Rules: dates are stored as **native TOML dates** — RFC 3339 `YYYY-MM-DD`, the only form TOML parses — and rendered in the UI as `DD-MM-YYYY` (e.g. `14-03-2026`). Storage format and display format are separate concerns; never write `DD-MM-YYYY` into a `.toml` file. `warranty_end` is entered by the user together with `warranty_start` (both come from the warranty card). Days left = `warranty_end - today`, clamped at 0, displayed as e.g. `658 days`. Missing or malformed TOML must never crash the app — the product appears in the list flagged as broken, with a readable error.
 
@@ -122,6 +156,8 @@ Two things about "switchable at runtime", settled in Chron6. Refilling the `Stri
 
 Language names are written in their own language in both tables (`English`, `Türkçe`), so a reader who has landed in a language they cannot read can still find their own. Turkish maps `i`→`İ` and `ı`→`I`, so any label that shouts is stored shouting and never passed through `to_uppercase` — `EXPORT` is `DIŞA AKTAR`, with a dotless capital.
 
+**The `Document ▾` menu** holds Add Document, Edit Document…, **Vault location…** (Chron9), and the two language rows, in that order with a hairline before each group. Vault location sits with the document actions rather than with the languages because it is a thing done to the vault; it is below both of them because it is done once rather than daily. It opens a folder picker, then a sheet that names the current path, the chosen path, and how many documents and megabytes are about to move — the count is what makes confirming a decision rather than a dare. While the move runs the sheet shows a determinate bar, the file count, the byte total and the name of the file being copied, and it stays up when the move lands rather than vanishing: a copy that ran for minutes and then blinked out leaves no way to tell "it worked" from "it gave up". The bar is drawn from `Palette` like everything else — §10 records what happens when a widget is taken from `std-widgets` instead.
+
 ### About view
 
 Anaphored from JADEITE's About. Selecting About in the column-1 footer swaps the content area (columns 2+3) for a single centered pane:
@@ -132,6 +168,7 @@ Anaphored from JADEITE's About. Selecting About in the column-1 footer swaps the
 - Maker — `sudo-megas`
 - Version — from `Cargo.toml` at build time
 - Release date
+- Vault — where the products actually are (Chron9). Plain text with copy-to-clipboard and nothing that opens: §3 promises no hidden state, and a folder chosen through a dialog that cannot be read back afterwards is hidden state. It is the one value in this pane that can change while the window is open, so a move pushes it again
 - Source code — `https://github.com/sudo-megas/PARACHRON` (plain text)
 - Docs — `https://github.com/sudo-megas/PARACHRON#readme` (plain text)
 - Note under the URLs: these addresses are not links; Parachron never opens external addresses — copy them into your browser (see App-wide principles)
@@ -213,7 +250,11 @@ Chron files live in `chrons/` at the project root (`/home/megas/PARACHRON/chrons
 
 ## 9. Chron roadmap
 
-One line of planned scope per milestone. Each Chron file is written in detail only when its milestone begins — earlier ones reshape later ones, so this table is the map, not the terrain. Merging or splitting milestones is allowed; update this table when it happens.
+One line of planned scope per milestone. Each Chron file is written in detail only when its milestone begins — earlier ones reshape later ones, so this table is the map, not the terrain. Merging, splitting **and reordering** milestones is allowed; update this table when it happens.
+
+**Packaging has moved twice, and this paragraph is the index that resolves its number.** It was Chron9 from the first draft of this section until its milestone was about to start. A release is the one step that hands artefacts to people who did not build them, and choosing which disk the vault lives on moves a user's documents — so shipping a version that expects them in one place and then moving them is the wrong order to do two things in. The save-location milestone took the 9 slot and packaging became Chron10. Then the character milestone was asked for and finished while packaging was still `planned`, and the same rule applied a second time for the same reason: it is not a release, so it goes first. Packaging is **Chron11**.
+
+Everything written before each move is left alone. Chron1 through Chron8 each list "packaging (Chron9)" in their **Out** sections, Chron9's own file hands work to "Chron10" and reports a finding for it, and both were true when written — this project has always preferred an annotation over a rewrite, and a milestone file is a record of what was known on the day it was written, not a document that gets edited to stay convenient. Read those references as "the packaging milestone" and come back here for its current number. What does get corrected is anything a reader would act on today: this table, and code comments that name a milestone as still forthcoming.
 
 | Chron | Scope |
 |---|---|
@@ -225,14 +266,15 @@ One line of planned scope per milestone. Each Chron file is written in detail on
 | Chron6 | Localization: full EN/TR string tables, language switch |
 | Chron7 | Export: summary page generation + PDF merge |
 | Chron8 | About view + column-1 search bar + polish: error states, min-size behavior, edge cases. The search bar was asked for after Chron7 closed and folded in here rather than becoming a milestone of its own — it lands in column 1, which is where this milestone's other layout work already is. It does mean Chron7's line about being the last milestone to add a feature stopped being true one milestone later; §9 is the map, and the map changed |
-| Chron9 | Packaging & CI: PKGBUILD, .deb, Windows .exe, GitHub Actions, AUR. `README.md` was written per `usereadme.md` (§8 rule 3) *before* this milestone rather than after it — the page is what a visitor lands on, and having it ready means Chron9 only has to cut a tag rather than write a page as well. The cost is stated on the page itself: the download links point at a Releases page that is empty until the first tag, and build-from-source is what works until then |
-| Chron10 | Visual polish, added after the original roadmap: a masthead-over-canvas structure for columns 1 and 3 (matching column 2's existing tab strip) with a real seam gutter, hover/selection/status landmarks for column-1 rows, a column-3 anchor card with a warranty-elapsed gauge replacing two dead flex spacers, and pressed-state plus a real `primary` treatment across all five hand-rolled button recipes. Also the icon-identity fix: the app-id/desktop-entry/generate.sh infrastructure a prior worktree had built but never merged, ported onto master alongside corrected artwork |
+| Chron9 | The vault's location, chosen by the user: a `vault` key in `config.toml`, a folder picker behind `Document ▾`, and a worker that moves an existing vault onto the disk it names. Asked for after Chron8 closed, because the app *copies* documents into the vault and a vault therefore grows on whatever disk `$HOME` happens to sit on. It takes the 9 slot rather than the last one because releases have to be last — see the paragraph above the table |
+| Chron10 | Character: a masthead-over-canvas structure for every column, each wearing one of three palette hues, with the columns drawn as inset cards on the window's canvas rather than divided by a hairline; hover, selection and status landmarks for column-1 rows; a column-3 anchor card with a warranty-elapsed gauge replacing two dead flex spacers; pressed-state and a real `primary` treatment across all five hand-rolled button recipes. Widened the colour table from twelve roles to fourteen, which is the milestone's real subject: eleven palettes had been arriving as one hue each. Also the icon-identity fix — app id, desktop entry and `generate.sh`, ported off a worktree that had built them and never merged, alongside corrected artwork. Takes the 10 slot for the same reason Chron9 does: it is not a release, and releases go last |
+| Chron11 | Packaging & CI: PKGBUILD, .deb, Windows .exe, GitHub Actions. ~~AUR~~ — designed and then withdrawn, because the Arch User Repository was disabled by its own maintainers after the attacks on it; Chron11 keeps the design struck through rather than deleted, so it can be restored rather than re-derived if the AUR returns. `README.md` was written per `usereadme.md` (§8 rule 3) *before* this milestone rather than after it — the page is what a visitor lands on, and having it ready means this milestone only has to cut a tag rather than write a page as well. The cost is stated on the page itself: the download links point at a Releases page that is empty until the first tag, and build-from-source is what works until then |
 
 ## 10. Open items
 
 - ~~About subtitle and footer motto: wording to be chosen~~ — settled in Chron8. Subtitle: **"Paper Vault"** / **"Belge Kasası"**. Footer motto: **"Built with Reason and Passion"** / **"Akıl ve Tutkuyla"** — JADEITE's own motto, carried across as a maker's signature rather than a second description of the app. Both are keys in the string table like everything else, and both are on screen.
 - ~~Serial-number strip exact size ratio~~ — settled in Chron2: a fixed **44px**, not a proportion. It holds one line of text, and a proportional strip would grow absurd on a tall window.
 - ~~Theme palettes: exact hex sets per theme~~ — pinned in Chron5; see §5 for where they live and which are upstream. The prediction that this would be a contained change was *nearly* right: every colour did live behind the `Palette` global except the sheet backdrop, which Chron3 had added as a literal, and two colours that were in the global but never reached the screen — the page's edge, drawn as a border the page image painted over, and the zoom slider, which came from `std-widgets` and so read the Slint style rather than the palette.
-- Remaining unthemed: the `std-widgets` `ListView` scrollbar in column 1, which appears only when the product list overflows (about seventeen products). Replacing it means replacing a virtualizing list, which is a different job from replacing a slider. Chron8 leaves this open on purpose rather than closing it by silence: replacing the list means betting that no vault is large enough for virtualization to matter, which is a bet about somebody else's data. See Chron8's technical notes for what each answer costs. Chron10 made this more visible without changing it: the scrollbar now sits against column 1's `bg` canvas rather than a flush `panel`, which surfaces the same unthemed element more than before.
-- A derived/mixed tone for column 3's anchor card (`Palette.panel.mix(Palette.raised, ...)` or similar), considered in Chron10 and deliberately not shipped — a few-percent tone delta is likely invisible on at least four of the eleven palettes (their `panel`/`raised` values sit close together), and picking one by eye mid-implementation was judged the wrong way to decide it. Plain `Palette.panel` on the new `bg` canvas was verified sufficient across the four themes Chron10 screenshotted; if a future milestone finds a palette where the card doesn't read as separated, this is where that work starts.
-- ~~Release date in the About view (§4)~~ — settled in Chron8: `build.rs` emits `PARACHRON_BUILD_DATE` as ISO at compile time and the pane renders it through the same `fmt_date` every other date uses, so a source build honestly reports the day it was built. An existing `PARACHRON_BUILD_DATE` in the environment wins, which is the seam Chron9 uses to stamp a tagged release with its tag's date instead of a runner's clock.
+- Remaining unthemed: the `std-widgets` `ListView` scrollbar in column 1, which appears only when the product list overflows (about seventeen products). Replacing it means replacing a virtualizing list, which is a different job from replacing a slider. Chron8 leaves this open on purpose rather than closing it by silence: replacing the list means betting that no vault is large enough for virtualization to matter, which is a bet about somebody else's data. See Chron8's technical notes for what each answer costs. Chron10 made this more visible without changing it: the scrollbar now sits against column 1's card rather than a flush `panel`, which surfaces the same unthemed element more than before.
+- A derived/mixed tone for column 3's anchor card (`Palette.panel.mix(Palette.raised, ...)` or similar), considered in Chron10 and deliberately not shipped — a few-percent tone delta is likely invisible on at least four of the eleven palettes (their `panel`/`raised` values sit close together), and picking one by eye mid-implementation was judged the wrong way to decide it. Plain `Palette.panel` on the card was verified sufficient across the four themes Chron10 screenshotted; if a future milestone finds a palette where the card doesn't read as separated, this is where that work starts.
+- ~~Release date in the About view (§4)~~ — settled in Chron8: `build.rs` emits `PARACHRON_BUILD_DATE` as ISO at compile time and the pane renders it through the same `fmt_date` every other date uses, so a source build honestly reports the day it was built. An existing `PARACHRON_BUILD_DATE` in the environment wins, which is the seam Chron11 uses to stamp a tagged release with its tag's date instead of a runner's clock.

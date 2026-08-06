@@ -38,6 +38,7 @@ const COPIED_LINGER: Duration = Duration::from_millis(1500);
 pub struct About {
     _source_copied: Rc<Timer>,
     _docs_copied: Rc<Timer>,
+    _vault_copied: Rc<Timer>,
 }
 
 /// The version, as Cargo knows it.
@@ -93,6 +94,18 @@ fn copy(text: &str) -> bool {
         .is_ok()
 }
 
+/// Push the vault's location into the pane (Chron9).
+///
+/// Separate from `install` because unlike the version, the build date and the
+/// licence, this one changes while the window is open: a move rewrites it, and
+/// `relocate::retarget` calls this so the pane cannot go on naming a folder the
+/// app has stopped reading. An unresolvable vault leaves it empty rather than
+/// guessing at a path, which is the same stance the broken-entry row takes.
+pub fn set_vault(app: &AppWindow, path: Option<&std::path::Path>) {
+    let text = path.map(|p| p.display().to_string()).unwrap_or_default();
+    app.set_app_vault_path(text.into());
+}
+
 pub fn install(app: &AppWindow) -> About {
     // `app_*` rather than `about_*`, because the `Strings` global already has an
     // `about-version` and an `about-released` — those are the *labels*, "Version"
@@ -106,6 +119,30 @@ pub fn install(app: &AppWindow) -> About {
 
     let source_copied = Rc::new(Timer::default());
     let docs_copied = Rc::new(Timer::default());
+    let vault_copied = Rc::new(Timer::default());
+
+    // Chron9. Unlike the two URLs below, what is copied here is read off the
+    // window rather than out of the string table: a vault path is the user's
+    // own, not an address this project ships, and `relocate` may have rewritten
+    // it since the pane was built.
+    app.on_about_copy_vault({
+        let copied = Rc::clone(&vault_copied);
+        let weak = app.as_weak();
+        move || {
+            let Some(app) = weak.upgrade() else { return };
+            let path = app.get_app_vault_path();
+            if path.is_empty() || !copy(&path) {
+                return;
+            }
+            app.set_about_vault_copied(true);
+            let weak = app.as_weak();
+            copied.start(TimerMode::SingleShot, COPIED_LINGER, move || {
+                if let Some(app) = weak.upgrade() {
+                    app.set_about_vault_copied(false);
+                }
+            });
+        }
+    });
 
     app.on_about_copy_source({
         let copied = Rc::clone(&source_copied);
@@ -151,6 +188,7 @@ pub fn install(app: &AppWindow) -> About {
     About {
         _source_copied: source_copied,
         _docs_copied: docs_copied,
+        _vault_copied: vault_copied,
     }
 }
 
@@ -185,7 +223,11 @@ mod tests {
         // The last section, so a truncated include is caught rather than a
         // merely non-empty one passing.
         assert!(text.contains("END OF TERMS AND CONDITIONS"));
-        assert!(text.len() > 30_000, "licence looks truncated: {}", text.len());
+        assert!(
+            text.len() > 30_000,
+            "licence looks truncated: {}",
+            text.len()
+        );
     }
 
     #[test]

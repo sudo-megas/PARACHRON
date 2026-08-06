@@ -1,4 +1,4 @@
-<img src="build/icons/parachron-512.png" alt="" width="96" align="left" hspace="12" vspace="4">
+<img src="build/icons/parachron-512.png" alt="" width="114" align="left" hspace="12" vspace="4">
 
 # PARACHRON
 

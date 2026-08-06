@@ -1,156 +1,187 @@
-# Chron9 — Packaging and CI
+# Chron9 — Vault location
 
-**Milestone:** 9 of ~9 (CORE §9)
-**Status:** planned
-**Builds against:** CORE §1 (identity — app id, binary name, icons, licence, repo), §2 (stack — every dependency has to exist on three platforms), §3 (data model — where the vault lives on a target that is not Linux), §7 (packaging & CI, in full), §8 (conventions & development rules, including who is allowed to be the author of a release), §9 (roadmap — the README lands here)
+**Milestone:** 9 of ~10 (CORE §9)
+**Status:** done
+**Builds against:** CORE §3 (data model, in full — where the vault is, what is in it, and the promise that it outlives the app), §4 (the `Document ▾` menu, the About view, app-wide principles), §5 (a new surface is themed like every other one), §7 (packaging — Chron10 has to describe a data directory that is no longer one path), §8 (conventions & development rules), §9 (roadmap — this milestone and Chron10 swapped places)
 
 ## Goal
 
-Parachron becomes something a person installs rather than something a person builds. A tag pushed to the repository produces three assets — `.pkg.tar.zst`, `.deb`, `.exe` — built by GitHub Actions, each carrying the binary, the icons, the licence and, on Linux, a desktop entry that puts the app in a menu. An AUR package makes `paru -S parachron` work. And `README.md` is finally written, for the person who landed on the GitHub page and wants the app, not the history.
+The vault goes where its owner wants it. Parachron *copies* documents into its vault — `import.rs` has done that since Chron3, deliberately, so that the originals stay the user's to move or delete — which means a vault grows in proportion to the paperwork put into it, and today it can only grow in one place: `~/.local/share/parachron/`, on whatever disk `$HOME` happens to sit on. A laptop with a small root partition and a large second drive has nowhere to put it.
 
-This is the only milestone whose output is not code the app runs, and the only one whose acceptance criteria are largely unverifiable on this laptop. Both facts shape everything below.
+So `config.toml` gains a `vault` key, the `Document ▾` menu gains a folder picker, and picking a folder moves what is already there onto it — with the move visible while it runs, because moving several gigabytes of PDFs across disks takes long enough that a still window reads as a crash.
+
+Two things this milestone is really about, underneath the feature. The first is that **a wrong answer here loses documents**, which no previous milestone could do: Chron3 writes files, but into a directory the app created and knows; this one deletes a source directory after copying it somewhere else. The second is that **a vault the app cannot find must never look like a vault that is empty** — an app that opens showing none of your eleven products has lost them as far as you can tell, which is the reasoning CORE §4 already gives for keeping the search query out of `config.toml`, arriving here by a different route.
 
 ## Scope
 
-**In:** a dependency split so that two Linux-only feature sets are not asked for on a target that cannot use them · `packaging/org.parachron.Parachron.desktop` · the icon install map · `[package.metadata.deb]` · a `PKGBUILD` · Windows resources (icon and manifest) through `build.rs` · `[profile.release]` · a CI workflow on push and a release workflow on tag · MuPDF built statically or bundled per target · AGPL compliance in every artefact · the AUR package · `README.md` per `usereadme.md`.
+**In:** a `vault` key in `config.toml` · `Paths` resolving `products/` under it while `config.toml` stays put · a `Vault location…` entry in `Document ▾` · a folder picker · a confirmation sheet naming both paths and what is about to move · a worker that moves the vault, reporting progress per file · `fs::rename` with a copy-verify-remove fallback for the cross-filesystem case that is the whole point · refusal of the three destinations a folder picker makes reachable and that would destroy data · a broken state for a configured vault that is not there · a broken state for a `config.toml` that will not parse · the current location shown in the About pane · EN and TR strings for all of it.
 
-**Out (explicitly):** a Windows installer — the release asset is the executable CORE §7 names, and an MSI or NSIS wrapper is a second packaging system for one of three targets · code signing on Windows, which needs a certificate somebody has to buy and renew, and an unsigned binary with a public build log is the more honest artefact for an AGPL app · Flatpak, Snap and AppImage, none of which CORE §7 lists · macOS, for the same reason · auto-update, which is a network call in an app that makes none (CORE §4) · publishing to crates.io, since this is an application and a vendored MuPDF makes it a hostile dependency for anyone who did pull it in · a changelog, which CORE §8 rule 3 rules out of the README and the repository already keeps · translating the README, which is a document for a GitHub page rather than UI copy.
+**Out (explicitly):** a `PARACHRON_VAULT` environment variable — the app reads no environment variable at runtime today, and a one-corner override scheme is worse than none because it is the kind of thing that gets documented once and then contradicts the UI · more than one vault, or switching between them, which is a different feature with a concept of "current" that has to be visible everywhere the product list is · syncing, mirroring or a second copy kept in step — CORE §3's promise is that the data is rsync-friendly, which is a statement about the format and an invitation to use somebody else's sync tool, not a feature request · moving `config.toml`, which cannot move (see below) · per-product locations, which would make "where is my vault" a question with several answers · symlinking, which is a thing the user can already do to the default path without the app knowing and is not improved by the app knowing · a settings or preferences screen — Chron8 refused one and nothing here changes the argument: this is one entry in a menu that already holds Add, Edit and Language · deleting the old vault when the user declines the move, or any other tidy-up of a directory the app no longer points at · undo.
 
-## The human actions this milestone needs, which no tooling can perform
+## Prerequisites
 
-Named up front because three of them block acceptance and none of them is a task anybody can tick on the user's behalf.
+Chron3 complete: `rfd` is in the tree and gains one call, `AsyncFileDialog::pick_folder`, alongside the two `pick_files`/`save_file` calls it already has. Chron5 complete: a new surface reads its colours from `Palette` like every other one. Chron6 complete: every string here exists in both tables from the day it is written, rather than being retrofitted. Chron7 complete: its worker is the shape this milestone's worker copies, including two corrections it has already paid for. **No new dependency** — the move is `std::fs`, the picker is `rfd`, the progress is Slint.
 
-1. **The GitHub repository must exist at `https://github.com/sudo-megas/PARACHRON` with Actions enabled.** CORE §1 names it and `Cargo.toml` points at it; nothing in this tree proves it is there.
-2. **An AUR account with an SSH public key registered, and that private key added to the repository as a secret.** AUR publication is a `git push` to `ssh://aur@aur.archlinux.org/parachron.git`, and it is a *commit* — which puts it squarely under CORE §8 rule 2, so it must be authored by `sudo-megas` and by nothing else.
-3. **A tag has to be pushed by a person.** The release workflow triggers on it; nothing triggers the person.
+## The pointer cannot live in the thing it points at
 
-Everything else in this file is work that can be written and reviewed before any of the three happen.
+This is the constraint that decides the whole shape, and it is worth stating before the file list rather than after it.
 
-## The spike, and why this one runs before the notes are finished
+`config.toml` holds the theme, the language, the sort mode and the window size. It is the obvious place for a `vault` key and it is the only place, because anything else needs a *second* configuration file to say where the first one is. But it cannot then live inside the vault: the app would have to know the vault's location in order to read the setting that tells it the vault's location.
 
-Chron3 established that a hard question gets spiked rather than assumed, and Chron7 showed what it costs to skip one — a feature that produced a valid file with words silently missing. This milestone's hard question is not about MuPDF, and the first draft of this file got the shape of it wrong in a way worth leaving on the record.
+So the two split, and only one of them moves:
 
-**The alarm that turned out to be a false one, and how it was settled.** `rfd` is configured `default-features = false, features = ["xdg-portal"]` and `arboard` `default-features = false, features = ["wayland-data-control"]`. Both feature sets name a Linux mechanism, and the obvious reading is that a Windows build has default features off, one Linux backend requested, and therefore **no** file dialog and **no** clipboard — which would make `Add Document`, `EXPORT`, the serial strip, the purchase link and both About URLs dead on the target CORE §7 says CI owns. That reading was written into this file as a defect before anyone checked it, which is exactly the move Chron7 was written to discourage.
+| Path | Holds | Moves |
+|---|---|---|
+| `<XDG data dir>/config.toml` | theme, language, sort, window size, **`vault`** | never |
+| `<vault>/products/` | one folder per product, with its PDFs | yes — this is the point |
 
-It is wrong, and settling it needed no Windows machine and about ten seconds:
+`vault` absent, or present and empty, means the vault **is** the XDG data dir. That resolves `products/` to `~/.local/share/parachron/products/`, which is byte-identical to what every existing install already has. There is no migration, no first-run prompt, and no version of this feature that a user who does not want it has to notice.
 
-```
-cargo tree --target x86_64-pc-windows-msvc -e features -p rfd
-cargo tree --target x86_64-pc-windows-msvc -e features -p arboard
-```
-
-`rfd` resolves on that target with `windows-sys` and `Win32_UI_Shell`, `Win32_UI_Shell_Common`, `Win32_System_Com` — the Win32 dialog. `arboard` resolves with `clipboard-win` and `Win32_System_DataExchange` — the Windows clipboard. **The platform backends are gated on `cfg(target_os = …)`, not on cargo features.** `rfd`'s manifest puts every GTK, Wayland and portal dependency behind `[target.'cfg(any(target_os = "linux", …))'.dependencies]`, so `xdg-portal = ["pollster"]` enables a crate that is itself target-gated to Linux and the BSDs, and asking for it on Windows is inert rather than exclusive. The features gate the *Linux* backends specifically; they do not switch a backend on for every platform.
-
-So the split is **hygiene, not a fix**. It is still worth doing — a `[target.'cfg(unix)'.dependencies]` / `[target.'cfg(windows)'.dependencies]` split with the existing five-line `rfd` comment preserved verbatim on the Unix side, because its reasoning about `wayland` and `gtk3` is still the reasoning. What it buys is that the next reader of `Cargo.toml` does not have to run the command above to find out whether the Windows build works, and that a future `rfd` release which *does* make its features exclusive cannot break the Windows target silently.
-
-**1. Confirm on the runner what `cargo tree` says on this laptop.** Resolution is not compilation. The spike's first job is a Windows build that reaches `rfd`'s and `arboard`'s Win32 code, so the claim above is backed by a compiler rather than by a dependency graph.
-
-**2. Confirm the dialog and the clipboard actually work once built** — resolving, compiling and functioning are three different statements, and only the third is criterion 6.
-
-**3. Does `mupdf-sys` build on `windows-latest` at all?** It vendors MuPDF from C source and runs `bindgen` over its headers, which needs `libclang` — Chron2 had to install `clang` on this laptop before the first build would go through. The Windows runner's toolchain is MSVC, and `bindgen` there needs LLVM present. Chron2 measured a full vendored compile at about 1m40s on Linux; the Windows number is unknown and the *success* is unknown, which matters more.
-
-**4. Which Slint renderer the release binaries use.** Slint's default renderer wants a GL context. On a Windows runner, in a VM, or over a remote desktop, that is not always there, and a packaged app that opens to nothing is indistinguishable from one that crashed. The spike should establish whether the software renderer needs to be available as a fallback, and if so whether it is a feature on the release build or a runtime environment variable documented in the README.
-
-The spike's output is four yes-or-no answers and a `Cargo.toml`. It runs in CI, on a branch, before the release workflow is written — because a release workflow built on the assumption that all three targets compile is a workflow whose first real run is its first test.
+The cost, stated rather than discovered later: a user who copies their whole `~/.local/share/parachron/` to a new machine carries their settings and their products together, as they do today. A user who *relocates* the vault and then copies only the vault carries their products and not their settings. That is the right trade — settings are small and reproducible, documents are neither — but it means "back up the vault" and "back up everything" stopped being the same sentence, and the About pane showing both paths is what makes that legible.
 
 ## Files to add and change
 
 ```
-Cargo.toml            # + target-gated rfd and arboard, [package.metadata.deb],
-                      #   [profile.release], Windows build-dependencies
-build.rs              # + Windows resources: the .ico and an app manifest
-README.md             # NEW — per usereadme.md (CORE §8 rule 3)
-packaging/
-├── org.parachron.Parachron.desktop   # NEW — CORE §7 names this file exactly
-└── PKGBUILD                          # NEW — the Arch package
-.github/
-└── workflows/
-    ├── ci.yml        # NEW — build and test on push and pull request
-    └── release.yml   # NEW — three assets on a tag, and the AUR push
+src/data.rs           # + Paths::vault; resolution split from creation
+src/config.rs         # + vault key; load() learns to fail rather than default
+src/relocate.rs       # NEW — the worker that moves a vault, with progress
+src/main.rs           # startup order inverts: config before scan
+src/about.rs          # + the current location row
+src/strings.rs        # + the new keys, EN and TR
+src/{viewer,vault,editor,export}.rs   # + set_products_root, one caller
+src/lang.rs           # the switch reaches the sheet's composed strings too
+ui/relocate.slint     # NEW — the confirmation and progress sheet
+ui/app.slint          # + the Document ▾ entry and the sheet's properties
+ui/about.slint        # + the location row, through the existing LinkRow
+ui/strings.slint      # + the new labels
+ui/{sheet,palette}.slint   # (unchanged — the sheet recipe and the colour
+                      #  roles both already had what this needed)
+CORE.md               # §3 gains the vault key and the resolution rule
 ```
 
-`packaging/` rather than `build/`, which already exists. The distinction is who reads them: `build/icons/` holds assets the *app* reads — `app.slint` references `../build/icons/parachron-256.png` at compile time — while `packaging/` holds files only a packager ever opens. Keeping them apart means a person looking for what ships is not reading past what the binary embeds.
+`relocate.rs` rather than a function in `data.rs`: it owns a thread, a channel and a progress protocol, which is the same reason `render.rs` and `export.rs` are their own modules rather than functions in the files that call them. `relocate.slint` rather than more of `sheet.slint`, for the reason Chron5 lifted `Sheet` in the first place — `Sheet` is the recipe, and the third thing to use it should use it rather than grow it.
 
-`README.md` is listed as new and is genuinely absent, which is worth one more sentence: `Cargo.toml` already says `readme = "README.md"`, so the manifest currently points at a file that is not there. Nothing has noticed because nothing has run `cargo package`.
+**Four setters this file did not plan for.** The products root turned out to have four owners — `viewer`, `vault`, `editor` and `export` — each holding a plain `PathBuf` copy, so a move has to retarget all four. That is the arrangement Chron6 arrived at for the language, and it is forced by the same bound: `viewer::State` lives behind an `Arc<Mutex<_>>` captured into the render worker's `Send` sink, so a shared cell does not compile. The risk of a forgotten copy is answered the same way too — there is exactly one caller, `relocate::retarget`, and it is where the About row's path is pushed as well.
 
 ## Tasks
 
-### The dependency split
+### The pointer
 
-- [ ] Spike the four questions above in CI, on a branch, and record the answers here before the rest of the milestone is written in detail
-- [ ] `Cargo.toml`: `rfd` split by target — `xdg-portal` on Unix with its comment intact, the default Windows backend on Windows
-- [ ] `Cargo.toml`: `arboard` split by target — `wayland-data-control` on Unix, the Windows backend on Windows
-- [ ] `Cargo.toml`: `[target.'cfg(windows)'.build-dependencies]` for the resource compiler
-- [ ] `build.rs`: on Windows, compile `build/icons/parachron.ico` and an application manifest into the executable; on every other target, do exactly what it does today
-- [ ] `Cargo.toml`: `[profile.release]` — LTO, one codegen unit, symbols stripped, panic behaviour chosen deliberately rather than by default
-- [ ] Confirm `time`'s `local-offset` guard still holds on Windows: `main` reads the offset before anything spawns, and that ordering is a soundness requirement, not a preference (Chron4)
+- [x] `config.rs`: `Config` gains `vault: Option<String>`, and `config.rs`'s existing "no query field" test grows `vault` in the list of keys that *are* settings, so a missing one fails as loudly as an added one
+- [x] `config.rs`: `Config::load` stops being infallible. A file that will not parse is distinguishable from a file with no `vault` key, for the reason in Technical notes
+- [x] `data.rs`: `Paths` gains `vault`, and `products` is derived from it rather than from `data`
+- [x] `data.rs`: split resolution from creation — the default vault is created on first run, a configured one is never created, only checked
+- [x] `main.rs`: invert the startup order so the config loads before the scan, with `local_offset()` still the first statement in `main` (Chron4, and it is a soundness requirement rather than a preference)
+- [x] A path is bytes on Linux and a TOML string is UTF-8: a vault path that is not valid UTF-8 is refused with a message rather than mangled into one that nearly works
 
-### Linux install layout
+### The move
 
-- [ ] `packaging/org.parachron.Parachron.desktop`: `Name=Parachron`, `Exec=parachron`, `Icon=parachron`, `Categories=Utility;Office;`, and a `Comment` — with a `Comment[tr]` beside it, because a desktop entry is the one piece of UI copy that lives outside the string table by necessity
-- [ ] Icon install map: `build/icons/parachron-<n>.png` → `/usr/share/icons/hicolor/<n>x<n>/apps/parachron.png`, for every size from 16 to 512; `parachron-1024.png` stays in the repo as artwork and ships in no package
-- [ ] `LICENSE` installed to `/usr/share/licenses/parachron/LICENSE` in both Linux packages
-- [ ] `Cargo.toml`: `[package.metadata.deb]` naming the binary, the icons, the desktop entry and the licence, with the same layout CORE §7 specifies
-- [ ] `packaging/PKGBUILD`: `pkgname=parachron`, the AGPL licence field, build and package functions, and the same install map — verified with `makepkg -si` on this machine, which is the one Linux target that can be tested locally
+- [x] `relocate.rs`: a worker on the shape of `export.rs`'s, with the busy flag claimed before the dialog rather than after it — the correction `0445eb3` already paid for once
+- [x] `fs::rename` first; on failure fall back to copy → verify → remove. Crossing a filesystem is the case this milestone exists for, and it is exactly the case `rename` cannot do
+- [x] The invariant, which is what its tests are for: a failure at any point leaves the **original** intact and `config.toml` unchanged. The partial destination is cleaned up; the source is removed only after the copy verifies
+- [x] Refuse the current vault, a folder inside the current vault, and a folder that already holds a `products/` — each with its own message, not one generic error
+- [x] Progress reported **per file, not per chunk**: files done, files total, bytes done, bytes total, and the name of the file being copied
+- [x] Write the new location to `config.toml` only after the move has succeeded
 
-### CI
+### The UI
 
-- [ ] `.github/workflows/ci.yml`: on push and pull request — `cargo build`, `cargo test`, `cargo clippy`, `cargo fmt --check`; **tests in the dev profile**, for the reason in Technical notes
-- [ ] Cache the vendored MuPDF build per target, and confirm the cache is actually hit on a second run rather than assumed to be
-- [ ] `.github/workflows/release.yml`: on a `v*` tag — build all three assets, attach them to a GitHub release, and push the AUR package
-- [ ] MuPDF statically linked or bundled per target, so no asset depends on a MuPDF the user has to install (CORE §7)
-- [ ] The release workflow sets `PARACHRON_BUILD_DATE` from the tag rather than leaving `build.rs` to read the runner's clock — Chron8 stamps it at compile time so that a source build honestly reports its own build day, and a *released* asset should carry the release date CORE §4 asks the About pane for. This is the seam Chron8 hands over
-- [ ] The AUR push authenticates with the registered key and commits as `sudo-megas` (CORE §8 rule 2)
-- [ ] No AI attribution in any workflow file, comment, commit or release note — CORE §8 rule 1 covers generated YAML exactly as it covers Rust
+- [x] `Document ▾` gains `Vault location…` / `Kasa Konumu…`, opening `rfd::AsyncFileDialog::pick_folder` through `slint::spawn_local` the way `import::pick` does
+- [x] A confirmation sheet naming the current path, the chosen path, and how many documents and how many megabytes are about to move
+- [x] A progress bar, `N of M`, a byte count and the current file name — the bar drawn from `Palette` and not taken from `std-widgets`, for the reason in Technical notes
+- [x] A failure leaves the sheet open with its reason and the file it stopped on, rather than closing and leaving a notice that is gone when the app closes
+- [x] The About pane gains the current vault path: plain text, copy-to-clipboard, opening nothing — the one gesture that pane has
+- [x] Every string in both tables, and any that shouts stored shouting rather than passed through `to_uppercase` (CORE §4)
 
-### The README
+### The failures
 
-- [ ] `README.md` per `usereadme.md`'s layout: wordmark and icon, the badge row, description, dependencies, the four installation routes, the app-sections walkthrough, and the licence summary
-- [ ] Written **after** the first release exists, so every download link and every badge points at something real (CORE §9)
-- [ ] Screenshots of the real app for the sections walkthrough, taken on the isolated display the earlier milestones use
+- [x] A configured vault that does not exist at startup: the app opens, names the path, creates nothing, and does not fall back to the default
+- [x] A `config.toml` that will not parse: the app opens, names the file, and does not point at the default vault
+- [x] Neither of those two states is silent, and neither is a crash (CORE §3)
 
 ## Acceptance criteria
 
-1. A pushed `v*` tag produces a GitHub release carrying exactly three assets: `.pkg.tar.zst`, `.deb`, `.exe`.
-2. `pacman -U` on the `.pkg.tar.zst` installs the binary to `/usr/bin/parachron`, the icons under `/usr/share/icons/hicolor/`, the desktop entry to `/usr/share/applications/`, and the licence under `/usr/share/licenses/parachron/`; the app appears in the desktop menu with its icon and launches from it.
-3. `makepkg -si` from the repository's own `PKGBUILD` produces the same package from source.
-4. `apt install ./parachron_*.deb` on Debian or Ubuntu installs to the same layout and launches from the menu.
-5. The Windows `.exe` runs on a clean Windows machine with no MuPDF installed, opens no console window, and shows its own icon in Explorer and the taskbar.
-6. On Windows, `Add Document` opens a real file dialog and the serial strip really copies. The dependency graph says both backends are there; this criterion is the difference between a graph and a working application, and it is the one that proves the Windows target rather than any single feature of it.
-7. Every package includes the full AGPL text, and the binary's About pane shows it too (Chron8).
-8. `cargo test` is green in CI on every target that runs it, in the dev profile, with no warnings from `cargo build` either.
-9. A second CI run hits the MuPDF cache and completes materially faster than the first.
-10. `paru -S parachron` (or `yay`, or a manual AUR clone) installs a working app from the AUR.
-11. `README.md` follows `usereadme.md`'s layout, every download link resolves, and every badge shows a real value.
-12. No AI attribution anywhere in the repository, the workflows, the release notes or the AUR package.
-13. `git log` shows only `sudo-megas` as author, in this repository and in the AUR one.
+1. With no `vault` key, `products/` resolves exactly where it does today and an existing vault opens unchanged, with nothing asked of the user.
+2. Setting `vault` moves where `products/` is read from and leaves `config.toml` where it was.
+3. `Document ▾ → Vault location…` opens a folder picker, and the window keeps repainting while it is open.
+4. Confirming a move relocates every product folder with its PDFs intact, and the list shows all of them afterwards, in the same order.
+5. A move onto a **different filesystem** succeeds — the case `fs::rename` cannot serve, and the one this milestone was asked for.
+6. The move is watched rather than waited out: files done of total, a byte count and the current file name are all on screen while it runs.
+7. A move interrupted by an error leaves the original vault complete and `config.toml` unchanged, and says which file it stopped on.
+8. Choosing the current vault, a folder inside it, or a folder that already holds a `products/` is refused, each with its own message.
+9. A configured vault that is not present at startup — an unmounted drive — leaves the app open, names the path on screen, creates nothing anywhere, and does not silently revert to the default.
+10. A `config.toml` that will not parse leaves the app open and names the file, and does not point the app at the default vault.
+11. The About pane shows where the vault currently is; the path can be copied and nothing about it opens anything.
+12. Every string added by this milestone exists in English and Turkish, and the window is fully labelled in both.
+13. `cargo test` is green with no warnings from `cargo build` either, and `cargo fmt --check` is clean.
 
 ## Technical notes
 
-**CI must run the tests in the dev profile, and this is not a preference.** `build.rs` enables Slint's debug info only when Cargo sets `DEBUG=true`, and Slint records element ids only when debug info is emitted. Every headless UI assertion in `ui_tests.rs` finds its elements by id. So `cargo test --release` does not run a faster version of the suite; it runs a suite where the element lookups find nothing and the UI test fails wholesale. The release *binary* stays lean because the release profile still turns it off — that was the point of writing it that way — but a workflow that reaches for `--release` on the test step to save a minute will break the one test that covers the window.
+**A configured vault is never created, and this is the rule the whole feature turns on.** If `vault = "/mnt/ironwolf/parachron"` and the ironwolf is not mounted, `/mnt/ironwolf` is an ordinary empty directory on the root filesystem. `create_dir_all` would succeed against it without complaint, Parachron would create a vault there, and its owner would file invoices onto the system disk believing they were on the drive they bought for exactly this. Then the drive gets mounted and the whole lot disappears underneath the mount point — still on disk, entirely invisible, and impossible to explain to somebody who did nothing wrong.
 
-**The vault's path on Windows is a CORE §3 question, not a packaging one.** CORE §3 documents the data directory as `~/.local/share/parachron/`, and `data.rs` pins the project path deliberately "so the directory is named exactly what CORE §3 documents on every platform." On Windows, `directories` resolves that to somewhere under `%APPDATA%`, which is correct behaviour and is not what §3 says. The moment a Windows binary exists, §3 is describing one of three targets. It should gain the other two paths — CORE's own rule is that when reality and CORE differ, CORE is updated first — and the README's Windows section should say where a user's data actually lives, because "everything human-readable, rsync-friendly, no hidden state" is a promise that needs an address.
+So creation and resolution are different operations with different rules. The **default** vault is created on first run: its parent is `~/.local/share`, which exists on any machine that has a home directory, and creating it is what Parachron has always done. A **configured** vault is only ever checked. Missing means missing — the path goes on screen, nothing is created, and the app does not fall back to the default, because a silent fall back is indistinguishable from total data loss to the person looking at the window.
 
-**A release is not a commit, and an AUR push is.** CORE §8 rule 2 says every commit, push and pull request is authored by `sudo-megas` and never by a bot. A GitHub release created by a workflow is attributed to the workflow's token, which is not a person and also not a commit — it is an artefact upload against a tag the user pushed, and the tag is the authored thing. The AUR is different in kind: publishing there *is* a git commit in a git repository, so it must carry `sudo-megas` as author and must authenticate as them. That is why the SSH key is a human prerequisite rather than a task, and why it is worth stating the distinction rather than letting a future reader discover that half of "no bots" was interpreted loosely.
+**A `config.toml` that will not parse used to cost a theme. It could now cost a vault.** `Config::load` is infallible today: anything it cannot read degrades to `Config::default()`, the app opens on Default Dark, and the user notices and shrugs. Add a `vault` key and that same fallback yields `vault: None` — the app points at the *default* vault, finds it empty or finds an old one, and shows that. The real vault is on the other disk, and nothing on screen mentions it, because as far as the app is concerned the user never configured one.
 
-**AGPL compliance is mostly already satisfied, and the part that is not is an install path.** CORE §1 chose AGPL-3.0 because MuPDF's linkage requires it, and CORE §7 says the public repository satisfies the source obligation — which it does, for a binary built from a public tree by a public workflow whose logs anyone can read. What each package still has to do is ship the licence text itself, at the path that distribution's users and tooling expect. That is one line in the `PKGBUILD`, one entry in `[package.metadata.deb]`, and on Windows the About pane Chron8 built, which is the only place a Windows user would look.
+This is the same failure as the unmounted drive and it is not covered by the same rule, because the vault is not missing — the **pointer** is. So `load` has to distinguish "this file has no `vault` key", which is the ordinary case and means the default, from "this file did not parse", which means the app does not know what it was told and must say so rather than guess. The second becomes a broken state naming the file, in the shape CORE §3 already requires for a manifest that will not parse. That a product with a bad `product.toml` has been handled this way since Chron1 while the app's own config was not is worth noticing; this milestone is where the asymmetry starts to matter.
 
-**Static or bundled, but never "the user installs MuPDF".** CORE §7 flags this and it is worth restating as a rule the workflow has to obey rather than an aspiration: `mupdf-sys` vendors and builds MuPDF from source, so the natural outcome is a static link, and the natural failure is a `.deb` that declares a runtime dependency on a system `libmupdf` that Debian does not ship in the version this needs. Every asset is checked with `ldd` — or its Windows equivalent — before it is attached to a release, and what it links against is a criterion rather than a note.
+**Move, and never a bare rename.** `fs::rename` across a filesystem boundary fails with `EXDEV`, and a different filesystem is precisely what "put it on my other drive" means — so the fast path is the one that will almost never be taken for the use case this was asked for. It is still worth having: relocating within one disk is instant and atomic, and an atomic move is strictly better than a copy when it is available.
 
-**`96` and `1024` are not the same kind of leftover.** The icon set has ten PNG sizes and a `.ico`. The hicolor theme takes whatever sizes are installed into it, so 16 through 512 all go in and cost a few hundred kilobytes between them. `parachron-1024.png` is 1.6MB on its own, is larger than any icon theme will ever ask for, and exists for artwork — a README header, a store listing, a future website. It stays in the repository and ships in nothing.
+The fallback is copy → verify → remove, in that order, and the order is the whole safety argument. Copying first means a failure at any point has damaged nothing: the source is untouched, the partial destination is removed, and `config.toml` still names the old location, so the next launch opens the vault that still exists. Removing the source only after the copy verifies means there is no window in which the documents exist in neither place. The tests are written against that invariant rather than against the happy path, because the happy path is the one that will get exercised by hand and the failure path is the one that will not.
 
-**The `.ico` has never been used by anything.** CORE §7 says it feeds the Windows build, and today nothing references it: the window icon and the title-bar mark both point at PNGs. Wiring it means a resource compiler in `build.rs` under a Windows-only build dependency, alongside an application manifest — which is also where the DPI-awareness declaration belongs, and getting that wrong on Windows is exactly the soft, blurry result Chron2 documented for HiDPI on Linux.
+**Three destinations a folder picker makes reachable in one click, and each has to be refused separately.** Choosing the current vault is a no-op that would still run a whole copy. Choosing a folder *inside* the current vault means copy-then-delete-source deletes what was just written — the destination is under the source, so removing the source removes the copy. Choosing a folder that already holds a `products/` merges two vaults silently, with name collisions resolved by whichever file was written last. None of these is exotic; a file dialog opens somewhere and a person clicks. Each gets its own message, because "that location cannot be used" tells somebody nothing about which of three quite different mistakes they made.
 
-**`README.md` is written last, on purpose.** CORE §9's line for this milestone says it is written "once release assets exist", and the reason is in `usereadme.md`: the page is for a user who wants to install the app, and it carries download instructions, version and release-date badges, and a package size in megabytes. Every one of those is a fact about a release. Writing it first means writing placeholders, and a README with a dead download link is worse than no README, because it looks maintained.
+**The progress bar is drawn from `Palette`, and this is the third time this has come up.** Chron5 shipped believing every colour in the app lived behind the `Palette` global, and it did not: the sheet backdrop was a literal, the page edge was painted over, and the zoom slider came from `std-widgets` and therefore read the Slint style rather than the theme. CORE §10 still carries the `ListView` scrollbar as the surviving instance of the same thing. A `std-widgets` `ProgressIndicator` would make it three, on a surface that is new in this milestone and has no history to excuse it. The bar is two rectangles and a fraction.
 
-**One thing `usereadme.md` asks for that a README cannot do.** It says to use CaskaydiaCove Nerd Font globally "if applicable". GitHub renders Markdown in its own font stack and ignores anything a repository says about typography, so the instruction cannot apply to the page itself. Where it *can* apply is any image the README embeds — a header wordmark, a screenshot, a diagram — and that is how it should be read. Saying so here means nobody later tries to force it with HTML that GitHub strips.
+**The startup order inverts, and Chron4's requirement survives it intact.** Today `main` resolves the vault and scans it, then loads the config. It cannot any more: the vault's location comes *out* of the config, so the config has to load first. The new order is `local_offset()`, resolve the XDG directory, load the config, apply the vault override, then ensure and scan.
 
-**Windows is the honest risk, and this file does not pretend otherwise.** There is no Windows machine attached to this project. `mupdf-sys` vendoring a C library through `bindgen` under MSVC, a resource-compiled icon, a clipboard backend nobody has run, a file dialog nobody has opened, and a renderer that may want a GL context the runner does not have — five unknowns, all on one target, all of them CI's to answer. CORE §7 already said "no local Windows machine — CI owns this target." What this milestone adds is that CI owning it means the first green run is the first evidence, so the spike runs before the release workflow is written rather than after.
+`local_offset()` stays the first statement in `main`. Chron4 put it there because `time` will not work out a local UTC offset once a process has more than one thread and the render worker starts with the window; that reasoning is unchanged and the new order does not disturb it, because everything inserted before the scan is single-threaded file I/O. Worth stating explicitly because "load the config earlier" reads like a free reordering, and there is exactly one line in `main` that is not free to move.
+
+**A path is bytes and a TOML string is UTF-8.** On Linux a filename is a sequence of bytes with no encoding guarantee, so a folder picker can legitimately return a `PathBuf` that is not valid UTF-8 — and TOML has no way to write it down. Chron7 met the same wall from the other side, which is why the export writes through `write_to` rather than `save`. Here the answer is different because the destination has to be *persisted* rather than just used: the path is refused, with a message saying why, rather than lossily converted into a similar-looking path that would then be wrong every time it was read back. Rare, and the kind of thing that is much cheaper to refuse deliberately than to discover.
+
+**When the vault is not there, the entry that would move it is disabled — and that is a gap, stated rather than hidden.** A move needs a source. If a configured vault is missing, or `config.toml` will not parse, or there is no home directory at all, there is nothing to move from and `relocate::install` is not called, so `Vault location…` is greyed. That leaves the most natural repair — *the drive is gone, point me somewhere else* — to a text editor, which is a poor answer for the one state where a user most wants the app's help.
+
+It is deliberate rather than overlooked. Repointing without moving is the mode this file scoped out in favour of moving, and reintroducing it for one state would mean shipping both modes and explaining when each applies. The honest reading is that the miss is real and the fix is a *third* thing — an explicit "the vault is not where it should be" state that offers to point rather than to move — and that inventing it under a disabled menu row would be worse than naming it here. If it is built, it belongs with whatever milestone next touches this file, not tacked onto the end of this one.
+
+**What the About pane gains, and what it deliberately does not.** CORE §3 promises data that is human-readable and rsync-friendly, with no hidden state. A location the user chose through a dialog and cannot read back afterwards is hidden state — they would have to open `config.toml` to answer "where are my documents". So the pane shows it, next to the version and the source URL, as plain text with copy-to-clipboard.
+
+It does not get a button that opens the folder. CORE §4's no-external-opens rule is written about addresses, and a filesystem path is not a URL, so this is not the rule forbidding it — it is that the pane has exactly one gesture, copy, applied to every address in it, and a folder-opening button would be the first exception in a surface whose whole argument is that it has none. The clipboard is enough to paste into a file manager.
 
 ## How the criteria were verified
 
-Written when the milestone is done, as in Chron1–7. It will have a section this project has not needed before — **what was verified only by CI, and what was verified only by one person on one machine** — because criteria 4, 5, 6 and 10 cannot be checked on a CachyOS laptop, and criteria 2 and 3 are the only two that can be checked locally end to end.
+184 tests pass (`cargo test`), up from Chron8's 155, with no warnings from `cargo build` either. **`cargo clippy` and `cargo fmt --check` are both clean, and neither had ever been run in this tree** — no workflow has existed to run them. `fmt` had a backlog of 74 hunks across 13 of the 15 source files, paid off in its own commit before any of this landed so that the feature diff was not tangled with it; clippy found three collapsible `if`s, in `editor.rs`, `import.rs` and `render.rs`, all of which are fixed here rather than left for the workflow that will gate on them.
+
+**Automated, and written against the failure paths rather than the happy one.** Seventeen tests in `relocate.rs`, and the ones that matter are not the ones that move files successfully. A move interrupted by an unwritable destination is asserted to leave the source vault with all five files and all nine bytes still in it, and to leave no partial `products/` behind that a later attempt would refuse as `Occupied`. `verify` is asserted to catch a file truncated behind the copy's back, and to catch a file *appearing* in the source while the move ran — which is the one way this could lose a document with no step having failed. The four refusals each have their own test, including the one that is not obvious: a sibling directory whose name merely starts with the vault's is **not** inside it, which is true because `Path::starts_with` compares components rather than characters, and is the kind of thing that is true until somebody rewrites it with a string comparison.
+
+**Criterion 5 against two real filesystems, because a tempdir cannot fake `EXDEV`.** Every other test here runs inside one `/tmp`, where `fs::rename` succeeds — so on its own the suite would prove the fast path twice and the copy path never. `/dev/shm` is a tmpfs and is mounted on any ordinary Linux system, and the test uses it: it compares `st_dev` to confirm the two really are different devices, then asserts that a bare `fs::rename` between them *fails*, and only then runs the move. It reports a skip out loud if either premise does not hold, rather than passing quietly, because a skip nobody sees is how a test rots.
+
+**Headless, through the real element tree.** The `Document ▾` entry exists, is labelled from the string table, and is *enabled* — that last one is the assertion with teeth, since `relocate::install` is what turns the row on and is skipped entirely when there is no vault to move from, so a dead row is exactly the shape a regression would take. Checked in both languages, because a key added to one table and not the other is the one mistake `strings.rs`'s exhaustiveness test cannot catch on its own: it proves both sides exist, not that the window reads the right one.
+
+**By real clicks, on the isolated display, against scratch vaults.** `Xvfb :98` at 1000×700 — CORE §4's floor — with `env -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE` and `XDG_DATA_HOME` pointed at a temporary directory, which is Chron3's and Chron5's harness unchanged. Four states, each its own launch:
+
+| State | What was seen |
+|---|---|
+| Default vault, three products, one broken folder | The list as before; `Vault location…` in `Document ▾`, below Edit Document and above the language rows, with its own hairline; `config.toml` after exit holds **no** `vault` key |
+| A vault configured onto another path | The product loads from the configured path, the data directory holds `config.toml` and nothing else — no stray `products/` was created beside it |
+| A configured vault under an unmounted drive | The app opens, the path is on screen as a broken row, the mount point is **empty afterwards**, and no vault was created in the data directory as a consolation |
+| A `config.toml` that will not parse | The app opens, and the file is still on disk exactly as it was — the broken config was not overwritten, so the `vault` line naming the user's documents survived |
+
+The last two are the ones this milestone exists for, and both were checked by looking at the filesystem afterwards rather than only at the window. An `Err` proves a function returned; `ls` on the mount point proves nothing was written to the wrong disk.
+
+**The About row, by eye.** The pane shows **Vault** between Release date and Source code, carrying the configured path and the copy glyph, drawn through the same `LinkRow` the two URLs use — text you can copy, and nothing that opens anything.
+
+**One thing the harness taught, again.** The About row did not appear in the first run of the click harness, and the pane looked exactly as it had in Chron8. The row was fine; the binary was stale. `cargo test` builds the test binary and does not necessarily relink `target/debug/parachron`, which is written down in Chron5's verification section as having cost two runs there — and cost one more here, because the harness was rewritten from scratch without that line in it. The build step is now the first thing the script does. Worth recording twice: a screenshot of a stale binary is indistinguishable from a screenshot of a feature that does not work.
+
+**A finding for Chron10, produced by this harness rather than by reading.** `xprop WM_CLASS` on the running window returns `"parachron", "parachron"` — winit's fallback to `argv[0]`, because nothing calls `slint::set_xdg_app_id`. That confirms empirically what Chron10's technical notes claim from the source, and it is the X11 half; on Wayland there is no app id at all and no `StartupWMClass` that could stand in for one.
+
+**Not verified.** Named rather than implied, in the manner of every milestone here.
+
+- **The folder picker itself, and therefore the sheet on screen.** A portal dialog is drawn by the desktop's own portal service in the user's session, so it appears on the real display whatever `DISPLAY` says and cannot be driven under `Xvfb` — the boundary Chron3 documented for the file picker and Chron7 restated for the save dialog. Everything past it takes a `PathBuf` and is tested that way: `vet`, `survey`, `run` and the whole copy path. What was not observed is a human clicking through a real move, which means **the confirmation sheet, the progress bar, the byte counter and the finished state have not been seen on a screen.** They are wired exactly as the theme picker and the form are, and that is an argument rather than an observation.
+- **The move as a whole gesture.** Criteria 4, 6 and 7 are each verified at the layer below the dialog — files arrive, progress is emitted once per file ending at the total, a failure leaves the source complete — and none of them was verified by starting a move from the menu.
+- **A language switch with the sheet open.** `Relocations::set_lang` re-composes the summary and the progress line, and the labels bind to `Strings` like everything else. Neither was watched happen, for the same reason: opening the sheet needs the picker.
+- **Ten of the eleven themes, and the sheet in Turkish.** Everything above was seen on Default Dark. The sheet reads every colour from `Palette` with a clean literal sweep — which is the same evidence Chron5 called insufficient when a screenshot caught the zoom slider.
+- **A move of a vault large enough to be slow.** The progress bar exists because a multi-gigabyte copy takes minutes; the largest thing moved in anger here was nine bytes. That the bar is determinate and monotonic is asserted from the messages, not from watching one fill.
+- **A move interrupted by the app being killed.** The invariant is argued from the order of operations and tested by making a write fail; nothing was `kill -9`'d half way through a copy. The reasoning holds — `config.toml` is written last, so a process that dies mid-copy leaves a stale destination and a config still naming the source — but a partial destination left by a dead process is not cleaned up by anything, and no later run knows it is there.
 
 ## Done when
 
-All acceptance criteria pass, which for the first time means "pass in CI and on a machine that is not this one". Then: amend CORE §3 with the data directory on all three targets, amend CORE §7 with whatever the spike settles about MuPDF per target and the renderer, record in CORE §4 that a released binary's About date comes from its tag while a source build's comes from its clock, record the AUR package name and its repository, note in CORE §8 how rule 2 applies to a release as against an AUR commit, mark this file's status `done` — and with it, the roadmap in CORE §9.
+All acceptance criteria pass on the laptop, with the caveats in the section above: criteria 4, 6 and 7 are verified at the layer beneath the folder picker rather than through it, because a portal dialog cannot be driven under `Xvfb`. Then: amend CORE §3 with the `vault` key, the split between what moves and what does not, and the rule that a configured vault is checked rather than created; note in CORE §4 that `Document ▾` has a fourth entry and that the About pane shows the location; record in CORE §9 that this milestone and Chron10 swapped places, which its table already carries; hand Chron10 the fact that "where the vault lives" now has a user-supplied answer as well as a per-platform one, so the README's data-directory section and CORE §3's Windows row both have to describe two things rather than one; mark this file's status `done`, and move on to Chron10.

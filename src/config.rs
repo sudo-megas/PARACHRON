@@ -1,11 +1,16 @@
 //! App state persisted between runs (CORE §3): chosen theme, language, sort
 //! mode and window size.
 //!
-//! `config.toml` lives in the data dir beside `products/`, not in a separate
-//! config dir — the whole vault is one rsync-friendly tree.
+//! `config.toml` lives in the platform's data directory. Until Chron9 that was
+//! also where `products/` was, and the two were described as one rsync-friendly
+//! tree; they can now be told apart, because this file holds the `vault` key
+//! that says where `products/` is and therefore cannot live inside it.
 //!
-//! A missing or malformed config is never fatal: the defaults take over and
-//! the next save rewrites the file.
+//! A *missing* config is never fatal — the defaults take over and the next save
+//! writes the file. A config that exists and cannot be read or parsed is
+//! reported rather than defaulted, which is a Chron9 change and is explained on
+//! [`Config::load`]: the defaults now include an opinion about where the user's
+//! documents are.
 
 use std::fs;
 use std::path::Path;
@@ -42,6 +47,20 @@ pub struct Config {
     pub sort: String,
     pub window_width: u32,
     pub window_height: u32,
+    /// Where `products/` lives, when the user has moved it (Chron9).
+    ///
+    /// Absent — the ordinary case, and every install before this key existed —
+    /// means the vault is the data directory this file is already in. The key
+    /// has to live here rather than in the vault for the obvious reason: the app
+    /// would need the vault's location in order to read the setting that gives
+    /// it the vault's location.
+    ///
+    /// A `String` rather than a `PathBuf` because that is what TOML can hold. On
+    /// Linux a path is bytes with no encoding guarantee, so a path that is not
+    /// valid UTF-8 cannot be written down here at all; it is refused when it is
+    /// chosen rather than lossily converted into one that nearly works.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault: Option<String>,
 }
 
 impl Default for Config {
@@ -54,21 +73,56 @@ impl Default for Config {
             sort: "added".to_string(),
             window_width: DEFAULT_WIDTH,
             window_height: DEFAULT_HEIGHT,
+            // No vault key means the vault is the directory this file is in,
+            // which is what every install had before Chron9 and is what an
+            // install that never touches the feature keeps having.
+            vault: None,
         }
     }
 }
 
 impl Config {
-    /// Read `config.toml`, falling back to defaults for anything unreadable or
-    /// malformed. Individual bad fields fall back on their own, because the
-    /// struct is `#[serde(default)]`.
-    pub fn load(path: &Path) -> Self {
-        let mut config: Self = fs::read_to_string(path)
-            .ok()
-            .and_then(|text| toml::from_str(&text).ok())
-            .unwrap_or_default();
+    /// Read `config.toml`.
+    ///
+    /// **A file that is absent and a file that will not parse stopped being the
+    /// same thing in Chron9,** and the reason is the `vault` key. Before it,
+    /// this function was infallible: anything it could not read became
+    /// `Config::default()`, the app opened on Default Dark, and the user noticed
+    /// a wrong theme and shrugged. With a `vault` key that same fallback yields
+    /// `vault: None` — so the app points at the *default* vault, shows whatever
+    /// is or is not there, and never mentions the drive the products are
+    /// actually on. Nothing on screen would be wrong, exactly; it would simply
+    /// be describing a different vault, and the user would have no way to tell.
+    ///
+    /// That is not the missing-vault case [`crate::data::Paths::ensure`] guards.
+    /// There, the vault is gone and the app says so. Here the vault is fine and
+    /// the *pointer* is gone, which is invisible unless this function refuses to
+    /// guess.
+    ///
+    /// So: no file at all is the ordinary first run and yields the defaults,
+    /// because a config that does not exist cannot have configured a vault. A
+    /// file that exists and cannot be read or parsed is an error, and `main`
+    /// turns it into a visible broken entry naming the file — the same treatment
+    /// a `product.toml` that will not parse has had since Chron1. That the app's
+    /// own config was the one file exempt from that rule is worth noticing; it
+    /// only started to matter when the file gained a key that points somewhere.
+    ///
+    /// Individual *absent* fields still fall back on their own, because the
+    /// struct is `#[serde(default)]`. It is a file that is not TOML, or a field
+    /// whose type is wrong, that stops here.
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            // Present but unreadable — a permission bit, a directory where a
+            // file should be — is the same unknown as a file that will not
+            // parse, and gets the same answer rather than a cheerful default.
+            Err(e) => return Err(e.to_string()),
+        };
+        let mut config: Self =
+            toml::from_str(&text).map_err(|e| crate::data::first_line(&e.to_string()))?;
         config.clamp_to_floor();
-        config
+        Ok(config)
     }
 
     /// Raise a stored window size up to CORE §4's floor.
@@ -111,8 +165,67 @@ mod tests {
     fn a_missing_file_yields_defaults() {
         assert_eq!(
             Config::load(Path::new("/nonexistent/parachron/config.toml")),
-            Config::default()
+            Ok(Config::default())
         );
+    }
+
+    /// Chron9. The one case that must stay cheerful: no file at all is a first
+    /// run, and a config that does not exist cannot have named a vault.
+    #[test]
+    fn an_absent_file_is_not_an_error_because_it_cannot_have_named_a_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::load(&dir.path().join("config.toml")).expect("absent is not an error");
+        assert_eq!(config.vault, None);
+    }
+
+    /// Chron9, and the point of making `load` fallible.
+    ///
+    /// A file that will not parse used to yield the defaults, which cost a theme
+    /// and nothing else. It now costs sight of the vault: `vault: None` points
+    /// the app at the default one while the products sit on another disk, and
+    /// nothing on screen would say so. So it is an error, and `main` shows it.
+    #[test]
+    fn a_config_that_will_not_parse_is_an_error_rather_than_a_silent_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "this is not = = toml\n").unwrap();
+
+        let failure = Config::load(&path).expect_err("a broken config must not be guessed at");
+        assert!(!failure.is_empty(), "the reason must be reportable");
+    }
+
+    /// The dangerous shape specifically: a file that *does* name a vault and
+    /// then fails to parse. Guessing here points the app at the wrong disk.
+    #[test]
+    fn a_broken_config_that_names_a_vault_never_degrades_to_the_default_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "vault = \"/mnt/ironwolf/parachron\"\nlang = [oops\n").unwrap();
+
+        assert!(
+            Config::load(&path).is_err(),
+            "a config naming a vault must not fall back to the default vault"
+        );
+    }
+
+    #[test]
+    fn a_vault_path_round_trips_and_is_written_only_when_set() {
+        let plain = toml::to_string_pretty(&Config::default()).unwrap();
+        assert!(
+            !plain.contains("vault"),
+            "an unconfigured vault writes no key:\n{plain}"
+        );
+
+        let moved = Config {
+            vault: Some("/mnt/ironwolf/parachron".to_string()),
+            ..Config::default()
+        };
+        let text = toml::to_string_pretty(&moved).unwrap();
+        assert!(
+            text.contains("vault"),
+            "a configured vault is written:\n{text}"
+        );
+        assert_eq!(toml::from_str::<Config>(&text).unwrap(), moved);
     }
 
     #[test]
@@ -134,7 +247,10 @@ mod tests {
     #[test]
     fn the_written_config_holds_no_search_query() {
         let text = toml::to_string_pretty(&Config::default()).unwrap();
-        assert!(!text.contains("query"), "config.toml grew a query field:\n{text}");
+        assert!(
+            !text.contains("query"),
+            "config.toml grew a query field:\n{text}"
+        );
         // The five that are settings, so this test fails if one goes missing
         // rather than only if one is added.
         for key in ["lang", "theme", "sort", "window_width", "window_height"] {
@@ -174,13 +290,13 @@ mod tests {
         )
         .unwrap();
 
-        let config = Config::load(&path);
+        let config = Config::load(&path).expect("a valid config must load");
 
-        // Proof that the file was read at all, and it has to come first. `load`
-        // swallows an unreadable or malformed config and hands back
-        // `Config::default()` — which is 1280×800, already above the floor — so
-        // a test that only looked at the size would pass just as happily if the
-        // file had never been parsed, or if the clamp were deleted outright.
+        // Proof that the file was read at all, and it has to come first. An
+        // absent config still hands back `Config::default()` — which is
+        // 1280×800, already above the floor — so a test that only looked at the
+        // size would pass just as happily if the file had never been read, or if
+        // the clamp were deleted outright.
         assert_eq!(
             config.theme, "noctalia",
             "the config on disk was not the one that got loaded"
@@ -203,7 +319,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         fs::write(&path, "window_width = 1600\nwindow_height = 1000\n").unwrap();
 
-        let config = Config::load(&path);
+        let config = Config::load(&path).expect("a valid config must load");
 
         // Both numbers differ from the 1280×800 defaults, so these assertions
         // also fail if the file went unread — no separate guard needed here.

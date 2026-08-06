@@ -37,11 +37,11 @@ use mupdf::{Point, Rect, Size};
 use slint::ComponentHandle;
 use time::{Date, UtcOffset};
 
+use crate::AppWindow;
 use crate::data::{self, Product};
 use crate::render::{self, ViewError};
 use crate::strings::{self, Key, Lang};
 use crate::vault::Vault;
-use crate::AppWindow;
 
 /// A4 in PDF points (CORE §6: print-friendly). The summary page is always this,
 /// whatever the appended documents are — it is a document Parachron authored.
@@ -230,18 +230,21 @@ fn summary(
 
         // A rule under the name. `finish` paints what has been drawn since the
         // last one, so the line has to be finished before any more text.
-        shape.draw_line(
-            Point::new(MARGIN, y),
-            Point::new(PAGE.width - MARGIN, y),
-        )?;
+        shape.draw_line(Point::new(MARGIN, y), Point::new(PAGE.width - MARGIN, y))?;
         shape.finish(&rule())?;
         y += 22.0;
 
         // ── The fields CORE §6 asks for ──────────────────────────────────
         let fields = [
             (Key::SerialLabel, product.serial.clone()),
-            (Key::FieldPurchaseDate, data::fmt_date(product.purchase_date)),
-            (Key::FieldWarrantyStart, data::fmt_date(product.warranty_start)),
+            (
+                Key::FieldPurchaseDate,
+                data::fmt_date(product.purchase_date),
+            ),
+            (
+                Key::FieldWarrantyStart,
+                data::fmt_date(product.warranty_start),
+            ),
             (Key::FieldWarrantyEnd, data::fmt_date(product.warranty_end)),
             (Key::FieldLink, product.link.clone()),
         ];
@@ -549,11 +552,22 @@ struct State {
 }
 
 /// What the language switch reaches the export through.
+/// `Clone` since Chron9, for the reason `Editors` gives: two callers now need a
+/// handle to the same state.
+#[derive(Clone)]
 pub struct Exports {
     state: Rc<RefCell<State>>,
 }
 
 impl Exports {
+    /// Chron9. Exports read the product's files from the new root.
+    ///
+    /// One of four owners of the products root — see
+    /// `viewer::Viewer::set_products_root` for why they are copies.
+    pub fn set_products_root(&self, root: PathBuf) {
+        self.state.borrow_mut().products_root = root;
+    }
+
     /// Chron6's switch calls this.
     ///
     /// A *finished* export's status is cleared rather than re-composed: it is a
@@ -749,8 +763,7 @@ pub fn install(
                 Outcome::Done { skipped, .. } => {
                     // The full reason for each is on the summary page; column 3 has
                     // room for the names and elides the rest.
-                    let names: Vec<&str> =
-                        skipped.iter().map(|(name, _)| name.as_str()).collect();
+                    let names: Vec<&str> = skipped.iter().map(|(name, _)| name.as_str()).collect();
                     status(
                         &app,
                         format!(
@@ -842,7 +855,10 @@ mod tests {
 
     #[test]
     fn an_export_is_the_summary_page_then_every_document_in_tab_order() {
-        let (dir, folder) = vault(&[("invoice.pdf", "sample.pdf"), ("warranty.pdf", "multipage.pdf")]);
+        let (dir, folder) = vault(&[
+            ("invoice.pdf", "sample.pdf"),
+            ("warranty.pdf", "multipage.pdf"),
+        ]);
         let out = dir.path().join("out.pdf");
 
         let outcome = export(
@@ -871,15 +887,18 @@ mod tests {
 
         let doc = page_one(&out);
         for needle in [
-            "Şarj Cihazı",                 // name
-            "İST-0042-ĞŞ",                 // serial
-            "14-03-2026",                  // purchase date and warranty start
-            "14-03-2029",                  // warranty end
-            "https://store.example/p",     // purchase link
-            "days",                        // days left, at time of export
+            "Şarj Cihazı",             // name
+            "İST-0042-ĞŞ",             // serial
+            "14-03-2026",              // purchase date and warranty start
+            "14-03-2029",              // warranty end
+            "https://store.example/p", // purchase link
+            "days",                    // days left, at time of export
             "PARACHRON",
         ] {
-            assert!(finds(&doc, needle) > 0, "the summary page never says {needle:?}");
+            assert!(
+                finds(&doc, needle) > 0,
+                "the summary page never says {needle:?}"
+            );
         }
     }
 
@@ -1049,7 +1068,10 @@ mod tests {
             })
             .collect();
 
-        assert!(!dark_rows.is_empty(), "the page is blank — nothing landed on it");
+        assert!(
+            !dark_rows.is_empty(),
+            "the page is blank — nothing landed on it"
+        );
 
         let height = raster.height as usize;
         let first = dark_rows[0];
@@ -1063,7 +1085,9 @@ mod tests {
             "the footer is off the page: last ink at row {last} of {height}"
         );
         assert!(
-            dark_rows.iter().any(|y| (height / 3..height * 2 / 3).contains(y)),
+            dark_rows
+                .iter()
+                .any(|y| (height / 3..height * 2 / 3).contains(y)),
             "the middle of the page is empty, so the fields are not where they should be"
         );
 
@@ -1094,7 +1118,8 @@ mod tests {
         let mut p = product(&["invoice.pdf"]);
         p.name = "Samsung Odyssey OLED G8 34-inch Ultrawide Curved Gaming Monitor".to_string();
         p.link = "https://www.example-store.com/products/qd-oled-monitor-27-inch-\
-4k-144hz?variant=884412&ref=email_campaign_2026_summer_sale".to_string();
+4k-144hz?variant=884412&ref=email_campaign_2026_summer_sale"
+            .to_string();
         p.serial = "SN-".to_string() + &"0123456789".repeat(12);
         export(&folder, p, &out, Lang::En);
 
@@ -1115,7 +1140,10 @@ mod tests {
         }
 
         let margin = MARGIN as usize;
-        assert!(leftmost >= margin - 1, "ink at column {leftmost}, left margin is {margin}");
+        assert!(
+            leftmost >= margin - 1,
+            "ink at column {leftmost}, left margin is {margin}"
+        );
         assert!(
             rightmost <= w - margin + 1,
             "ink at column {rightmost} of {w}: the right margin is at {}, so user data \
@@ -1125,7 +1153,10 @@ mod tests {
 
         // And wrapping must not have lost anything: the tail of each long value is
         // still in the file.
-        assert!(finds(&doc, "Gaming Monitor") > 0, "the end of the name was dropped");
+        assert!(
+            finds(&doc, "Gaming Monitor") > 0,
+            "the end of the name was dropped"
+        );
         assert!(
             finds(&doc, "summer_sale") > 0,
             "the end of the link was dropped, which is data loss in the artefact"
@@ -1158,7 +1189,9 @@ mod tests {
             .rev()
             .find(|y| {
                 let start = y * w * 4;
-                r.rgba[start..start + w * 4].chunks_exact(4).any(|px| px[0] < 140)
+                r.rgba[start..start + w * 4]
+                    .chunks_exact(4)
+                    .any(|px| px[0] < 140)
             })
             .expect("the page is not blank");
 
@@ -1184,16 +1217,25 @@ mod tests {
             let unreadable = strings::get(lang, Key::ErrUnreadable);
 
             let write = describe(lang, &Failure::Write("No space left on device".into()));
-            assert!(write.contains(strings::get(lang, Key::ErrExportWrite)), "{write}");
+            assert!(
+                write.contains(strings::get(lang, Key::ErrExportWrite)),
+                "{write}"
+            );
             assert!(write.contains("No space left on device"), "{write}");
-            assert!(!write.contains(manifest), "a write failure blamed the manifest: {write}");
+            assert!(
+                !write.contains(manifest),
+                "a write failure blamed the manifest: {write}"
+            );
             assert!(
                 !write.contains(unreadable),
                 "a write failure was reported as a read failure: {write}"
             );
 
             let build = describe(lang, &Failure::Assemble("cycle in page tree".into()));
-            assert!(build.contains(strings::get(lang, Key::ErrExportAssemble)), "{build}");
+            assert!(
+                build.contains(strings::get(lang, Key::ErrExportAssemble)),
+                "{build}"
+            );
             assert!(build.contains("cycle in page tree"), "{build}");
             assert!(!build.contains(manifest), "{build}");
         }
@@ -1246,7 +1288,9 @@ mod tests {
         let outcome = export(&folder, product(&["invoice.pdf"]), &blocked, Lang::En);
         assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
         for lang in [Lang::En, Lang::Tr] {
-            let Outcome::Failed(reason) = &outcome else { unreachable!() };
+            let Outcome::Failed(reason) = &outcome else {
+                unreachable!()
+            };
             assert!(!describe(lang, reason).is_empty());
         }
     }

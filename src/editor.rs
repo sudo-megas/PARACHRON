@@ -177,10 +177,10 @@ impl Editor {
         }
 
         // Only worth saying once both ends are real dates.
-        if let (Some(start), Some(end)) = (start, end) {
-            if end < start {
-                report.end = text(Key::ErrWarrantyBackwards);
-            }
+        if let (Some(start), Some(end)) = (start, end)
+            && end < start
+        {
+            report.end = text(Key::ErrWarrantyBackwards);
         }
 
         if let (true, Some(purchase_date), Some(warranty_start), Some(warranty_end)) =
@@ -249,6 +249,10 @@ impl Editor {
 /// `details::Details` uses: the form's internals are nobody else's business and
 /// the only thing anything outside this module needs to do to it is tell it the
 /// language changed.
+/// `Clone` since Chron9: the language switch and the vault move both need to
+/// reach the form, and both are handed a handle rather than the one owner.
+/// Cloning an `Rc` here shares the same `Editor`, which is the point.
+#[derive(Clone)]
 pub struct Editors {
     editor: Rc<RefCell<Editor>>,
 }
@@ -256,6 +260,13 @@ pub struct Editors {
 impl Editors {
     pub fn set_lang(&self, lang: Lang) {
         self.editor.borrow_mut().set_lang(lang);
+    }
+
+    /// Chron9. Imports land under the new root from here on; see
+    /// `viewer::Viewer::set_products_root` for why this is a copy rather than a
+    /// share.
+    pub fn set_products_root(&self, root: PathBuf) {
+        self.editor.borrow_mut().products_root = root;
     }
 }
 
@@ -594,7 +605,10 @@ mod tests {
     #[test]
     fn a_date_that_is_not_a_date_stops_the_save_and_says_which_one() {
         let report = editor().check(&typed("Monitor", "31-02-2026", "14-03-2026", "14-03-2029"));
-        assert!(!report.purchase.is_empty(), "the 30th of February is not a day");
+        assert!(
+            !report.purchase.is_empty(),
+            "the 30th of February is not a day"
+        );
         assert!(report.start.is_empty(), "the other dates are fine");
         assert!(report.end.is_empty());
         assert!(report.draft.is_none());
@@ -644,7 +658,11 @@ mod tests {
             draft.extra.get("notes").and_then(|v| v.as_str()),
             Some("keep me"),
         );
-        assert_eq!(draft.pdfs, ["invoice.pdf"], "existing documents stay listed");
+        assert_eq!(
+            draft.pdfs,
+            ["invoice.pdf"],
+            "existing documents stay listed"
+        );
     }
 
     #[test]
