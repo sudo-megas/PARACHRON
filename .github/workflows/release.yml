@@ -1,0 +1,444 @@
+# Parachron — release (Chron11).
+#
+# A pushed `v*` tag produces a GitHub release carrying exactly three assets:
+# `.pkg.tar.zst`, `.deb`, `.exe` (acceptance criterion 1).
+#
+# Two notes that belong at the top of this file rather than buried in a step.
+#
+# **A release is not a commit.** CORE §8 rule 2 says every commit, push and pull
+# request is authored by `sudo-megas` and never by a bot. A GitHub release
+# created by this workflow is attributed to the workflow's token, which is not a
+# person — and also not a commit. It is an artefact upload against a tag that a
+# person pushed, and the tag is the authored thing. Nothing here commits.
+#
+# **Nothing here pushes a tag either.** The trigger is a human action by design.
+# Chron11 lists "a tag has to be pushed by a person" as one of the milestone's
+# human prerequisites precisely because nothing should be able to cut a release
+# on its own.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── The guard that runs before anything is built ────────────────────────────
+  # A tag that disagrees with `Cargo.toml`'s version produces assets whose file
+  # names say one thing and whose About pane says another, and the mismatch is
+  # only discoverable by installing them. Ten seconds here is cheaper than a
+  # deleted release.
+  verify-tag:
+    name: Tag agrees with Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      date: ${{ steps.check.outputs.date }}
+    steps:
+      # `fetch-depth: 0` so the tag *object* is present, not just the commit it
+      # resolves to. `for-each-ref` below reads the annotation, and a shallow
+      # checkout can leave it unfetched.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # `actions/checkout` fetches a tag ref as `+<commit>:refs/tags/<name>` —
+      # the *commit* SHA on the left — so an annotated tag arrives in the
+      # workspace rewritten as a lightweight one and the tag object is never
+      # fetched. Without this re-fetch, `creatordate` below silently falls back
+      # to the commit's date and undoes the whole point of the block that
+      # follows. The local measurement that justified `creatordate` could not
+      # have caught this: on a laptop the tag object is intact.
+      - name: Restore the real tag object
+        run: git fetch --force --tags origin
+
+      - id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          tag_version="${tag#v}"
+          manifest_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          pkgbuild_version="$(sed -n 's/^pkgver=\(.*\)$/\1/p' packaging/PKGBUILD | head -1)"
+
+          echo "tag:       $tag  (version $tag_version)"
+          echo "manifest:  $manifest_version"
+          echo "PKGBUILD:  $pkgbuild_version"
+
+          if [ "$tag_version" != "$manifest_version" ]; then
+            echo "::error::Tag $tag says version $tag_version but Cargo.toml says $manifest_version."
+            exit 1
+          fi
+
+          # `ci.yml` also compares these two, but `on: push: branches` does not
+          # match a tag ref — so on the one event that ships something to
+          # people, that check does not run. A lagging `pkgver` would put
+          # `parachron-0.9.0-1-x86_64.pkg.tar.zst` in the same release as
+          # `parachron_1.0.0-1_amd64.deb`, and the asset *count* would still be
+          # three. Checked here, where the release actually is.
+          if [ "$tag_version" != "$pkgbuild_version" ]; then
+            echo "::error::Tag $tag says version $tag_version but PKGBUILD says $pkgbuild_version."
+            exit 1
+          fi
+
+          # The date the release is stamped with. CORE §4 asks the About pane
+          # for a release date, and Chron8 built `build.rs` so that an existing
+          # PARACHRON_BUILD_DATE in the environment wins over the runner's
+          # clock. This is that seam: a source build honestly reports the day it
+          # was compiled, and a released asset carries the day it was tagged.
+          #
+          # `for-each-ref … %(creatordate:short)` rather than
+          # `git log -1 --format=%cs "$tag"`, and the difference is not
+          # academic. `git log` on a tag resolves to the **commit** the tag
+          # points at and reports *its* date. Tagging a three-week-old commit
+          # would then stamp the release with a date three weeks before the
+          # release, and the About pane would report it forever. Measured on a
+          # real annotated tag: `%cs` gave the commit's day, `creatordate` gave
+          # the day the tag was made, and they differed.
+          #
+          # `creatordate` is the tagger's date for an annotated tag and falls
+          # back to the commit's date for a lightweight one — which is the right
+          # answer in both cases, because a lightweight tag has no date of its
+          # own to prefer.
+          # Logged rather than enforced: `tag` means an annotated tag whose own
+          # date is being used, `commit` means a lightweight tag and the
+          # commit's date — which is the right fallback, because a lightweight
+          # tag has no date of its own. Printing which one happened means the
+          # date in the About pane can be traced afterwards instead of guessed
+          # at.
+          echo "tag object type: $(git cat-file -t "refs/tags/$GITHUB_REF_NAME")"
+          date="$(git for-each-ref --format='%(creatordate:short)' "refs/tags/$GITHUB_REF_NAME")"
+          if [ -z "$date" ]; then
+            echo "::error::Could not read a date for tag $GITHUB_REF_NAME."
+            exit 1
+          fi
+          echo "release date (from the tag): $date"
+
+          echo "version=$tag_version" >> "$GITHUB_OUTPUT"
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+
+  # ── Arch / CachyOS ─────────────────────────────────────────────────────────
+  arch:
+    name: .pkg.tar.zst
+    needs: verify-tag
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed git rust clang fontconfig sudo
+          # `makepkg -s` resolves the PKGBUILD's own `depends` and
+          # `makedepends`, which is what keeps that list in one place instead of
+          # copied into this file. It shells out to `pacman -S`, and makepkg's
+          # `run_pacman` prefixes that with `sudo -k` when `PACMAN_AUTH` is
+          # unset — `-k` deliberately drops any cached credential, so with no
+          # tty the build user cannot answer. This grants exactly `pacman` and
+          # nothing else.
+          printf 'builder ALL=(ALL) NOPASSWD: /usr/bin/pacman\n' > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+
+      - uses: actions/checkout@v4
+
+      # `makepkg` refuses to run as root, and a container runs as root. The
+      # build user is the standard way around it rather than a workaround
+      # peculiar to this project.
+      - name: Build the package
+        env:
+          PARACHRON_BUILD_DATE: ${{ needs.verify-tag.outputs.date }}
+        run: |
+          set -euo pipefail
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+          # Every later step still runs as root, in a repository now owned by
+          # uid 1000, so git refuses it as "dubious ownership". `checkout`'s own
+          # post step swallows that as a warning — and therefore never runs the
+          # `git config --unset http.…extraheader` that removes the job's token
+          # from `.git/config`. The token would then sit in the working tree for
+          # the rest of the job. It reaches neither the package nor the artifact
+          # (`prepare()` excludes `./.git`), but leaving a credential lying
+          # around because a cleanup step was silently skipped is not a thing to
+          # leave lying around.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          # `HOME` and `CARGO_HOME` are set explicitly rather than left to sudo.
+          # With `env_reset` on — the default — whether sudo rewrites HOME to
+          # the target user's home depends on `always_set_home`, which is off in
+          # stock sudoers. Left alone, `builder` can inherit root's HOME, and
+          # cargo's first act is to write `$HOME/.cargo`, which it cannot do.
+          # The failure would be a permission error deep in a container, minutes
+          # in, on a workflow that only ever runs against a tag somebody pushed.
+          # Two variables are cheaper than finding that out during a release.
+          # `-s` is load-bearing, not a convenience. Without it makepkg checks
+          # `depends` before `prepare()` runs and stops with "Could not resolve
+          # all dependencies" — the container has none of libx11, libxcb,
+          # libxcursor, libxrender, libxi, libxkbcommon, libxkbcommon-x11,
+          # wayland or libglvnd. This passed on the maintainer's machine only
+          # because a desktop Arch install already has all ten; the README's own
+          # route is `makepkg -si`, and `-i` implies `-s`, so the documented
+          # path never exercised the flag this file was missing.
+          cd packaging
+          sudo -u builder \
+            --preserve-env=PARACHRON_BUILD_DATE \
+            env HOME=/home/builder CARGO_HOME=/home/builder/.cargo \
+            makepkg -s -f --noconfirm
+
+      # CORE §7: "CI must build MuPDF statically or bundle its library per
+      # target." The natural failure is a package that declares a runtime
+      # dependency on a system libmupdf that no distribution ships in the
+      # version this needs, so the check is on the artefact rather than on the
+      # intention.
+      - name: Assert MuPDF is not a runtime dependency
+        run: |
+          set -euo pipefail
+          # The *packaged* binary, named explicitly. After `makepkg` two files
+          # match a bare `-name parachron` search — the one under
+          # `packaging/src/…/target/release/` and the one staged under
+          # `packaging/pkg/…/usr/bin/` — and `find`'s order is not guaranteed.
+          # Both would satisfy this check today, which is exactly why the gate
+          # has to name the one it means: a check that passes for the wrong
+          # reason stops being a check the moment either path changes.
+          binary="$(find "$GITHUB_WORKSPACE/packaging/pkg" -path '*/usr/bin/parachron' -type f | head -1)"
+          if [ -z "$binary" ]; then
+            echo "::error::No packaged binary found under packaging/pkg/*/usr/bin/parachron."
+            exit 1
+          fi
+          echo "checking: $binary"
+          # Captured into a variable rather than piped into `grep -q`. Under
+          # `set -o pipefail`, `grep -q` exits at its first match, `ldd` takes
+          # SIGPIPE, and the pipeline's status becomes 141 — so the `if` body
+          # never runs and the gate reports success on precisely the condition
+          # it exists to catch. `ldd` output is small enough to fit the pipe
+          # buffer, so this would not have fired in practice; it was wrong by
+          # construction rather than in effect, which is the worse of the two to
+          # leave in a gate nobody watches.
+          map="$(ldd "$binary")"
+          echo "$map"
+          if grep -qi mupdf <<<"$map"; then
+            echo "::error::The binary links a system MuPDF. It must be static or bundled."
+            exit 1
+          fi
+          echo "MuPDF is statically linked — no system libmupdf in the link map."
+
+      - name: Show what is in the package
+        run: |
+          cd packaging
+          for pkg in *.pkg.tar.zst; do
+            echo "=== $pkg ==="
+            bsdtar -tf "$pkg"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-package
+          path: packaging/*.pkg.tar.zst
+          if-no-files-found: error
+
+  # ── Debian / Ubuntu ────────────────────────────────────────────────────────
+  debian:
+    name: .deb
+    needs: verify-tag
+    # Deliberately the oldest supported runner rather than `ubuntu-latest`. A
+    # `.deb` built against a newer glibc will not install on an older Debian,
+    # and the asset is meant for "Debian / Ubuntu" rather than for whatever
+    # GitHub last promoted. 22.04 is glibc 2.35, which covers Debian 12 and
+    # Ubuntu 22.04 upwards; `ubuntu-24.04` is glibc 2.39 and would silently
+    # exclude both.
+    #
+    # **This label is on a deprecation clock: brownouts from 2026-09-17, during
+    # which jobs on it are failed outright, and fully removed 2027-04-17.** It
+    # is kept for now because it produces the better artefact and the date is
+    # not yet. The successor is *not* `ubuntu-24.04` — that trades the glibc
+    # floor away for nothing. It is building the `.deb` inside a
+    # `debian:bookworm` container on `ubuntu-latest`, which keeps glibc 2.36 and
+    # costs the same container-as-root handling the arch job above already does.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libclang-dev libfontconfig1-dev
+          # Pinned. An unpinned `cargo install` is the one thing in this release
+          # path that can break with no commit to this repository — and
+          # `[package.metadata.deb]` uses the two-element
+          # `license-file = ["LICENSE", "0"]` form, whose lines-to-skip element
+          # is on a deprecation path. An unpinned upgrade is exactly how that
+          # warning becomes an error in the middle of a release.
+          cargo install cargo-deb --version 3.7.0 --locked
+
+      - name: Build the package
+        env:
+          PARACHRON_BUILD_DATE: ${{ needs.verify-tag.outputs.date }}
+        # `--locked` so all three assets in one release come from the same
+        # dependency graph. The PKGBUILD already builds `--locked`; without it
+        # here and in the Windows job, the `.deb` and the `.exe` could resolve a
+        # newer patch release than the `.pkg.tar.zst` did, and a release whose
+        # three artefacts were built from three graphs is not one release.
+        run: cargo deb -- --locked
+
+      - name: Assert MuPDF is not a runtime dependency
+        run: |
+          set -euo pipefail
+          # See the arch job's copy of this check for why the output is captured
+          # rather than piped into `grep -q` under `pipefail`.
+          map="$(ldd target/release/parachron)"
+          echo "$map"
+          if grep -qi mupdf <<<"$map"; then
+            echo "::error::The binary links a system MuPDF. It must be static or bundled."
+            exit 1
+          fi
+          echo "MuPDF is statically linked — no system libmupdf in the link map."
+
+      - name: Show what is in the package
+        run: |
+          for deb in target/debian/*.deb; do
+            echo "=== $deb ==="
+            dpkg-deb --contents "$deb"
+            echo "--- control ---"
+            dpkg-deb --info "$deb"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian-package
+          path: target/debian/*.deb
+          if-no-files-found: error
+
+  # ── Windows ────────────────────────────────────────────────────────────────
+  windows:
+    name: .exe
+    needs: verify-tag
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Point bindgen at libclang
+        shell: pwsh
+        run: |
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path "$llvm\libclang.dll")) {
+            choco install llvm --no-progress -y
+          }
+          "LIBCLANG_PATH=$llvm" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build
+        env:
+          PARACHRON_BUILD_DATE: ${{ needs.verify-tag.outputs.date }}
+        run: cargo build --release --locked
+
+      # The Windows equivalent of the `ldd` gate the two Linux jobs run. A
+      # `mupdf.dll` in the import table would mean the same failure in a
+      # different file format: an asset that installs and then cannot open a
+      # document on a machine that does not already have MuPDF.
+      - name: Assert MuPDF is not a runtime dependency
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationPath
+          $dumpbin = Get-ChildItem -Path "$vs\VC\Tools\MSVC" -Filter dumpbin.exe -Recurse |
+                     Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          $imports = & $dumpbin.FullName /dependents target\release\parachron.exe
+          $imports
+          if ($imports -match 'mupdf') {
+            echo "::error::The exe imports a MuPDF DLL. It must be static."
+            exit 1
+          }
+          echo "MuPDF is statically linked — no mupdf DLL in the import table."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: target/release/parachron.exe
+          if-no-files-found: error
+
+  # ── The release itself ─────────────────────────────────────────────────────
+  publish:
+    name: Publish the release
+    needs: [verify-tag, arch, debian, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+
+      - name: Collect the three assets
+        env:
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p upload
+          find assets -type f \( -name '*.pkg.tar.zst' -o -name '*.deb' -o -name '*.exe' \) \
+            -exec cp {} upload/ \;
+          ls -la upload
+
+          # One per pattern, not three of anything. A bare count of three is
+          # satisfied by two `.deb`s and an `.exe`, which is a release missing
+          # its Arch asset and saying nothing about it.
+          for pattern in '*.pkg.tar.zst' '*.deb' '*.exe'; do
+            n="$(find upload -maxdepth 1 -type f -name "$pattern" | wc -l)"
+            if [ "$n" -ne 1 ]; then
+              echo "::error::Expected exactly one $pattern, found $n."
+              exit 1
+            fi
+          done
+
+          # And each one has to carry the version being released. The two Linux
+          # packages take their names from `pkgver` and from `Cargo.toml`
+          # independently, so a drift between them produces a release whose
+          # assets disagree with each other while still numbering three. The
+          # `.exe` is exempt: `parachron.exe` has no version in its name, by
+          # design — a Windows user downloads a file and runs it.
+          for f in upload/*.pkg.tar.zst upload/*.deb; do
+            case "$(basename "$f")" in
+              *"$VERSION"*) echo "ok: $(basename "$f")" ;;
+              *) echo "::error::$(basename "$f") does not carry version $VERSION."; exit 1 ;;
+            esac
+          done
+
+      # The release notes are written by hand, not generated. CORE §8 rule 1
+      # bans AI attribution in release notes as firmly as in commits, and rule 3
+      # keeps changelogs out of the user-facing surface — so this body points at
+      # the README and the assets rather than reciting what changed.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<'NOTES'
+          A desktop vault for your purchases — invoices, warranty documents,
+          serial numbers and a warranty countdown, kept together.
+
+          **Downloads**
+
+          | File | For |
+          |---|---|
+          | `parachron-*.pkg.tar.zst` | Arch Linux / CachyOS — `sudo pacman -U <file>` |
+          | `parachron_*.deb` | Debian / Ubuntu — `sudo apt install ./<file>` |
+          | `parachron.exe` | Windows — download and run |
+
+          Building from source, where your data lives, and what each part of the
+          window does are all in the [README](https://github.com/sudo-megas/PARACHRON#readme).
+
+          Parachron is free software under the GNU AGPL-3.0. The Windows build is
+          produced by this repository's own public workflow and is not code-signed,
+          so Windows may show a SmartScreen warning the first time.
+          NOTES
+
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Parachron $VERSION" \
+            --notes-file notes.md \
+            upload/*

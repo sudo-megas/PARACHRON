@@ -22,11 +22,17 @@ Parachron keeps every product's invoices, warranty PDFs, serial number and purch
 
 Everything lives in plain folders on your own disk — one folder per product, human-readable, easy to back up. No account, no cloud, no telemetry.
 
+![The Parachron window: the product list on the left, an invoice open in the middle, and the warranty countdown on the right](docs/screenshots/main.png)
+
 ---
 
 ## Dependencies
 
-**To run a packaged release** — nothing. MuPDF is built into the binary.
+**To run a packaged release** — no PDF engine to install. MuPDF is built into
+the binary, which is the part people usually have to go and find. The Linux
+packages do depend on the graphics, font and D-Bus libraries your desktop is
+already built on; your package manager pulls them in for you. The Windows `.exe`
+is self-contained.
 
 **To build from source** you need:
 
@@ -43,7 +49,7 @@ Everything lives in plain folders on your own disk — one folder per product, h
 sudo pacman -S --needed rust clang gcc make python fontconfig
 
 # Debian / Ubuntu
-sudo apt install build-essential clang python3 libfontconfig-1-dev
+sudo apt install build-essential clang python3 libfontconfig1-dev
 # plus rustup, from https://rustup.rs
 ```
 
@@ -107,6 +113,28 @@ Download `parachron.exe` from [Releases](https://github.com/sudo-megas/PARACHRON
 
 The Windows build is produced by GitHub Actions from this repository, so its build log is public. It is not code-signed, so Windows may show a SmartScreen warning the first time; choose **More info → Run anyway**.
 
+<details>
+<summary>If it closes immediately, or you are on a virtual machine or remote desktop</summary>
+
+Parachron draws with your graphics driver. On a machine with no real OpenGL —
+a VM, some remote-desktop sessions, a server — it will exit at once with:
+
+```
+Failed to initialize OpenGL driver: Could not locate glCreateShader symbol
+```
+
+Set one environment variable to draw in software instead, and it will start:
+
+```
+set SLINT_BACKEND=winit-software
+parachron.exe
+```
+
+Everything works the same; it just uses the processor rather than the graphics
+card. On an ordinary desktop you should never need this.
+
+</details>
+
 ---
 
 ## How to use
@@ -139,6 +167,8 @@ The right column holds the purchase link, the purchase date, the warranty start 
 
 **THEME** offers eleven built-in colour schemes, light and dark, including Catppuccin, Rosé Pine and a paper-like light theme. The choice applies instantly and is remembered.
 
+![The theme picker, listing all eleven colour schemes with Default Dark selected](docs/screenshots/theme.png)
+
 ### About
 
 At the foot of the left column. Shows the version, the release date, where the source lives, and the full licence text. Parachron is also available in **Turkish** — switch under **Document ▾ → Language**.
@@ -148,7 +178,7 @@ At the foot of the left column. Shows the version, the release date, where the s
 ## Where your data lives
 
 ```
-~/.local/share/parachron/
+~/.local/share/parachron/          # Linux
 ├── products/
 │   └── qd-oled-monitor/
 │       ├── product.toml      # name, serial, link, dates
@@ -157,7 +187,33 @@ At the foot of the left column. Shows the version, the release date, where the s
 └── config.toml               # theme, language, sort order, window size
 ```
 
+On **Windows** the same folder is:
+
+```
+%APPDATA%\parachron\data\
+```
+
+which is usually `C:\Users\<you>\AppData\Roaming\parachron\data\`. Paste that
+into Explorer's address bar to open it.
+
 Plain text and plain folders. Copy the directory anywhere to back it up, and Parachron will read it again as it is.
+
+### Keeping documents on another disk
+
+Invoices add up, and the folder above sits on whichever disk your home directory
+does. **Document ▾ → Vault location…** moves `products/` somewhere else — an
+external drive, a second SSD — and tells you how many files and megabytes are
+about to move before anything does.
+
+`config.toml` stays where it is. It holds the setting that says where your
+documents went, so it cannot travel with them. After a move you have two places
+to back up rather than one, and the documents are the half that matters. The
+**About** pane always names the current location, so you never have to remember
+it.
+
+If Parachron cannot find a vault you moved — an external drive that is not
+plugged in, say — it says so and shows you the path it looked for. It will not
+quietly start a new empty one somewhere else.
 
 ---
 

@@ -1,0 +1,191 @@
+# Parachron — the Windows spike (Chron11).
+#
+# Chron3 established that a hard question gets spiked rather than assumed, and
+# Chron7 showed what skipping one costs: a feature that produced a valid file
+# with words silently missing. This milestone's hard target is Windows, where
+# there is no machine attached to this project at all (CORE §7: "no local
+# Windows machine — CI owns this target").
+#
+# This workflow answers four questions and produces one artefact. It is run on a
+# branch, by hand, BEFORE the release workflow is trusted — because a release
+# workflow written on the assumption that all three targets compile is a
+# workflow whose first real run is its first test.
+#
+# Every step prints its answer as a line beginning `SPIKE ANSWER`, so the four
+# results can be read out of the log without reading the log.
+
+name: Windows spike
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'worktree-**'
+      - 'spike/**'
+      - 'chron11/**'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Four questions on windows-latest
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Question 1, first half ────────────────────────────────────────────
+      # The maintainer's laptop can resolve the Windows dependency graph with
+      # `cargo tree --target x86_64-pc-windows-msvc`, and it reports `rfd` with
+      # `Win32_UI_Shell` and `arboard` with `clipboard-win`. Resolution is not
+      # compilation. This step records what the runner itself resolves, so the
+      # claim is backed by the machine that will build the release.
+      - name: Q1a — what the runner resolves for rfd and arboard
+        shell: pwsh
+        run: |
+          cargo tree -e features -p rfd | Select-String -Pattern 'windows-sys|Win32|xdg|gtk|wayland'
+          echo "---"
+          cargo tree -e features -p arboard | Select-String -Pattern 'clipboard-win|windows-sys|wayland|x11'
+          echo "SPIKE ANSWER Q1a: see the two trees above — Win32 entries mean the Windows backends were selected."
+
+      - name: Point bindgen at libclang
+        shell: pwsh
+        run: |
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path "$llvm\libclang.dll")) {
+            echo "LLVM not preinstalled at $llvm — installing."
+            choco install llvm --no-progress -y
+          }
+          "LIBCLANG_PATH=$llvm" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          & "$llvm\clang.exe" --version
+
+      # ── Question 3 ────────────────────────────────────────────────────────
+      # Does `mupdf-sys` build on windows-latest at all? It vendors MuPDF from C
+      # source and runs bindgen over its headers under MSVC. Chron2 measured a
+      # full vendored compile at about 1m40s on Linux; the Windows number was
+      # unknown and the *success* was unknown, which mattered more. This step is
+      # the one that could simply fail, and its failure is the answer.
+      - name: Q3 — does mupdf-sys build under MSVC
+        shell: pwsh
+        run: |
+          # Not `--verbose`. The first run of this spike used it, and the log
+          # became one `Running rustc …` line per crate at roughly a kilobyte
+          # each — which buried the two compiler errors that were the actual
+          # answer under forty kilobytes of successful invocations. A spike's
+          # output has to be readable or it has not answered anything.
+          $start = Get-Date
+          cargo build --release
+          $elapsed = (Get-Date) - $start
+          echo "SPIKE ANSWER Q3: mupdf-sys built under MSVC in $($elapsed.TotalSeconds) seconds."
+
+      # ── Question 3b, which the first draft of this spike did not ask ──────
+      # "The binary compiles" and "the test suite compiles" are different
+      # statements about a Windows target, and criterion 8 wants the second.
+      # The test tree has a different cfg surface: `relocate.rs` and `export.rs`
+      # both reach for `std::os::unix::ffi::OsStringExt` and
+      # `std::os::unix::fs::PermissionsExt` to build the non-UTF-8 and
+      # unwritable-destination cases CORE §3 cares about, and a `#[cfg(unix)]`
+      # missing from any one of them is a Windows compile error that no Linux
+      # run can see.
+      #
+      # `--no-run` rather than a full `cargo test`: it compiles and links every
+      # test binary for the target, which is the whole of the question, without
+      # spending runner minutes executing a suite `ci.yml` already runs.
+      - name: Q3b — does the *test tree* compile for Windows
+        shell: pwsh
+        run: |
+          cargo test --no-run
+          echo "SPIKE ANSWER Q3b: the test tree compiles and links for x86_64-pc-windows-msvc."
+
+      # ── Question 1, second half ───────────────────────────────────────────
+      # A binary that links the Win32 shell and the Win32 clipboard imports
+      # their DLLs by name. `dumpbin /dependents` reads the import table, which
+      # is the compiled artefact rather than the dependency graph — the
+      # difference this question exists to close.
+      - name: Q1b — which DLLs the built exe actually imports
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationPath
+          $dumpbin = Get-ChildItem -Path "$vs\VC\Tools\MSVC" -Filter dumpbin.exe -Recurse |
+                     Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          & $dumpbin.FullName /dependents target\release\parachron.exe
+          echo "SPIKE ANSWER Q1b: shell32/ole32/comdlg32 mean the file dialog is linked; user32 covers the clipboard."
+
+      # ── Question 2 ────────────────────────────────────────────────────────
+      # Resolving, compiling and functioning are three different statements, and
+      # only the third is criterion 6. The clipboard half is testable here: a
+      # Windows runner has a window station, and a set/get roundtrip through
+      # arboard either returns the string or it does not.
+      #
+      # The file dialog's half is NOT testable here and this workflow does not
+      # pretend otherwise — `AsyncFileDialog::pick_file` shows a modal window
+      # that waits for a person. What the artefact step below does instead is
+      # put the built exe somewhere a person can download it and open the dialog
+      # once, by hand, which is the only way that half of criterion 6 gets
+      # answered at all.
+      - name: Q2 — does the clipboard round-trip on a real Windows session
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          cargo run --release --example win_clipboard_smoke
+          echo "SPIKE ANSWER Q2 (clipboard): see the line above."
+          echo "SPIKE ANSWER Q2 (dialog): NOT ANSWERED BY CI — modal, needs a person. Download the artefact."
+
+      # ── Question 4 ────────────────────────────────────────────────────────
+      # Slint's default renderer wants a GL context. On a Windows runner, in a
+      # VM, or over a remote desktop that is not always there, and a packaged app
+      # that opens to nothing is indistinguishable from one that crashed. The
+      # binary is launched and given fifteen seconds. Surviving them means a
+      # window was created and a renderer was found; dying inside them prints
+      # which renderer refused, and that is the answer either way.
+      - name: Q4 — does the default renderer come up on a runner
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $env:RUST_BACKTRACE = "1"
+          $p = Start-Process -FilePath "target\release\parachron.exe" `
+                             -PassThru -RedirectStandardError spike-stderr.txt `
+                             -RedirectStandardOutput spike-stdout.txt
+          Start-Sleep -Seconds 15
+          if ($p.HasExited) {
+            echo "SPIKE ANSWER Q4: the binary EXITED within 15s with code $($p.ExitCode) — the default renderer did not come up."
+          } else {
+            echo "SPIKE ANSWER Q4: the binary was still running after 15s — a window and a renderer were obtained with no environment variable set."
+            Stop-Process -Id $p.Id -Force
+          }
+          echo "--- stderr ---"; if (Test-Path spike-stderr.txt) { Get-Content spike-stderr.txt }
+          echo "--- stdout ---"; if (Test-Path spike-stdout.txt) { Get-Content spike-stdout.txt }
+
+      # The same probe with Slint's software renderer forced. If Q4 came up
+      # green this tells us the fallback also works; if Q4 failed this tells us
+      # whether the fallback is the fix, which is the difference between "the
+      # release needs a feature flag" and "the release needs a README line".
+      - name: Q4b — the software renderer, as a fallback
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $env:SLINT_BACKEND = "winit-software"
+          $p = Start-Process -FilePath "target\release\parachron.exe" `
+                             -PassThru -RedirectStandardError spike-sw-stderr.txt
+          Start-Sleep -Seconds 15
+          if ($p.HasExited) {
+            echo "SPIKE ANSWER Q4b: software renderer EXITED with code $($p.ExitCode)."
+          } else {
+            echo "SPIKE ANSWER Q4b: software renderer ran for 15s — usable as a documented fallback."
+            Stop-Process -Id $p.Id -Force
+          }
+          if (Test-Path spike-sw-stderr.txt) { Get-Content spike-sw-stderr.txt }
+
+      # The artefact exists so that criterion 6's dialog half, and criterion 5's
+      # "shows its own icon in Explorer and the taskbar", can be checked by a
+      # person on a real Windows machine without that person building anything.
+      # It is a spike output, not a release: it is unsigned, untagged, and its
+      # About pane will show the runner's build date rather than a tag's.
+      - name: Upload the exe for the half a runner cannot check
+        uses: actions/upload-artifact@v4
+        with:
+          name: parachron-windows-spike
+          path: target/release/parachron.exe
+          if-no-files-found: error

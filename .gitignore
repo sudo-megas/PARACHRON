@@ -6,5 +6,11 @@
 *.deb
 *.exe
 
+# makepkg's work directories. It creates these inside `packaging/`, which is
+# inside the crate, and `pkg/` arrives mode 0111 — see the PKGBUILD's prepare()
+# for what that costs a build that does not copy itself out first.
+/packaging/pkg/
+/packaging/src/
+
 # Local tooling state
 .claude/settings.local.json

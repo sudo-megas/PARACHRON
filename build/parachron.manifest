@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Parachron's Windows application manifest (Chron11).
+
+  Compiled into the executable by `build.rs` through `winresource`, alongside
+  `build/icons/parachron.ico`. Three things are declared here and nowhere else,
+  because on Windows each of them is read from the manifest before any of the
+  program's own code runs — setting them at runtime is either too late or not
+  possible at all.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+
+  <assemblyIdentity
+      type="win32"
+      name="org.parachron.Parachron"
+      version="1.0.0.0"/>
+
+  <!--
+    Run as whoever launched it. Parachron writes to the user's own data
+    directory and nowhere else (CORE §3), so it has no reason to ask for
+    elevation — and an app that asks for administrator rights it does not need
+    trains its user to grant them to something that does.
+
+    `uiAccess="false"` is the default and is spelled out because the pair is
+    read together.
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <!--
+    DPI awareness. Without this Windows hands the process a virtualised
+    96-DPI desktop and then bitmap-stretches the result to the real scale,
+    which is the soft, blurry window Chron2 documented for HiDPI on Linux —
+    the same failure, arrived at down a different road.
+
+    `PerMonitorV2` rather than `system`: it is the only mode that rescales when
+    a window is dragged between monitors of different scales, and it is the mode
+    winit expects. The older `<dpiAware>` element is kept beside the newer
+    `<dpiAwareness>` one deliberately — Windows 10 1607 and later read
+    `dpiAwareness` and ignore `dpiAware`; anything earlier does the reverse. A
+    manifest that declares only the new element silently falls back to
+    unaware on the older systems.
+  -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <!--
+        UTF-8 as the process code page. Parachron's data is TOML, which is
+        UTF-8 by specification (CORE §3), and its UI ships Turkish. Without
+        this declaration the ANSI half of the Win32 API hands this process
+        the system's legacy code page, and a product folder named `Şarj
+        Cihazı` is a mojibake path rather than a path. Windows 10 1903+.
+      -->
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+
+  <!--
+    Declaring supported Windows versions is what makes `GetVersionEx` and the
+    common-controls theming report the truth rather than a compatibility lie.
+    Windows 10 and 11 share the 8e0f7a12 GUID; the three older entries cost
+    nothing and keep the declaration honest about what was tested — which, per
+    CORE §7, is whatever the `windows-latest` runner is.
+  -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/>
+      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>
+    </application>
+  </compatibility>
+
+</assembly>
