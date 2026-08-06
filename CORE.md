@@ -53,6 +53,27 @@ Data lives under the XDG data dir: `~/.local/share/parachron/`.
 
 One folder per product; the folder holds `product.toml` plus that product's PDFs. The app scans `products/` at startup and builds its list from what actually exists on disk. The data must outlive the app: everything human-readable, rsync-friendly, no hidden state.
 
+### Where the vault is (Chron9)
+
+The tree above is the default, not the only arrangement. Parachron *copies* documents into the vault rather than referencing them where it found them, so a vault grows with the paperwork put into it — and the default puts that growth on whatever disk `$HOME` sits on. `config.toml` therefore carries an optional `vault` key naming a directory, and `products/` lives under it.
+
+**`config.toml` does not move, and cannot.** It holds the key that says where the vault is, so it cannot live inside the vault: the app would need the location in order to read the setting that gives it the location. The two split accordingly, and only one of them travels:
+
+| Path | Holds | Moves |
+|---|---|---|
+| `<data dir>/config.toml` | theme, language, sort mode, window size, `vault` | never |
+| `<vault>/products/` | one folder per product, with its PDFs | yes |
+
+`vault` absent, or present and empty, means the vault **is** the data directory — which resolves `products/` to `~/.local/share/parachron/products/`, exactly what every install had before the key existed. There is no migration and nothing a user who does not want this has to notice. Moving the vault back to the default writes no key rather than the default path spelled out, so the file matches what a fresh install would have.
+
+**A configured vault is checked, never created.** The default vault is created on first run; its parent is the platform's own data directory and exists on any machine with a home. A configured one is only ever looked for. If `vault` names a path under a mount point and the drive is not mounted, that mount point is an ordinary empty directory on the root filesystem — creating the vault there would put documents on the system disk while their owner believed they were on the drive bought for exactly this, and mounting the drive afterwards would hide the lot underneath it. So a missing configured vault puts its path on screen, creates nothing, and does **not** fall back to the default, because a silent fall back is indistinguishable from total data loss to whoever is reading the window.
+
+The same rule reaches one file further out. A `config.toml` that will not parse used to degrade to the defaults, which cost a theme; with a `vault` key it would cost sight of the vault, so it is now reported as a broken entry naming the file rather than guessed at. "No `vault` key" and "this file did not parse" are different answers.
+
+A relocation is a **move**, not a repointing: `fs::rename` where it works, and copy → verify → remove where it does not, which is the cross-filesystem case the feature exists for. The source is removed only after the copy verifies, so a failure at any point leaves the original vault complete and `config.toml` still naming it.
+
+Two consequences worth stating rather than discovering. "Back up the vault" and "back up everything" stopped being the same sentence once the two can be in different places — settings are small and reproducible, documents are neither — which is why the About pane names the vault's location, as plain text with copy-to-clipboard and nothing that opens. And a vault that cannot be found is not a vault that is empty: the list has never hidden a folder it could not read, and it does not start with the folder that holds all of them.
+
 ### product.toml schema
 
 ```toml
@@ -65,6 +86,19 @@ warranty_end = 2029-03-14         # TOML date (entered directly, not computed)
 pdfs = ["invoice.pdf", "warranty.pdf"]   # order = tab order in the viewer
 added = 2026-08-05                # when the entry was created (insertion order)
 ```
+
+### config.toml schema
+
+```toml
+lang = "en"                       # "en" | "tr"
+theme = "default-dark"            # one of §5's eleven ids
+sort = "added"                    # "added" | "name" | "purchase"
+window_width = 1280
+window_height = 800
+vault = "/mnt/ironwolf/parachron" # optional (Chron9); absent means the data dir
+```
+
+A path is bytes on Linux and a TOML string is UTF-8, so a vault path that is not valid UTF-8 cannot be written here at all. It is refused when it is chosen, rather than lossily converted into a similar-looking path that would be wrong every time it was read back.
 
 Rules: dates are stored as **native TOML dates** — RFC 3339 `YYYY-MM-DD`, the only form TOML parses — and rendered in the UI as `DD-MM-YYYY` (e.g. `14-03-2026`). Storage format and display format are separate concerns; never write `DD-MM-YYYY` into a `.toml` file. `warranty_end` is entered by the user together with `warranty_start` (both come from the warranty card). Days left = `warranty_end - today`, clamped at 0, displayed as e.g. `658 days`. Missing or malformed TOML must never crash the app — the product appears in the list flagged as broken, with a readable error.
 
@@ -118,6 +152,8 @@ Two things about "switchable at runtime", settled in Chron6. Refilling the `Stri
 
 Language names are written in their own language in both tables (`English`, `Türkçe`), so a reader who has landed in a language they cannot read can still find their own. Turkish maps `i`→`İ` and `ı`→`I`, so any label that shouts is stored shouting and never passed through `to_uppercase` — `EXPORT` is `DIŞA AKTAR`, with a dotless capital.
 
+**The `Document ▾` menu** holds Add Document, Edit Document…, **Vault location…** (Chron9), and the two language rows, in that order with a hairline before each group. Vault location sits with the document actions rather than with the languages because it is a thing done to the vault; it is below both of them because it is done once rather than daily. It opens a folder picker, then a sheet that names the current path, the chosen path, and how many documents and megabytes are about to move — the count is what makes confirming a decision rather than a dare. While the move runs the sheet shows a determinate bar, the file count, the byte total and the name of the file being copied, and it stays up when the move lands rather than vanishing: a copy that ran for minutes and then blinked out leaves no way to tell "it worked" from "it gave up". The bar is drawn from `Palette` like everything else — §10 records what happens when a widget is taken from `std-widgets` instead.
+
 ### About view
 
 Anaphored from JADEITE's About. Selecting About in the column-1 footer swaps the content area (columns 2+3) for a single centered pane:
@@ -128,6 +164,7 @@ Anaphored from JADEITE's About. Selecting About in the column-1 footer swaps the
 - Maker — `sudo-megas`
 - Version — from `Cargo.toml` at build time
 - Release date
+- Vault — where the products actually are (Chron9). Plain text with copy-to-clipboard and nothing that opens: §3 promises no hidden state, and a folder chosen through a dialog that cannot be read back afterwards is hidden state. It is the one value in this pane that can change while the window is open, so a move pushes it again
 - Source code — `https://github.com/sudo-megas/PARACHRON` (plain text)
 - Docs — `https://github.com/sudo-megas/PARACHRON#readme` (plain text)
 - Note under the URLs: these addresses are not links; Parachron never opens external addresses — copy them into your browser (see App-wide principles)

@@ -1,7 +1,7 @@
 # Chron9 — Vault location
 
 **Milestone:** 9 of ~10 (CORE §9)
-**Status:** planned
+**Status:** done
 **Builds against:** CORE §3 (data model, in full — where the vault is, what is in it, and the promise that it outlives the app), §4 (the `Document ▾` menu, the About view, app-wide principles), §5 (a new surface is themed like every other one), §7 (packaging — Chron10 has to describe a data directory that is no longer one path), §8 (conventions & development rules), §9 (roadmap — this milestone and Chron10 swapped places)
 
 ## Goal
@@ -48,48 +48,55 @@ src/relocate.rs       # NEW — the worker that moves a vault, with progress
 src/main.rs           # startup order inverts: config before scan
 src/about.rs          # + the current location row
 src/strings.rs        # + the new keys, EN and TR
-ui/app.slint          # + the Document ▾ entry
-ui/sheet.slint        # + the confirmation and progress sheet
-ui/palette.slint      # (unchanged — the bar reads roles that already exist)
+src/{viewer,vault,editor,export}.rs   # + set_products_root, one caller
+src/lang.rs           # the switch reaches the sheet's composed strings too
+ui/relocate.slint     # NEW — the confirmation and progress sheet
+ui/app.slint          # + the Document ▾ entry and the sheet's properties
+ui/about.slint        # + the location row, through the existing LinkRow
+ui/strings.slint      # + the new labels
+ui/{sheet,palette}.slint   # (unchanged — the sheet recipe and the colour
+                      #  roles both already had what this needed)
 CORE.md               # §3 gains the vault key and the resolution rule
 ```
 
-`relocate.rs` rather than a function in `data.rs`: it owns a thread, a channel and a progress protocol, which is the same reason `render.rs` and `export.rs` are their own modules rather than functions in the files that call them.
+`relocate.rs` rather than a function in `data.rs`: it owns a thread, a channel and a progress protocol, which is the same reason `render.rs` and `export.rs` are their own modules rather than functions in the files that call them. `relocate.slint` rather than more of `sheet.slint`, for the reason Chron5 lifted `Sheet` in the first place — `Sheet` is the recipe, and the third thing to use it should use it rather than grow it.
+
+**Four setters this file did not plan for.** The products root turned out to have four owners — `viewer`, `vault`, `editor` and `export` — each holding a plain `PathBuf` copy, so a move has to retarget all four. That is the arrangement Chron6 arrived at for the language, and it is forced by the same bound: `viewer::State` lives behind an `Arc<Mutex<_>>` captured into the render worker's `Send` sink, so a shared cell does not compile. The risk of a forgotten copy is answered the same way too — there is exactly one caller, `relocate::retarget`, and it is where the About row's path is pushed as well.
 
 ## Tasks
 
 ### The pointer
 
-- [ ] `config.rs`: `Config` gains `vault: Option<String>`, and `config.rs`'s existing "no query field" test grows `vault` in the list of keys that *are* settings, so a missing one fails as loudly as an added one
-- [ ] `config.rs`: `Config::load` stops being infallible. A file that will not parse is distinguishable from a file with no `vault` key, for the reason in Technical notes
-- [ ] `data.rs`: `Paths` gains `vault`, and `products` is derived from it rather than from `data`
-- [ ] `data.rs`: split resolution from creation — the default vault is created on first run, a configured one is never created, only checked
-- [ ] `main.rs`: invert the startup order so the config loads before the scan, with `local_offset()` still the first statement in `main` (Chron4, and it is a soundness requirement rather than a preference)
-- [ ] A path is bytes on Linux and a TOML string is UTF-8: a vault path that is not valid UTF-8 is refused with a message rather than mangled into one that nearly works
+- [x] `config.rs`: `Config` gains `vault: Option<String>`, and `config.rs`'s existing "no query field" test grows `vault` in the list of keys that *are* settings, so a missing one fails as loudly as an added one
+- [x] `config.rs`: `Config::load` stops being infallible. A file that will not parse is distinguishable from a file with no `vault` key, for the reason in Technical notes
+- [x] `data.rs`: `Paths` gains `vault`, and `products` is derived from it rather than from `data`
+- [x] `data.rs`: split resolution from creation — the default vault is created on first run, a configured one is never created, only checked
+- [x] `main.rs`: invert the startup order so the config loads before the scan, with `local_offset()` still the first statement in `main` (Chron4, and it is a soundness requirement rather than a preference)
+- [x] A path is bytes on Linux and a TOML string is UTF-8: a vault path that is not valid UTF-8 is refused with a message rather than mangled into one that nearly works
 
 ### The move
 
-- [ ] `relocate.rs`: a worker on the shape of `export.rs`'s, with the busy flag claimed before the dialog rather than after it — the correction `0445eb3` already paid for once
-- [ ] `fs::rename` first; on failure fall back to copy → verify → remove. Crossing a filesystem is the case this milestone exists for, and it is exactly the case `rename` cannot do
-- [ ] The invariant, which is what its tests are for: a failure at any point leaves the **original** intact and `config.toml` unchanged. The partial destination is cleaned up; the source is removed only after the copy verifies
-- [ ] Refuse the current vault, a folder inside the current vault, and a folder that already holds a `products/` — each with its own message, not one generic error
-- [ ] Progress reported **per file, not per chunk**: files done, files total, bytes done, bytes total, and the name of the file being copied
-- [ ] Write the new location to `config.toml` only after the move has succeeded
+- [x] `relocate.rs`: a worker on the shape of `export.rs`'s, with the busy flag claimed before the dialog rather than after it — the correction `0445eb3` already paid for once
+- [x] `fs::rename` first; on failure fall back to copy → verify → remove. Crossing a filesystem is the case this milestone exists for, and it is exactly the case `rename` cannot do
+- [x] The invariant, which is what its tests are for: a failure at any point leaves the **original** intact and `config.toml` unchanged. The partial destination is cleaned up; the source is removed only after the copy verifies
+- [x] Refuse the current vault, a folder inside the current vault, and a folder that already holds a `products/` — each with its own message, not one generic error
+- [x] Progress reported **per file, not per chunk**: files done, files total, bytes done, bytes total, and the name of the file being copied
+- [x] Write the new location to `config.toml` only after the move has succeeded
 
 ### The UI
 
-- [ ] `Document ▾` gains `Vault location…` / `Kasa Konumu…`, opening `rfd::AsyncFileDialog::pick_folder` through `slint::spawn_local` the way `import::pick` does
-- [ ] A confirmation sheet naming the current path, the chosen path, and how many documents and how many megabytes are about to move
-- [ ] A progress bar, `N of M`, a byte count and the current file name — the bar drawn from `Palette` and not taken from `std-widgets`, for the reason in Technical notes
-- [ ] A failure leaves the sheet open with its reason and the file it stopped on, rather than closing and leaving a notice that is gone when the app closes
-- [ ] The About pane gains the current vault path: plain text, copy-to-clipboard, opening nothing — the one gesture that pane has
-- [ ] Every string in both tables, and any that shouts stored shouting rather than passed through `to_uppercase` (CORE §4)
+- [x] `Document ▾` gains `Vault location…` / `Kasa Konumu…`, opening `rfd::AsyncFileDialog::pick_folder` through `slint::spawn_local` the way `import::pick` does
+- [x] A confirmation sheet naming the current path, the chosen path, and how many documents and how many megabytes are about to move
+- [x] A progress bar, `N of M`, a byte count and the current file name — the bar drawn from `Palette` and not taken from `std-widgets`, for the reason in Technical notes
+- [x] A failure leaves the sheet open with its reason and the file it stopped on, rather than closing and leaving a notice that is gone when the app closes
+- [x] The About pane gains the current vault path: plain text, copy-to-clipboard, opening nothing — the one gesture that pane has
+- [x] Every string in both tables, and any that shouts stored shouting rather than passed through `to_uppercase` (CORE §4)
 
 ### The failures
 
-- [ ] A configured vault that does not exist at startup: the app opens, names the path, creates nothing, and does not fall back to the default
-- [ ] A `config.toml` that will not parse: the app opens, names the file, and does not point at the default vault
-- [ ] Neither of those two states is silent, and neither is a crash (CORE §3)
+- [x] A configured vault that does not exist at startup: the app opens, names the path, creates nothing, and does not fall back to the default
+- [x] A `config.toml` that will not parse: the app opens, names the file, and does not point at the default vault
+- [x] Neither of those two states is silent, and neither is a crash (CORE §3)
 
 ## Acceptance criteria
 
@@ -131,16 +138,50 @@ The fallback is copy → verify → remove, in that order, and the order is the 
 
 **A path is bytes and a TOML string is UTF-8.** On Linux a filename is a sequence of bytes with no encoding guarantee, so a folder picker can legitimately return a `PathBuf` that is not valid UTF-8 — and TOML has no way to write it down. Chron7 met the same wall from the other side, which is why the export writes through `write_to` rather than `save`. Here the answer is different because the destination has to be *persisted* rather than just used: the path is refused, with a message saying why, rather than lossily converted into a similar-looking path that would then be wrong every time it was read back. Rare, and the kind of thing that is much cheaper to refuse deliberately than to discover.
 
+**When the vault is not there, the entry that would move it is disabled — and that is a gap, stated rather than hidden.** A move needs a source. If a configured vault is missing, or `config.toml` will not parse, or there is no home directory at all, there is nothing to move from and `relocate::install` is not called, so `Vault location…` is greyed. That leaves the most natural repair — *the drive is gone, point me somewhere else* — to a text editor, which is a poor answer for the one state where a user most wants the app's help.
+
+It is deliberate rather than overlooked. Repointing without moving is the mode this file scoped out in favour of moving, and reintroducing it for one state would mean shipping both modes and explaining when each applies. The honest reading is that the miss is real and the fix is a *third* thing — an explicit "the vault is not where it should be" state that offers to point rather than to move — and that inventing it under a disabled menu row would be worse than naming it here. If it is built, it belongs with whatever milestone next touches this file, not tacked onto the end of this one.
+
 **What the About pane gains, and what it deliberately does not.** CORE §3 promises data that is human-readable and rsync-friendly, with no hidden state. A location the user chose through a dialog and cannot read back afterwards is hidden state — they would have to open `config.toml` to answer "where are my documents". So the pane shows it, next to the version and the source URL, as plain text with copy-to-clipboard.
 
 It does not get a button that opens the folder. CORE §4's no-external-opens rule is written about addresses, and a filesystem path is not a URL, so this is not the rule forbidding it — it is that the pane has exactly one gesture, copy, applied to every address in it, and a folder-opening button would be the first exception in a surface whose whole argument is that it has none. The clipboard is enough to paste into a file manager.
 
 ## How the criteria were verified
 
-Written when the milestone is done, in the manner of Chron1–8, with Chron8's **Not verified** list as the model for whatever this one cannot check.
+184 tests pass (`cargo test`), up from Chron8's 155, with no warnings from `cargo build` either. **`cargo clippy` and `cargo fmt --check` are both clean, and neither had ever been run in this tree** — no workflow has existed to run them. `fmt` had a backlog of 74 hunks across 13 of the 15 source files, paid off in its own commit before any of this landed so that the feature diff was not tangled with it; clippy found three collapsible `if`s, in `editor.rs`, `import.rs` and `render.rs`, all of which are fixed here rather than left for the workflow that will gate on them.
 
-Two of these criteria are worth flagging now as likely to need care rather than a line. Criterion 5 needs a genuinely different filesystem rather than a second temporary directory, or it verifies the `rename` path twice and the copy path never — `/dev/shm` is mounted and writable and is the cheapest real one available here. And criterion 9 needs a configured path whose parent exists but whose drive does not, which is a state that has to be constructed deliberately; the failure it guards against is invisible when it happens, so a test that merely fails to find a vault is not the same test.
+**Automated, and written against the failure paths rather than the happy one.** Seventeen tests in `relocate.rs`, and the ones that matter are not the ones that move files successfully. A move interrupted by an unwritable destination is asserted to leave the source vault with all five files and all nine bytes still in it, and to leave no partial `products/` behind that a later attempt would refuse as `Occupied`. `verify` is asserted to catch a file truncated behind the copy's back, and to catch a file *appearing* in the source while the move ran — which is the one way this could lose a document with no step having failed. The four refusals each have their own test, including the one that is not obvious: a sibling directory whose name merely starts with the vault's is **not** inside it, which is true because `Path::starts_with` compares components rather than characters, and is the kind of thing that is true until somebody rewrites it with a string comparison.
+
+**Criterion 5 against two real filesystems, because a tempdir cannot fake `EXDEV`.** Every other test here runs inside one `/tmp`, where `fs::rename` succeeds — so on its own the suite would prove the fast path twice and the copy path never. `/dev/shm` is a tmpfs and is mounted on any ordinary Linux system, and the test uses it: it compares `st_dev` to confirm the two really are different devices, then asserts that a bare `fs::rename` between them *fails*, and only then runs the move. It reports a skip out loud if either premise does not hold, rather than passing quietly, because a skip nobody sees is how a test rots.
+
+**Headless, through the real element tree.** The `Document ▾` entry exists, is labelled from the string table, and is *enabled* — that last one is the assertion with teeth, since `relocate::install` is what turns the row on and is skipped entirely when there is no vault to move from, so a dead row is exactly the shape a regression would take. Checked in both languages, because a key added to one table and not the other is the one mistake `strings.rs`'s exhaustiveness test cannot catch on its own: it proves both sides exist, not that the window reads the right one.
+
+**By real clicks, on the isolated display, against scratch vaults.** `Xvfb :98` at 1000×700 — CORE §4's floor — with `env -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE` and `XDG_DATA_HOME` pointed at a temporary directory, which is Chron3's and Chron5's harness unchanged. Four states, each its own launch:
+
+| State | What was seen |
+|---|---|
+| Default vault, three products, one broken folder | The list as before; `Vault location…` in `Document ▾`, below Edit Document and above the language rows, with its own hairline; `config.toml` after exit holds **no** `vault` key |
+| A vault configured onto another path | The product loads from the configured path, the data directory holds `config.toml` and nothing else — no stray `products/` was created beside it |
+| A configured vault under an unmounted drive | The app opens, the path is on screen as a broken row, the mount point is **empty afterwards**, and no vault was created in the data directory as a consolation |
+| A `config.toml` that will not parse | The app opens, and the file is still on disk exactly as it was — the broken config was not overwritten, so the `vault` line naming the user's documents survived |
+
+The last two are the ones this milestone exists for, and both were checked by looking at the filesystem afterwards rather than only at the window. An `Err` proves a function returned; `ls` on the mount point proves nothing was written to the wrong disk.
+
+**The About row, by eye.** The pane shows **Vault** between Release date and Source code, carrying the configured path and the copy glyph, drawn through the same `LinkRow` the two URLs use — text you can copy, and nothing that opens anything.
+
+**One thing the harness taught, again.** The About row did not appear in the first run of the click harness, and the pane looked exactly as it had in Chron8. The row was fine; the binary was stale. `cargo test` builds the test binary and does not necessarily relink `target/debug/parachron`, which is written down in Chron5's verification section as having cost two runs there — and cost one more here, because the harness was rewritten from scratch without that line in it. The build step is now the first thing the script does. Worth recording twice: a screenshot of a stale binary is indistinguishable from a screenshot of a feature that does not work.
+
+**A finding for Chron10, produced by this harness rather than by reading.** `xprop WM_CLASS` on the running window returns `"parachron", "parachron"` — winit's fallback to `argv[0]`, because nothing calls `slint::set_xdg_app_id`. That confirms empirically what Chron10's technical notes claim from the source, and it is the X11 half; on Wayland there is no app id at all and no `StartupWMClass` that could stand in for one.
+
+**Not verified.** Named rather than implied, in the manner of every milestone here.
+
+- **The folder picker itself, and therefore the sheet on screen.** A portal dialog is drawn by the desktop's own portal service in the user's session, so it appears on the real display whatever `DISPLAY` says and cannot be driven under `Xvfb` — the boundary Chron3 documented for the file picker and Chron7 restated for the save dialog. Everything past it takes a `PathBuf` and is tested that way: `vet`, `survey`, `run` and the whole copy path. What was not observed is a human clicking through a real move, which means **the confirmation sheet, the progress bar, the byte counter and the finished state have not been seen on a screen.** They are wired exactly as the theme picker and the form are, and that is an argument rather than an observation.
+- **The move as a whole gesture.** Criteria 4, 6 and 7 are each verified at the layer below the dialog — files arrive, progress is emitted once per file ending at the total, a failure leaves the source complete — and none of them was verified by starting a move from the menu.
+- **A language switch with the sheet open.** `Relocations::set_lang` re-composes the summary and the progress line, and the labels bind to `Strings` like everything else. Neither was watched happen, for the same reason: opening the sheet needs the picker.
+- **Ten of the eleven themes, and the sheet in Turkish.** Everything above was seen on Default Dark. The sheet reads every colour from `Palette` with a clean literal sweep — which is the same evidence Chron5 called insufficient when a screenshot caught the zoom slider.
+- **A move of a vault large enough to be slow.** The progress bar exists because a multi-gigabyte copy takes minutes; the largest thing moved in anger here was nine bytes. That the bar is determinate and monotonic is asserted from the messages, not from watching one fill.
+- **A move interrupted by the app being killed.** The invariant is argued from the order of operations and tested by making a write fail; nothing was `kill -9`'d half way through a copy. The reasoning holds — `config.toml` is written last, so a process that dies mid-copy leaves a stale destination and a config still naming the source — but a partial destination left by a dead process is not cleaned up by anything, and no later run knows it is there.
 
 ## Done when
 
-All acceptance criteria pass on the laptop. Then: amend CORE §3 with the `vault` key, the split between what moves and what does not, and the rule that a configured vault is checked rather than created; note in CORE §4 that `Document ▾` has a fourth entry and that the About pane shows the location; record in CORE §9 that this milestone and Chron10 swapped places, which its table already carries; hand Chron10 the fact that "where the vault lives" now has a user-supplied answer as well as a per-platform one, so the README's data-directory section and CORE §3's Windows row both have to describe two things rather than one; mark this file's status `done`, and move on to Chron10.
+All acceptance criteria pass on the laptop, with the caveats in the section above: criteria 4, 6 and 7 are verified at the layer beneath the folder picker rather than through it, because a portal dialog cannot be driven under `Xvfb`. Then: amend CORE §3 with the `vault` key, the split between what moves and what does not, and the rule that a configured vault is checked rather than created; note in CORE §4 that `Document ▾` has a fourth entry and that the About pane shows the location; record in CORE §9 that this milestone and Chron10 swapped places, which its table already carries; hand Chron10 the fact that "where the vault lives" now has a user-supplied answer as well as a per-platform one, so the README's data-directory section and CORE §3's Windows row both have to describe two things rather than one; mark this file's status `done`, and move on to Chron10.
