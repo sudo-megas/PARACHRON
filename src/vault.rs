@@ -212,9 +212,11 @@ impl Vault {
     /// The selected product's folder, which is its identity (CORE §3) and is on
     /// disk rather than on screen — so nothing translates it.
     ///
-    /// Read only by the test that says so; the app addresses the selection through
-    /// `plan` and never needs to ask.
-    #[allow(dead_code)]
+    /// Added in Chron6 for the test that says so, and given a real caller in
+    /// Chron7: an export that lands after the user has moved on compares the folder
+    /// it exported against this one, and withholds its status line if they differ.
+    /// The allowance came off there, the way Chron1's allowance on `Product` came
+    /// off in Chron4.
     pub fn selected_folder(&self) -> Option<String> {
         self.selected.clone()
     }

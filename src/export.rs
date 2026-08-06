@@ -533,10 +533,15 @@ struct State {
     lang: Lang,
     /// Read once at startup, while the process was still single-threaded.
     offset: UtcOffset,
-    /// An export is running. A second click while one is in flight is ignored
-    /// rather than queued: two threads writing two files the user asked for once
-    /// is not what they meant.
-    busy: bool,
+    /// The folder of the product being exported, when one is.
+    ///
+    /// `Some` *is* the busy flag — a second click while one is in flight is
+    /// ignored rather than queued, because two threads writing two files the user
+    /// asked for once is not what they meant. It carries the folder rather than
+    /// just a `bool` so that when the export lands, its status can be withheld if
+    /// the user has moved to a different product in the meantime: `Saved` above
+    /// somebody else's details is a claim about the wrong thing.
+    exporting: Option<String>,
     /// Where a finished export leaves its result. The export runs on a thread and
     /// this module is full of `Rc`s, so the outcome travels here rather than in a
     /// closure — the same reason `import.rs` does it this way.
@@ -561,12 +566,14 @@ impl Exports {
     /// (because `busy` was true) and an app that looked idle while it worked. What
     /// is happening now gets said again, in the new language.
     pub fn set_lang(&self, app: &AppWindow, lang: Lang) {
-        let busy = {
-            let mut state = self.state.borrow_mut();
-            state.lang = lang;
-            state.busy
-        };
-        if busy {
+        self.state.borrow_mut().lang = lang;
+
+        // `export-running` on the window is the single predicate for "an export is
+        // in flight", shared with `clear_status`. Asking `State.exporting` here
+        // instead would be a second source of truth for the same fact, and the two
+        // would only have to disagree once — `State.exporting` exists to carry
+        // *which* folder, for the identity check when the export lands.
+        if app.get_export_running() {
             status(app, strings::get(lang, Key::Exporting).to_string(), false);
         } else {
             clear_status(app);
@@ -579,15 +586,24 @@ fn status(app: &AppWindow, text: String, failed: bool) {
     app.set_export_failed(failed);
 }
 
-/// Take the status line down.
+/// Take the status line down — unless an export is running.
 ///
-/// Called by `details::show` on every selection change as well as from here, and
-/// that split is deliberate: `export.rs` is the only thing that ever *says*
-/// anything, and a change of product is the only other thing that can *unsay* it.
-/// A status is a claim about one product — `Saved — Not included: gone.pdf` left
-/// over from product A, sitting above product B's details or above a broken
-/// folder's "Details appear here", is a claim about the wrong thing.
+/// Called by `details::show` on every push as well as from here, and that split is
+/// deliberate: `export.rs` is the only thing that ever *says* anything, and a
+/// change of product is the only other thing that can *unsay* it. A status is a
+/// claim about one product, so `Saved — Not included: gone.pdf` left over from
+/// product A above product B's details is a claim about the wrong thing.
+///
+/// The guard is not a detail. `details::show` runs from every `vault::push`, and
+/// `lang::switch` ends in one — so an unconditional clear here erased the line
+/// `Exports::set_lang` had just re-said, and switching language mid-export still
+/// blanked "Exporting…" and left a live button that silently did nothing. A sort
+/// toggle or a form save during an export did the same. The status of work in
+/// flight is not about whichever product happens to be selected, so it survives.
 pub fn clear_status(app: &AppWindow) {
+    if app.get_export_running() {
+        return;
+    }
     status(app, String::new(), false);
 }
 
@@ -603,7 +619,7 @@ pub fn install(
         products_root,
         lang,
         offset,
-        busy: false,
+        exporting: None,
         slot: Arc::new(Mutex::new(None)),
     }));
 
@@ -642,16 +658,19 @@ pub fn install(
             // opens a dialog until it has been dropped.
             let (lang, today, root) = {
                 let mut state = state.borrow_mut();
-                if state.busy {
+                if state.exporting.is_some() {
                     return;
                 }
-                state.busy = true;
+                state.exporting = Some(product.folder.clone());
                 (
                     state.lang,
                     data::today(state.offset),
                     state.products_root.clone(),
                 )
             };
+            // On the window too, because `details::show` runs from every
+            // `vault::push` and has to know not to clear a running export's line.
+            app.set_export_running(true);
 
             let suggestion = suggested_name(&product, today);
             let state = Rc::clone(&state);
@@ -668,7 +687,8 @@ pub fn install(
                         // Cancelled. Nothing is written and nothing is said — the
                         // user withdrew the request, which is not an outcome to
                         // report — but the flag has to come back.
-                        state.borrow_mut().busy = false;
+                        state.borrow_mut().exporting = None;
+                        app.set_export_running(false);
                         return;
                     };
 
@@ -695,17 +715,29 @@ pub fn install(
 
     app.on_export_finished({
         let state = Rc::clone(&state);
+        let vault = Rc::clone(&vault);
         let weak = app.as_weak();
         move || {
             let Some(app) = weak.upgrade() else { return };
 
-            let (outcome, lang) = {
+            let (outcome, lang, exported) = {
                 let mut state = state.borrow_mut();
-                state.busy = false;
+                let exported = state.exporting.take();
                 let outcome = state.slot.lock().ok().and_then(|mut slot| slot.take());
-                (outcome, state.lang)
+                (outcome, state.lang, exported)
             };
+            app.set_export_running(false);
             let Some(outcome) = outcome else { return };
+
+            // An export's status is a claim about one product, and the window stayed
+            // live while this ran — so if the user has moved on, the claim is
+            // withheld rather than posted above somebody else's details. The
+            // artefact is still written; only the line about it is dropped, because
+            // there is nowhere honest to put it.
+            if exported != vault.borrow().selected_folder() {
+                clear_status(&app);
+                return;
+            }
 
             match outcome {
                 // Nothing is invalidated here, on purpose. The output went to a

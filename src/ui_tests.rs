@@ -544,6 +544,44 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
         "",
         "a status survived onto a folder that has no product at all"
     );
+
+    // But a *running* export's line does survive, and this is the interaction the
+    // two fixes above collided over.
+    //
+    // `details::show` clears the status, and it runs from every `vault::push` —
+    // including the one `lang::switch` ends with. So an unconditional clear erased
+    // the "Exporting…" that `Exports::set_lang` had re-said one line earlier, and
+    // switching language mid-export still blanked the line and left a live button
+    // that silently did nothing. A sort toggle or a form save did the same. Neither
+    // of the two tests above could see it: one sets the status by hand and clicks a
+    // row, the other never reaches `set_lang` with an export in flight.
+    app.set_export_running(true);
+    app.set_export_status("Exporting…".into());
+
+    click(&elements(&app, "AppWindow::row-touch")[0]);
+    assert_eq!(
+        app.get_export_status(),
+        "Exporting…",
+        "a selection change blanked a running export"
+    );
+    click(&elements(&app, "AppWindow::sort-name")[0]);
+    assert_eq!(
+        app.get_export_status(),
+        "Exporting…",
+        "a sort toggle blanked a running export"
+    );
+    click(&elements(&app, "AppWindow::menu-button")[0]);
+    click(&elements(&app, "AppWindow::menu-lang-tr")[0]);
+    assert_eq!(
+        app.get_export_status(),
+        strings_get(Lang::Tr, Key::Exporting),
+        "a language switch must re-say what is happening, not blank it"
+    );
+
+    // And once it is no longer running, the line is clearable again.
+    app.set_export_running(false);
+    click(&elements(&app, "AppWindow::row-touch")[1]);
+    assert_eq!(app.get_export_status(), "");
 }
 
 /// The Slint colour `theme.rs` would have pushed for an `0xRRGGBB` value.

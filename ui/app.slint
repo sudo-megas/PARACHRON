@@ -246,6 +246,9 @@ export component AppWindow inherits Window {
     // ── Export (Chron7) ──────────────────────────────────────────────────
     in property <string> export-status;
     in property <bool> export-failed;
+    /// An export is in flight. Lives on the window rather than only in Rust
+    /// because `details::show` has to consult it — see `export::clear_status`.
+    in property <bool> export-running;
     callback export();
     /// Rung from the export thread once it has finished. Carries nothing: the
     /// outcome waits in a slot, because the export cannot cross a thread boundary.
