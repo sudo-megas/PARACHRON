@@ -350,12 +350,16 @@ pub fn suggested_name(product: &Product, today: Date) -> String {
 /// whole of `run` is testable by handing it a path and only the click that opens
 /// the dialog needs a person. The blocking `FileDialog` is not an option either —
 /// it parks the calling thread inside a D-Bus read with no timeout.
+/// `done` receives `None` when the dialog was cancelled, and is called either way.
+/// That matters rather than being tidy: the caller marks itself busy *before* the
+/// dialog opens, so a cancellation has to be observable or the button stays dead
+/// for the rest of the session.
 pub fn pick_destination(
     window: &slint::Window,
     title: &str,
     filter: &str,
     suggestion: &str,
-    done: impl FnOnce(PathBuf) + 'static,
+    done: impl FnOnce(Option<PathBuf>) + 'static,
 ) {
     let handle = window.window_handle();
     let dialog = rfd::AsyncFileDialog::new()
@@ -365,9 +369,8 @@ pub fn pick_destination(
         .set_parent(&handle);
 
     let _ = slint::spawn_local(async move {
-        if let Some(file) = dialog.save_file().await {
-            done(file.path().to_path_buf());
-        }
+        let chosen = dialog.save_file().await;
+        done(chosen.map(|file| file.path().to_path_buf()));
     });
 }
 
@@ -440,25 +443,43 @@ pub fn install(
         move || {
             let Some(app) = weak.upgrade() else { return };
 
+            // Read the product from the vault rather than off the window, so what
+            // gets exported is the product's own data and not whatever the UI
+            // happens to be showing. Taken by value here, at the moment EXPORT was
+            // pressed: the window stays live while the dialog is open, so the
+            // selection can change underneath it, and the product the user pressed
+            // the button on is the one they meant.
+            //
+            // Read before the borrow below, because `selected_product` borrows the
+            // vault and holding two borrows across a dialog is how a re-entrant
+            // callback becomes a panic.
+            let Some(product) = crate::vault::selected_product(&vault) else {
+                return;
+            };
+
+            // Busy is claimed *before* the dialog opens, not when it closes.
+            //
+            // The event loop keeps running while a portal dialog is up — that is
+            // the whole point of `spawn_local` — so the window stays interactive
+            // and EXPORT can be pressed again. Claiming the flag on the way out of
+            // the dialog left a window in which a second click passed the check and
+            // opened a second save dialog, whose chosen path would then have been
+            // silently dropped by the `busy` check in its own callback. One dialog
+            // at a time, and the cancel path below is what gives the flag back.
+            //
             // Everything decided under the borrow; nothing touches the window or
             // opens a dialog until it has been dropped.
             let (lang, today, root) = {
-                let state = state.borrow();
+                let mut state = state.borrow_mut();
                 if state.busy {
                     return;
                 }
+                state.busy = true;
                 (
                     state.lang,
                     data::today(state.offset),
                     state.products_root.clone(),
                 )
-            };
-
-            // Read the product from the vault rather than off the window, so what
-            // gets exported is the product's own data and not whatever the UI
-            // happens to be showing.
-            let Some(product) = crate::vault::selected_product(&vault) else {
-                return;
             };
 
             let suggestion = suggested_name(&product, today);
@@ -472,12 +493,16 @@ pub fn install(
                 move |destination| {
                     let Some(app) = inner.upgrade() else { return };
 
+                    let Some(destination) = destination else {
+                        // Cancelled. Nothing is written and nothing is said — the
+                        // user withdrew the request, which is not an outcome to
+                        // report — but the flag has to come back.
+                        state.borrow_mut().busy = false;
+                        return;
+                    };
+
                     let (job, slot) = {
-                        let mut state = state.borrow_mut();
-                        if state.busy {
-                            return;
-                        }
-                        state.busy = true;
+                        let state = state.borrow();
                         (
                             Job {
                                 folder: root.join(&product.folder),
