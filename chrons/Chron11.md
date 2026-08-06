@@ -1,7 +1,7 @@
 # Chron11 — Packaging and CI
 
 **Milestone:** 11 of ~11 (CORE §9)
-**Status:** in progress — every file this milestone owes exists and everything checkable on this laptop is checked; what remains is not writing but *observing*, and it needs CI and a person. See **How the criteria were verified**.
+**Status:** **done** — Parachron 1.0.1 is released with all three assets, built end to end by `release.yml`, and the maintainer has accepted criteria 5 and 6. **This closes the milestone, and with it the roadmap in CORE §9.** How those last two were closed is recorded rather than rounded off; see **The two criteria the maintainer closed** below.
 **Builds against:** CORE §1 (identity — app id, binary name, icons, licence, repo), §2 (stack — every dependency has to exist on three platforms), §3 (data model — where the vault lives on a target that is not Linux, and where it lives once the user has chosen), §7 (packaging & CI, in full), §8 (conventions & development rules, including who is allowed to be the author of a release), §9 (roadmap — the README lands here)
 
 **Renumbered during Chron9:** this file was Chron9 until the roadmap's last two rows swapped places. A release is the one step that hands artefacts to people who did not build them, and the milestone that lets a user choose which disk the vault lives on changes where their documents are — that cannot land *after* a version has shipped expecting them somewhere else. So the save-location milestone took the 9 slot and packaging moved to 10. Releases are the last step. CORE §9's table records the move; the eight earlier files that say "packaging (Chron9)" in their **Out** lists are left as written, because they were true when written and this project annotates rather than rewrites.
@@ -319,20 +319,64 @@ The genre is Chron8's, as this file already specified: a bolded noun phrase, wha
 
 ### Not verified. And these are the honest ones.
 
-- **Criterion 1 — a pushed `v*` tag producing a release with three assets.** No tag has been pushed, deliberately: this file lists "a tag has to be pushed by a person" as a human prerequisite and `release.yml` triggers on nothing else. What exists instead is a workflow that has never run, read carefully and guarded against the two ways it could produce silent nonsense — a tag disagreeing with `Cargo.toml`, and an asset count other than three. A guard that has never fired is not a guard that works.
+- ~~**Criterion 1 — a pushed `v*` tag producing a release with three assets.**~~ — **met.** `v1.0.1` produced a GitHub release carrying `parachron-1.0.1-1-x86_64.pkg.tar.zst`, `parachron.exe` and `parachron_1.0.1-1_amd64.deb`, every job green, `publish` included. The guards fired rather than merely existing: the tag was checked against both `Cargo.toml` and the `PKGBUILD`, and the composition gate confirmed one asset per pattern with the version in each Linux filename. **Two attempts and two versions were spent getting there** — see **What the release actually cost** below.
 - **Criteria 2 and 4's install halves.** `pacman -U` and `apt install` both need root, and the second needs a Debian machine this project does not have. The *layouts* are read out of both archives, which is the argument standing in for the observation. It is not the observation: "installs to `/usr/bin/parachron`" and "an archive containing `usr/bin/parachron`" are different sentences, and only the first one covers a `postinst` that fails or a file conflict with another package.
 - **Criterion 2 and 4's "launches from the menu" halves.** Nothing here has launched Parachron from a desktop menu out of an installed package. The dependency lists are now measured rather than assumed, which is the specific failure that would have caused this, and the app-id chain is checked in three places by CI. Still an argument.
-- **Criterion 5, entirely.** No Windows machine. The `.exe` has never been run, so "runs on a clean Windows machine", "opens no console window" and "shows its own icon in Explorer and the taskbar" are all unobserved. `windows_subsystem = "windows"` covers the console clause on paper and `main.rs:7` has carried it since before this milestone; the icon is in the binary as a linked resource. Neither statement is a screenshot.
-- **Criterion 6's dialog half.** `AsyncFileDialog::pick_file` shows a modal window and waits for a person, and no workflow can answer it without making the test meaningless. This is the same boundary Chron3 documented for the picker, Chron7 for the save dialog and Chron9 for the vault move — the fourth milestone to write this paragraph. What is new is that the spike now uploads the built `.exe` as an artefact, so the person who answers it does not have to build anything first.
-- **Criterion 9 — a second CI run hitting the MuPDF cache.** The workflow prints `HIT`/`MISS` and the matched key, so the evidence will exist. It has not been read yet, because GitHub's runner availability failed two of the first three runs outright.
+- **Criteria 5 and 6's dialog half — closed by the maintainer rather than by observation.** See the section immediately below. They are left in this list rather than deleted from it, because what a criterion asked for and how it was answered are different facts and both belong on the record.
+
+## The two criteria the maintainer closed
+
+Criteria 5 and 6 were accepted by `sudo-megas` at the end of the milestone. That is the maintainer's call to make on their own project, and it is written here as what it is — **an acceptance, not an observation** — because this file has spent its whole length insisting that an argument standing in for evidence gets labelled as one.
+
+**What criterion 5 asked for:** that the `.exe` runs on a clean Windows machine with no MuPDF installed, opens no console window, and shows its own icon in Explorer and the taskbar.
+
+**What was actually established.** The `.exe` builds on `windows-latest` and the full suite passes there — 182 tests, the five-test gap against Linux accounted for exactly by four `#[cfg(unix)]` tests and one `#[cfg(target_os = "linux")]`. `dumpbin /dependents` shows no MuPDF DLL, so the static-linkage half is measured rather than assumed. The icon and manifest reach the linker as `resource.res`, and `windows_subsystem = "windows"` has covered the console clause since before this milestone. The binary launched on a runner and got as far as the OpenGL driver, which means the process starts and the loader is satisfied.
+
+**What was not established:** that a person looked at it. Nobody has seen the icon in a taskbar, and nobody has watched it open on a machine that is not a datacentre VM.
+
+**What criterion 6 asked for:** that `Add Document` opens a real file dialog and the serial strip really copies.
+
+**What was actually established.** The clipboard half is *verified*, not accepted: `CLIPBOARD SMOKE: PASS — 57 bytes round-tripped byte-identical` on a real Windows session, with a deliberately Turkish payload, through the same `arboard` call the serial strip makes. The dialog half is linked — `shell32`, `ole32`, `combase`, `oleaut32` in the import table — and has never been opened, because `AsyncFileDialog::pick_file` is modal and waits for a person. That is the same boundary Chron3 documented for the picker, Chron7 for the save dialog and Chron9 for the vault move; this is the fourth milestone to write the paragraph and the first to close it by decision.
+
+**The one open risk that rides with them.** The `.exe` imports `MSVCP140.dll` and `VCRUNTIME140.dll`, which Windows does not ship. That is documented on the README and in both releases' notes rather than fixed, and `+crt-static` with a matching `/MT` C build remains the better answer. Accepting criterion 5 does not close that; it is recorded in CORE §7 as open past 1.0.
+
+Anyone who later runs the `.exe` and finds something wrong should read this section rather than the criteria table: the table now says these passed, and this says how.
+- ~~**Criterion 9 — a second CI run hitting the MuPDF cache.**~~ — **met in substance, and the label had to be fixed before it could be read.** A later run reported `restored target/: 6.6G, 15912 files` and completed in **4m13s against roughly 18 minutes cold**. That is the criterion's actual claim — materially faster on a cache — demonstrated.
+
+  What it cost was a correction to this milestone's own instrument. The first version of the reporting step printed a flat `MISS`, because `cache-hit` is set only for an *exact* key match; a `restore-keys` prefix match restores the files and still reads as a miss. So a run that restored six gigabytes and finished four times faster announced that its cache had missed. Criterion 9 asks for the cache to be *confirmed* rather than assumed, and a label that cannot tell a prefix restore from a cold build confirms nothing. It now distinguishes three states and reads the filesystem rather than trusting a flag. Found by disbelieving the output because the timings contradicted it.
 - **Criterion 11's link and badge clauses.** Every download link points at a Releases page that is empty until the first tag, and the version and release-date badges read a release that does not exist. The README says so on its own face rather than pretending otherwise. This cannot be closed before criterion 1 is.
 - **The `time` `local-offset` ordering on Windows.** `main` still reads the offset as its first statement and nothing in this milestone reordered it, but Chron4's requirement is a soundness property and "the diff did not touch it" is a fact about the diff.
 
+## What the release actually cost
+
+Two versions, six workflow runs, and a bug that eleven milestones of green builds could not have found. Worth writing out, because none of it is visible in the release page it produced.
+
+**GitHub Actions was in a major outage for the whole of it,** throttled to processing about **15% of webhooks**. That single fact explains most of what follows and none of it is Parachron's fault — but the milestone's own design assumptions did not survive it.
+
+**Three pushes of `v1.0.0` created no workflow run at all.** The workflow was registered and active, the tag was annotated and correct, the trigger matched. The event was simply discarded. The only remedy available was to delete the tag and push it again, which is rewriting release history to work around somebody else's incident. **`release.yml` had exactly one door, and it was an event with no retry.** A `workflow_dispatch` trigger was added mid-release; `gh workflow run` goes through the REST API rather than a webhook and fired instantly. That is the most useful thing this milestone learned about its own release path, and it was learned by being locked out.
+
+**1.0.0 shipped with two of three assets.** The Arch job was never handed a runner — three attempts, each dying on `The job was not acquired by Runner of type hosted` after the fifteen-minute acquisition timeout. The `.exe` and `.deb` had built and were retained, so the release was published from those two rather than held indefinitely. The `.pkg.tar.zst` was deliberately *not* substituted from the local build that had succeeded twice on the maintainer's laptop: one Linux package without a public build log, sitting beside two that had one, is a provenance mismatch nobody downloading it can see.
+
+**The fourth attempt got a runner, and immediately earned its keep.** It ran `check()` and failed — 186 tests passed and the one that instantiates a real window did not:
+
+```
+fontique/src/backend/fontconfig.rs:685
+called `Result::unwrap()` on an `Err` value: NoMatch
+```
+
+**`fontconfig` is the library that finds fonts. It is not a font.** Given fontconfig and no font files, the lookup returns no match and `fontique` unwraps it into a panic rather than a blank window. Neither package declared a font. This is the same shape as the libdbus correction above — installs cleanly, declares everything it appears to need, dies on a machine missing something nobody wrote down — and it is the third instance of that shape in one milestone. Arch gained `ttf-font`, the virtual every font provides; Debian gained `fonts-dejavu-core`, because Debian has no such virtual to depend on. Declaring it correctly also fixed CI for free, since `makepkg -s` installs runtime `depends`.
+
+**Which is why 1.0.1 exists.** The fix is packaging metadata and changes no code, but 1.0.0's published packages carry a wrong `Depends`, and that is what a patch release is for. It was also the only route: `v1.0.0` points at a commit without the fix, so building that tag reproduces the failure, and moving a tag a published release points at needs a force-push.
+
+**A gap the release exposed in a file otherwise read line by line.** `publish` calls `gh release create`, which refuses a release that already exists. Re-running the workflow against an already-released tag therefore fails at the last step even when all three builds succeed. Attaching an asset after the fact means `gh release upload`, or teaching `publish` to fall back from `create` to `upload`. Invisible until there was a release to collide with.
+
 ### The ratio, stated plainly
 
-Of thirteen criteria: **three are closed** — 8 (green in CI on Windows, and locally on Linux), 12 and 13. Three are verified in their layout or build half and open in their install half (2, 3, 4). One is half verified (7). Four are not verified at all (1, 5, 6, 11), and one has its mechanism proved and its observation outstanding (9). Criterion 10 is struck with the AUR, which removes a row rather than answering one.
+Of thirteen criteria: **six closed on evidence** — 1 (a tag produced a three-asset release), 8 (green in CI on both Linux and Windows), 9 (6.6GB restored, 4m13s against ~18 cold), 11, 12 and 13. **Three are verified in their build or layout half** and were never verifiable in their install half from here (2, 3, 4) — each needs root or a machine this project does not have. **One** is satisfied for all three packages now that the Arch package exists and carries the licence at Arch's policy path (7). **Two were closed by the maintainer's acceptance** rather than by observation (5, and 6's dialog half) — recorded in full above. Criterion 10 is struck with the AUR, which removes a row rather than answering one.
 
-That is not a milestone that passed. It is a milestone whose every writable part is written and whose every locally-checkable part is checked, waiting on two things no amount of further work here can supply: a Windows machine, and a person deciding to cut a release.
+So: six on evidence, four on partial evidence with the untestable half named, two on a decision, one struck. **That is the milestone, and it is closed.**
+
+The honest summary of the whole thing is that it shipped software and found eleven real defects doing it, and that the two criteria it could never answer from this machine were answered by the person who owns the project deciding they were good enough. Both halves of that sentence are true and neither is hidden.
 
 **A note on the runs themselves, because it bears on how much the green ones are worth.** Six workflow runs were started over roughly ninety minutes. Four died without executing anything — two on `Failed to resolve action download info: Service Unavailable`, two on `The job was not acquired by Runner of type hosted even after multiple attempts`. Both are GitHub availability rather than anything in this repository, and none of the four says anything about Parachron either way. The runs that did execute are the ones quoted above. It is worth writing down that "CI is green" and "CI ran" are separate claims, on top of the separation this file already makes between "CI is green" and "the code is right" — a milestone whose acceptance depends on a hosted runner inherits that runner's availability as a term.
 
@@ -344,10 +388,17 @@ All acceptance criteria pass, which for the first time means "pass in CI and on 
 
 **Every CORE amendment on that list is written.** §2 gained the target-split and why it is hygiene rather than a fix; §3 gained the three-target data directory, with the Windows `data` segment read out of `directories`' own source; §4 gained the two honest sources for the About pane's release date; §7 gained the install layout detail, the per-distribution licence paths, the two-list dependency rule, the Windows resources and their host-versus-target trap, the AUR's withdrawal and the condition for its return, and — now that the spike has run — MuPDF per target, the renderer, the `!lto` requirement and the open CRT question; §8 gained how rule 2 applies to a release.
 
-**The status is not `done`, and this is the deliberate part.** Three things stand between here and it, and none of them is writing:
+**All three are now closed, the last one by decision:**
 
-1. **A person pushes a `v*` tag.** Criterion 1 cannot begin without it, and criteria 2, 3, 4, 5, 7 and 11 all depend on assets that only a tag produces. This file has listed it as a human prerequisite from the first draft and `release.yml` triggers on nothing else.
-2. **Somebody runs the `.exe` on a real Windows machine** — for criterion 5 entirely, and for criterion 6's dialog half. The spike's artefact exists so this costs a download rather than a build.
-3. **The Visual C++ runtime question is answered** — `+crt-static` with a matching `/MT` C build, spiked and proven, or a README sentence conceding the redistributable. Right now criterion 5 has two blockers rather than one, and the second was discovered by reading an import table nobody had asked about.
+1. ~~**A person pushes a `v*` tag.**~~ — done twice. `v1.0.0` shipped two assets during the Actions outage; `v1.0.1` shipped all three, workflow-built end to end.
+2. ~~**Somebody runs the `.exe` on a real Windows machine.**~~ — **accepted by the maintainer** rather than performed. What was and was not established is written out under **The two criteria the maintainer closed**, so the difference survives the tick in the table.
+3. ~~**The Visual C++ runtime question is answered**~~ — answered, though not by building differently. The README's Windows section and both releases' notes name the redistributable, quote the error Windows prints and link the installer. `+crt-static` with a matching `/MT` C build stays open past 1.0 and is recorded in CORE §7 as such: the better answer, not shipped unverified on the one target with no local machine.
 
-CORE §9's roadmap row stays as it is until then. A roadmap that says a milestone shipped, on a repository whose Releases page is empty, would be the one kind of untrue thing this project has spent eleven milestones not writing.
+**CORE §9's roadmap is complete.** Eleven milestones, from a cargo scaffold to three packaged assets on a Releases page.
+
+**What is left for whoever picks this up next**, none of it blocking and all of it recorded in CORE §7 rather than lost with this session:
+
+- `publish` cannot attach to a release that already exists — a one-line `create`-or-`upload` fallback, worth doing *before* a release rather than during one.
+- `+crt-static` with `mupdf-sys` forced to `/MT`, so the Windows `.exe` stops needing a redistributable.
+- `ubuntu-22.04` is on a deprecation clock: brownouts from 2026-09-17, gone 2027-04-17. The successor is a `debian:bookworm` container, not `ubuntu-24.04` — that would trade the glibc floor away and silently drop Debian 12.
+- The AUR route, if the Arch User Repository reopens. The design is struck through in this file rather than deleted, precisely so it can be restored instead of re-derived.

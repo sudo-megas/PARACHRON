@@ -306,11 +306,28 @@ For 1.0 the decision was to **say so on the page instead of shipping an unverifi
 
 Both lists are written out in full in `packaging/PKGBUILD` and in `[package.metadata.deb]`, they are the same list, and they move together. Twelve of the thirteen are the X11, Wayland and GL libraries a window needs. The thirteenth is **libdbus**, which `rfd` opens for the portal file dialog and whose absence it *logs rather than raises* — so omitting it yields an app that starts, draws its window, opens its menu, and silently declines to add a document. That is a worse failure than the other twelve, all of which produce an app that visibly does not start.
 
+**And a fourteenth entry that is not a library at all: a font.** `fontconfig` is in the linked list, and `fontconfig` is the machinery that *finds* fonts — it is not a font. On a system carrying fontconfig and no font files, the lookup returns no match and `fontique` unwraps it:
+
+```
+fontique/src/backend/fontconfig.rs:685
+called `Result::unwrap()` on an `Err` value: NoMatch
+```
+
+which is a panic rather than a blank window. Arch depends on `ttf-font`, the virtual package every font provides, so the requirement is "a font" rather than a particular one; Debian has no equivalent virtual and names `fonts-dejavu-core`. Any desktop already satisfies both; a minimal install or a container does not.
+
+Three findings of the same shape in one milestone — libdbus, the font, and `dlopen` versus `ldd` — is enough to state the rule rather than the instances: **a dependency list built from what the linker reports is a list of what the program needs to start, not of what it needs to work.** Everything opened at runtime, and everything that is data rather than code, has to be added by reading the program rather than the binary.
+
 ### Windows resources (Chron11)
 
 `build.rs` compiles `build/icons/parachron.ico` and `build/parachron.manifest` into the executable through `winresource`. The manifest carries DPI awareness (`PerMonitorV2`), `asInvoker`, and UTF-8 as the process code page — all three read by Windows before the program's own code runs, so none can be set at runtime.
 
 **The resource step is gated on `CARGO_CFG_TARGET_OS`, not on `cfg!(windows)`.** Inside a build script the `cfg` macros describe the host; the question is the target. `winresource` is declared under `[target.'cfg(windows)'.build-dependencies]`, which Cargo also resolves against the host — so a *cross*-build for Windows from Linux cannot embed resources at all. `release.yml` therefore builds Windows on `windows-latest`, and `build.rs` emits a loud `cargo:warning` rather than silently producing an icon-less `.exe` if anybody takes the cross-build route this table still permits.
+
+### A release cannot be re-published, only added to (Chron11)
+
+`release.yml`'s publish step calls `gh release create`, which refuses a tag that already has a release. So a workflow re-run against an already-released tag fails at the last step even when all three builds succeed, and an asset added after the fact needs `gh release upload` instead. The fix, when someone wants it, is a `create`-or-`upload` fallback in that step; it is recorded here rather than applied because it was found by colliding with a live release and should be changed before a release rather than during one.
+
+The related constraint: **a published tag cannot be moved.** Retagging needs a force-push, and deleting a tag that a release points at endangers the release. So a packaging defect discovered after publication is fixed by a new version, not by rebuilding the old one — which is why 1.0.0 and 1.0.1 exist an hour apart, with an identical binary and a corrected `Depends`.
 
 ### The AUR was designed and withdrawn
 
@@ -364,7 +381,15 @@ Everything written before each move is left alone. Chron1 through Chron8 each li
 | Chron8 | About view + column-1 search bar + polish: error states, min-size behavior, edge cases. The search bar was asked for after Chron7 closed and folded in here rather than becoming a milestone of its own — it lands in column 1, which is where this milestone's other layout work already is. It does mean Chron7's line about being the last milestone to add a feature stopped being true one milestone later; §9 is the map, and the map changed |
 | Chron9 | The vault's location, chosen by the user: a `vault` key in `config.toml`, a folder picker behind `Document ▾`, and a worker that moves an existing vault onto the disk it names. Asked for after Chron8 closed, because the app *copies* documents into the vault and a vault therefore grows on whatever disk `$HOME` happens to sit on. It takes the 9 slot rather than the last one because releases have to be last — see the paragraph above the table |
 | Chron10 | Character: a masthead-over-canvas structure for every column, each wearing one of three palette hues, with the columns drawn as inset cards on the window's canvas rather than divided by a hairline; hover, selection and status landmarks for column-1 rows; a column-3 anchor card with a warranty-elapsed gauge replacing two dead flex spacers; pressed-state and a real `primary` treatment across all five hand-rolled button recipes. Widened the colour table from twelve roles to fourteen, which is the milestone's real subject: eleven palettes had been arriving as one hue each. Also the icon-identity fix — app id, desktop entry and `generate.sh`, ported off a worktree that had built them and never merged, alongside corrected artwork. Takes the 10 slot for the same reason Chron9 does: it is not a release, and releases go last |
-| Chron11 | Packaging & CI: PKGBUILD, .deb, Windows .exe, GitHub Actions. ~~AUR~~ — designed and then withdrawn, because the Arch User Repository was disabled by its own maintainers after the attacks on it; Chron11 keeps the design struck through rather than deleted, so it can be restored rather than re-derived if the AUR returns. `README.md` was written per `usereadme.md` (§8 rule 3) *before* this milestone rather than after it — the page is what a visitor lands on, and having it ready means this milestone only has to cut a tag rather than write a page as well. The cost is stated on the page itself: the download links point at a Releases page that is empty until the first tag, and build-from-source is what works until then |
+| Chron11 | **Done. Parachron 1.0.1 released with all three assets, built by `release.yml` end to end.** Packaging & CI: PKGBUILD, .deb, Windows .exe, GitHub Actions. ~~AUR~~ — designed and then withdrawn, because the Arch User Repository was disabled by its own maintainers after the attacks on it; Chron11 keeps the design struck through rather than deleted, so it can be restored rather than re-derived if the AUR returns. `README.md` was written per `usereadme.md` (§8 rule 3) *before* this milestone rather than after it — the page is what a visitor lands on, and having it ready means this milestone only has to cut a tag rather than write a page as well. The cost is stated on the page itself: the download links point at a Releases page that is empty until the first tag, and build-from-source is what works until then |
+
+### The roadmap is complete
+
+**Chron11 closed the last row.** Eleven milestones took Parachron from a cargo scaffold to three packaged assets a stranger can download, and §9's table is now a history rather than a plan.
+
+Two of Chron11's thirteen acceptance criteria — that the Windows `.exe` runs and shows its icon on a real machine, and that its file dialog opens — were **accepted by the maintainer rather than observed**, because this project has never had a Windows machine and CI cannot answer a modal dialog. `chrons/Chron11.md` records exactly what was established and what was not, under **The two criteria the maintainer closed**. That distinction is deliberate: a reader who later finds something wrong on Windows should be able to see that those two rows were a decision, not a measurement.
+
+**What a twelfth milestone would start from**, if there is one — all recorded in §7 above rather than left in somebody's memory: the `create`-or-`upload` fallback in `publish`; `+crt-static` with `mupdf-sys` forced to `/MT`; the `ubuntu-22.04` runner's deprecation and why its successor is a `debian:bookworm` container rather than `ubuntu-24.04`; and the AUR, if it reopens.
 
 ## 10. Open items
 
