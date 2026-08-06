@@ -12,7 +12,7 @@ This is the only milestone whose output is not code the app runs, and the only o
 
 ## Scope
 
-**In:** the dependency split that makes a Windows build possible at all · `packaging/org.parachron.Parachron.desktop` · the icon install map · `[package.metadata.deb]` · a `PKGBUILD` · Windows resources (icon and manifest) through `build.rs` · `[profile.release]` · a CI workflow on push and a release workflow on tag · MuPDF built statically or bundled per target · AGPL compliance in every artefact · the AUR package · `README.md` per `usereadme.md`.
+**In:** a dependency split so that two Linux-only feature sets are not asked for on a target that cannot use them · `packaging/org.parachron.Parachron.desktop` · the icon install map · `[package.metadata.deb]` · a `PKGBUILD` · Windows resources (icon and manifest) through `build.rs` · `[profile.release]` · a CI workflow on push and a release workflow on tag · MuPDF built statically or bundled per target · AGPL compliance in every artefact · the AUR package · `README.md` per `usereadme.md`.
 
 **Out (explicitly):** a Windows installer — the release asset is the executable CORE §7 names, and an MSI or NSIS wrapper is a second packaging system for one of three targets · code signing on Windows, which needs a certificate somebody has to buy and renew, and an unsigned binary with a public build log is the more honest artefact for an AGPL app · Flatpak, Snap and AppImage, none of which CORE §7 lists · macOS, for the same reason · auto-update, which is a network call in an app that makes none (CORE §4) · publishing to crates.io, since this is an application and a vendored MuPDF makes it a hostile dependency for anyone who did pull it in · a changelog, which CORE §8 rule 3 rules out of the README and the repository already keeps · translating the README, which is a document for a GitHub page rather than UI copy.
 
@@ -28,11 +28,24 @@ Everything else in this file is work that can be written and reviewed before any
 
 ## The spike, and why this one runs before the notes are finished
 
-Chron3 established that a hard question gets spiked rather than assumed, and Chron7 showed what it costs to skip one — a feature that produced a valid file with words silently missing. This milestone's hard question is not about MuPDF. It is that **two dependencies are currently configured so that a Windows build has no implementation at all**, and neither of them fails at compile time in a way anyone has seen, because nobody has ever compiled this for Windows.
+Chron3 established that a hard question gets spiked rather than assumed, and Chron7 showed what it costs to skip one — a feature that produced a valid file with words silently missing. This milestone's hard question is not about MuPDF, and the first draft of this file got the shape of it wrong in a way worth leaving on the record.
 
-**1. `rfd` has no backend on Windows as configured.** `Cargo.toml` carries `default-features = false, features = ["xdg-portal"]`, with a five-line comment explaining — correctly, and for good reasons that stay — why `wayland` and `gtk3` were both rejected. `xdg-portal` is a Linux backend. A Windows build of `rfd` with default features off and only that one on has nothing to open a dialog with, so `Add Document` and `EXPORT` — the only two ways to get files into or out of the vault — would be dead on the target CORE §7 says CI owns. The fix is a `[target.'cfg(unix)'.dependencies]` / `[target.'cfg(windows)'.dependencies]` split, with the existing comment preserved verbatim on the Unix side because its reasoning is still the reasoning.
+**The alarm that turned out to be a false one, and how it was settled.** `rfd` is configured `default-features = false, features = ["xdg-portal"]` and `arboard` `default-features = false, features = ["wayland-data-control"]`. Both feature sets name a Linux mechanism, and the obvious reading is that a Windows build has default features off, one Linux backend requested, and therefore **no** file dialog and **no** clipboard — which would make `Add Document`, `EXPORT`, the serial strip, the purchase link and both About URLs dead on the target CORE §7 says CI owns. That reading was written into this file as a defect before anyone checked it, which is exactly the move Chron7 was written to discourage.
 
-**2. `arboard` is the same shape.** `default-features = false, features = ["wayland-data-control"]` is a Linux-only feature set, and the clipboard is how the serial strip, the purchase link and both About URLs do the only thing CORE §4 lets them do. Same split, same reason.
+It is wrong, and settling it needed no Windows machine and about ten seconds:
+
+```
+cargo tree --target x86_64-pc-windows-msvc -e features -p rfd
+cargo tree --target x86_64-pc-windows-msvc -e features -p arboard
+```
+
+`rfd` resolves on that target with `windows-sys` and `Win32_UI_Shell`, `Win32_UI_Shell_Common`, `Win32_System_Com` — the Win32 dialog. `arboard` resolves with `clipboard-win` and `Win32_System_DataExchange` — the Windows clipboard. **The platform backends are gated on `cfg(target_os = …)`, not on cargo features.** `rfd`'s manifest puts every GTK, Wayland and portal dependency behind `[target.'cfg(any(target_os = "linux", …))'.dependencies]`, so `xdg-portal = ["pollster"]` enables a crate that is itself target-gated to Linux and the BSDs, and asking for it on Windows is inert rather than exclusive. The features gate the *Linux* backends specifically; they do not switch a backend on for every platform.
+
+So the split is **hygiene, not a fix**. It is still worth doing — a `[target.'cfg(unix)'.dependencies]` / `[target.'cfg(windows)'.dependencies]` split with the existing five-line `rfd` comment preserved verbatim on the Unix side, because its reasoning about `wayland` and `gtk3` is still the reasoning. What it buys is that the next reader of `Cargo.toml` does not have to run the command above to find out whether the Windows build works, and that a future `rfd` release which *does* make its features exclusive cannot break the Windows target silently.
+
+**1. Confirm on the runner what `cargo tree` says on this laptop.** Resolution is not compilation. The spike's first job is a Windows build that reaches `rfd`'s and `arboard`'s Win32 code, so the claim above is backed by a compiler rather than by a dependency graph.
+
+**2. Confirm the dialog and the clipboard actually work once built** — resolving, compiling and functioning are three different statements, and only the third is criterion 6.
 
 **3. Does `mupdf-sys` build on `windows-latest` at all?** It vendors MuPDF from C source and runs `bindgen` over its headers, which needs `libclang` — Chron2 had to install `clang` on this laptop before the first build would go through. The Windows runner's toolchain is MSVC, and `bindgen` there needs LLVM present. Chron2 measured a full vendored compile at about 1m40s on Linux; the Windows number is unknown and the *success* is unknown, which matters more.
 
@@ -86,6 +99,7 @@ packaging/
 - [ ] Cache the vendored MuPDF build per target, and confirm the cache is actually hit on a second run rather than assumed to be
 - [ ] `.github/workflows/release.yml`: on a `v*` tag — build all three assets, attach them to a GitHub release, and push the AUR package
 - [ ] MuPDF statically linked or bundled per target, so no asset depends on a MuPDF the user has to install (CORE §7)
+- [ ] The release workflow sets `PARACHRON_BUILD_DATE` from the tag rather than leaving `build.rs` to read the runner's clock — Chron8 stamps it at compile time so that a source build honestly reports its own build day, and a *released* asset should carry the release date CORE §4 asks the About pane for. This is the seam Chron8 hands over
 - [ ] The AUR push authenticates with the registered key and commits as `sudo-megas` (CORE §8 rule 2)
 - [ ] No AI attribution in any workflow file, comment, commit or release note — CORE §8 rule 1 covers generated YAML exactly as it covers Rust
 
@@ -102,7 +116,7 @@ packaging/
 3. `makepkg -si` from the repository's own `PKGBUILD` produces the same package from source.
 4. `apt install ./parachron_*.deb` on Debian or Ubuntu installs to the same layout and launches from the menu.
 5. The Windows `.exe` runs on a clean Windows machine with no MuPDF installed, opens no console window, and shows its own icon in Explorer and the taskbar.
-6. On Windows, `Add Document` opens a real file dialog and the serial strip really copies — the two things the current dependency configuration cannot do there.
+6. On Windows, `Add Document` opens a real file dialog and the serial strip really copies. The dependency graph says both backends are there; this criterion is the difference between a graph and a working application, and it is the one that proves the Windows target rather than any single feature of it.
 7. Every package includes the full AGPL text, and the binary's About pane shows it too (Chron8).
 8. `cargo test` is green in CI on every target that runs it, in the dev profile, with no warnings from `cargo build` either.
 9. A second CI run hits the MuPDF cache and completes materially faster than the first.
@@ -139,4 +153,4 @@ Written when the milestone is done, as in Chron1–7. It will have a section thi
 
 ## Done when
 
-All acceptance criteria pass, which for the first time means "pass in CI and on a machine that is not this one". Then: amend CORE §3 with the data directory on all three targets, amend CORE §7 with whatever the spike settles about MuPDF per target and the renderer, record the AUR package name and its repository, note in CORE §8 how rule 2 applies to a release as against an AUR commit, mark this file's status `done` — and with it, the roadmap in CORE §9.
+All acceptance criteria pass, which for the first time means "pass in CI and on a machine that is not this one". Then: amend CORE §3 with the data directory on all three targets, amend CORE §7 with whatever the spike settles about MuPDF per target and the renderer, record in CORE §4 that a released binary's About date comes from its tag while a source build's comes from its clock, record the AUR package name and its repository, note in CORE §8 how rule 2 applies to a release as against an AUR commit, mark this file's status `done` — and with it, the roadmap in CORE §9.
