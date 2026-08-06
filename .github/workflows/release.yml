@@ -118,8 +118,20 @@ jobs:
           set -euo pipefail
           useradd -m builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
+
+          # `HOME` and `CARGO_HOME` are set explicitly rather than left to sudo.
+          # With `env_reset` on — the default — whether sudo rewrites HOME to
+          # the target user's home depends on `always_set_home`, which is off in
+          # stock sudoers. Left alone, `builder` can inherit root's HOME, and
+          # cargo's first act is to write `$HOME/.cargo`, which it cannot do.
+          # The failure would be a permission error deep in a container, minutes
+          # in, on a workflow that only ever runs against a tag somebody pushed.
+          # Two variables are cheaper than finding that out during a release.
           cd packaging
-          sudo -u builder --preserve-env=PARACHRON_BUILD_DATE makepkg -f --noconfirm
+          sudo -u builder \
+            --preserve-env=PARACHRON_BUILD_DATE \
+            env HOME=/home/builder CARGO_HOME=/home/builder/.cargo \
+            makepkg -f --noconfirm
 
       # CORE §7: "CI must build MuPDF statically or bundle its library per
       # target." The natural failure is a package that declares a runtime

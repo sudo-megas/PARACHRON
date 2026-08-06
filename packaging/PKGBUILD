@@ -21,7 +21,7 @@
 # filename disagrees with the version its own About pane reports.
 
 pkgname=parachron
-pkgver=0.1.0
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="A desktop vault for purchases: invoices, warranty documents, serial numbers and a warranty countdown, kept together"
 arch=('x86_64')

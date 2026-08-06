@@ -13,7 +13,7 @@
   <assemblyIdentity
       type="win32"
       name="org.parachron.Parachron"
-      version="0.1.0.0"/>
+      version="1.0.0.0"/>
 
   <!--
     Run as whoever launched it. Parachron writes to the user's own data
