@@ -582,6 +582,320 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     app.set_export_running(false);
     click(&elements(&app, "AppWindow::row-touch")[1]);
     assert_eq!(app.get_export_status(), "");
+
+    // ── Chron8: the search bar, criteria 12–15 and 17 ─────────────────────
+    //
+    // The sections above leave the window in Turkish and the list ordered by
+    // name — Chron7's running-export block toggles the sort chip to prove a
+    // status line survives it, and has no reason to toggle it back. Both are put
+    // back here, so the rows numbered below are the ones CORE §4's insertion
+    // order gives and the strings named below are the ones on screen.
+    click(&elements(&app, "AppWindow::menu-button")[0]);
+    click(&elements(&app, "AppWindow::menu-lang-en")[0]);
+    click(&elements(&app, "AppWindow::sort-name")[0]);
+    assert_eq!(stack.vault.borrow().sort(), SortMode::Added);
+    assert_eq!(
+        app.get_search_query(),
+        "",
+        "the query is session state and the session has not typed one yet"
+    );
+
+    // A broken folder's heading is composed in Rust from the string table, so it
+    // is composed the same way here rather than written out a second time — the
+    // hand-built row at the top of this test is fixture data, not vault output.
+    let broken_name = format!("{}: test-broken", strings_get(Lang::En, Key::BrokenTitle));
+    // `name` rather than `label`: the incomplete product's label carries the
+    // warning prefix, and what a person types into the bar is a product's name.
+    let names = || -> Vec<String> {
+        app.get_products()
+            .iter()
+            .map(|row| row.name.to_string())
+            .collect()
+    };
+    let all = vec![
+        "QD-OLED Monitor".to_string(),
+        "IronWolf Pro".to_string(),
+        "Şarj Cihazı".to_string(),
+        broken_name.clone(),
+    ];
+    assert_eq!(names(), all, "the whole vault, in insertion order");
+
+    // What a keystroke does: the two-way binding writes the property, and the
+    // bar's `edited` callback tells Rust. Nothing here can type into a
+    // `TextInput`, so both halves are driven by hand; the clear affordance below
+    // is the one part of the bar this test reaches through a real click.
+    let search = |query: &str| {
+        app.set_search_query(query.into());
+        app.invoke_search_changed(query.into());
+    };
+    // A `Text` labels itself for accessibility, so the sentence actually on
+    // screen can be read back rather than inferred from the properties behind it.
+    let on_screen = |text: &str| testing::ElementHandle::find_by_accessible_label(&app, text).count();
+
+    // Criterion 12, and criterion 13 with it: the query narrows the list to what
+    // matched, and the fold runs on both sides — `sarj`, typed on a keyboard
+    // with no Turkish on it, finds `Şarj Cihazı`. Matching the stored strings
+    // instead would leave that product findable only by somebody who can already
+    // type `Ş`, which is the one person who does not need the bar.
+    search("sarj");
+    assert_eq!(names(), ["Şarj Cihazı"], "one entry matched, and it is that one");
+    assert_eq!(
+        elements(&app, "AppWindow::row-touch").len(),
+        1,
+        "the rows on screen followed the model rather than the model alone"
+    );
+
+    // Criterion 15: a query matching nothing empties the list, and the sentence
+    // left behind must not be the empty-vault one. The two share a single `Text`
+    // whose content switches on `search-query == ""` — one binding apart — and
+    // getting it the wrong way round tells somebody who mistyped four characters
+    // that their vault is empty, which for an app whose promise is keeping their
+    // documents is the most alarming thing it could say.
+    search("zzzz");
+    assert!(names().is_empty(), "nothing in the vault matches that");
+    assert_ne!(
+        app.get_search_query(),
+        "",
+        "an empty list under an empty query is the empty *vault*, a different state"
+    );
+    assert_eq!(
+        on_screen(strings_get(Lang::En, Key::SearchNoMatches)),
+        1,
+        "no matches, and the list says so"
+    );
+    assert_eq!(
+        on_screen(strings_get(Lang::En, Key::ListEmpty)),
+        0,
+        "a typo was reported as an empty vault"
+    );
+
+    // Criterion 12's other half: clearing restores every entry, in the order the
+    // sort mode says — not in the order they matched and not in whatever order
+    // the filter happened to walk the vault in.
+    search("");
+    assert_eq!(names(), all, "clearing the query left entries hidden");
+    assert_eq!(elements(&app, "AppWindow::row-touch").len(), 4);
+    assert_eq!(
+        on_screen(strings_get(Lang::En, Key::SearchNoMatches)),
+        0,
+        "the no-matches line outlived the query that produced it"
+    );
+
+    // Criterion 17: the clear affordance, which is a real click rather than two
+    // properties set by hand. It writes the `TextInput` and lets the binding
+    // carry the value back out to `search-query` — two chained two-way bindings,
+    // which is the part worth a test rather than an argument.
+    //
+    // It is also the only assertion in this section that proves a query set from
+    // Rust reaches the widget at all: `clear` is realised under `text != ""`
+    // *inside* `SearchBar`, so its existence is the inbound half of the same
+    // chain the click exercises on the way back out.
+    search("sarj");
+    let clear = elements(&app, "SearchBar::clear");
+    assert_eq!(clear.len(), 1, "there is something to clear, so there is a way to");
+    click(&clear[0]);
+    assert_eq!(app.get_search_query(), "", "the affordance did not empty the bar");
+    assert_eq!(names(), all, "and the list did not come back with it");
+    assert!(
+        elements(&app, "SearchBar::clear").is_empty(),
+        "an empty bar still spends width on a clear affordance"
+    );
+
+    // ── Chron8: a filter may hide the open product's row, criterion 16 ────
+    //
+    // The regression Chron3 warned about, and the reason Chron8 split the gate in
+    // two. Until the search bar, `selected-index == -1` and "nothing is selected"
+    // were the same state; a query that excludes the open product makes them
+    // different, and the viewer is gated on the second one. Chron3 measured what
+    // gating on the index costs here: a momentary -1 tears the viewer down and
+    // pays the resize debounce to build it again, so typing four characters would
+    // blink the invoice somebody is reading four times over.
+    //
+    // `selected-open` is pushed from Rust, so reading it back proves the vault's
+    // half and nothing about the `.slint` half — a gate regressed to
+    // `selected-index >= 0` would leave the flag true and still tear the viewer
+    // down. Only the element tree tells those two apart, which is why
+    // `AppWindow::viewer` is the assertion that matters in this section.
+    click(&elements(&app, "AppWindow::row-touch")[1]);
+    assert_eq!(app.get_selected_name(), "IronWolf Pro");
+    assert_eq!(app.get_selected_index(), 1);
+    assert!(app.get_selected_open());
+    assert_eq!(
+        elements(&app, "AppWindow::viewer").len(),
+        1,
+        "an open product is hosted by the viewer"
+    );
+    let (page, zoom) = (app.get_page_index(), app.get_zoom());
+
+    search("sarj");
+    assert_eq!(
+        app.get_selected_index(),
+        -1,
+        "the open product's row is filtered out, so no row is highlighted"
+    );
+    assert!(
+        app.get_selected_open(),
+        "the query narrowed the list, not the app — the product is still open"
+    );
+    assert_eq!(app.get_selected_name(), "IronWolf Pro", "a keystroke changed product");
+    assert_eq!(
+        stack.vault.borrow().selected_folder().as_deref(),
+        Some("drive"),
+        "and the vault agrees about which one is open"
+    );
+    assert_eq!(
+        elements(&app, "AppWindow::viewer").len(),
+        1,
+        "a keystroke tore the viewer down and will pay the debounce to rebuild it"
+    );
+    // Cheap, and close to vacuous against a vault with no files behind it —
+    // written down because they are what criterion 16 is about, not because they
+    // are hard to satisfy here.
+    assert_eq!(app.get_page_index(), page, "the open document changed page");
+    assert_eq!(app.get_zoom(), zoom, "the open document changed zoom");
+
+    search("");
+    assert_eq!(
+        app.get_selected_index(),
+        1,
+        "the row came back without its highlight"
+    );
+    assert!(app.get_selected_open());
+    assert_eq!(elements(&app, "AppWindow::viewer").len(), 1);
+
+    // ── Chron8: clicking a row in a filtered list, criteria 12 and 14 ─────
+    //
+    // A row index and an entry index were the same number from Chron1 until the
+    // filter arrived. Getting the remap wrong does not crash — it selects a
+    // different product than the one clicked, silently — so this clicks rows in a
+    // list where the two numbers cannot agree, and asserts on the folder that
+    // comes back, which is a product's identity (CORE §3) rather than its label.
+    //
+    // `ro` matches the drive (entry 1) on its name and the unreadable folder
+    // (entry 3) on its folder name. That second one is criterion 14: the list has
+    // never hidden a folder that will not parse and does not start here. Neither
+    // row's index is its entry's, so an implementation that indexed `entries`
+    // directly would answer row 1 with the drive and row 0 with the monitor, and
+    // every assertion below would name the wrong product.
+    search("ro");
+    assert_eq!(names(), ["IronWolf Pro".to_string(), broken_name.clone()]);
+
+    click(&elements(&app, "AppWindow::row-touch")[1]);
+    assert_eq!(
+        stack.vault.borrow().selected_folder().as_deref(),
+        Some("test-broken"),
+        "row 1 of this list is entry 3, and a click selected whatever entry 1 is"
+    );
+    assert!(app.get_selected_broken());
+    assert_eq!(app.get_selected_name(), broken_name.as_str());
+    assert_eq!(
+        app.get_selected_index(),
+        1,
+        "the highlight left the row that was clicked"
+    );
+    // And the control for the section above: the viewer is gone here, which is
+    // what makes its presence while the filter hid the drive's row an answer
+    // rather than a constant. A folder that will not parse keeps Chron1's
+    // reason display instead.
+    assert!(
+        elements(&app, "AppWindow::viewer").is_empty(),
+        "a folder that will not parse has no document to host"
+    );
+
+    click(&elements(&app, "AppWindow::row-touch")[0]);
+    assert_eq!(
+        stack.vault.borrow().selected_folder().as_deref(),
+        Some("drive"),
+        "row 0 of this list is entry 1, and a click selected whatever entry 0 is"
+    );
+    assert!(!app.get_selected_broken());
+    assert_eq!(app.get_selected_name(), "IronWolf Pro");
+    assert_eq!(app.get_selected_index(), 0);
+
+    // One more, because a mis-remap that lands on another *product* rather than
+    // on a broken folder shows itself in the composed row text rather than in a
+    // flag: `cihaz` leaves the charger alone on row 0, two rows above where it
+    // sits in the vault, and it is the only entry carrying a missing-file line.
+    search("cihaz");
+    assert_eq!(names(), ["Şarj Cihazı"]);
+    click(&elements(&app, "AppWindow::row-touch")[0]);
+    assert_eq!(
+        stack.vault.borrow().selected_folder().as_deref(),
+        Some("charger")
+    );
+    assert_eq!(app.get_selected_name(), "Şarj Cihazı");
+    assert!(
+        app.get_selected_detail().contains("gone.pdf"),
+        "row 0 is entry 2 and brings entry 2's detail with it: {:?}",
+        app.get_selected_detail()
+    );
+    search("");
+
+    // ── Chron8: the About strip, criteria 1 and 8 ─────────────────────────
+    //
+    // `about-open` is a private property — whether a pane is on screen is the
+    // `.slint` side's business, the same call Chron5 made for the theme picker —
+    // so there is no getter to read it back with. The strip declares itself
+    // checkable and publishes the flag as its accessible state, which is what
+    // that state is for. The pane's own element is the other half of every
+    // assertion here, because "the accessible mirror is wired" and "the pane
+    // rendered" are two different claims and only the second one is the feature.
+    let strip = || {
+        elements(&app, "AppWindow::about-strip")
+            .pop()
+            .expect("column 1 has an About strip")
+    };
+    assert!(elements(&app, "About::content").is_empty(), "About starts closed");
+    assert_eq!(strip().accessible_checked(), Some(false));
+
+    // Criterion 1: the strip opens the pane and reads as the active view.
+    click(&strip());
+    assert_eq!(strip().accessible_checked(), Some(true));
+    assert_eq!(elements(&app, "About::content").len(), 1, "the pane is on screen");
+
+    // Criterion 1's other half. About *covers* columns 2 and 3 rather than
+    // replacing them, so all three ids are still where `assert_columns` looks for
+    // them and still 25/50/25 — including at CORE §4's floor, which is where a
+    // pane that had displaced a column would show it first.
+    app.window().set_size(LogicalSize::new(1000.0, 700.0));
+    assert_columns(&app, 1000.0);
+    app.window().set_size(LogicalSize::new(1400.0, 900.0));
+    assert_columns(&app, 1400.0);
+    assert_eq!(
+        elements(&app, "AppWindow::row-touch").len(),
+        4,
+        "column 1 stays live under the pane, and it is not staying live"
+    );
+
+    // Criterion 8: the strip is the way in and one of the ways out, so there is
+    // never a pane up with no visible way back to what it covered.
+    click(&strip());
+    assert_eq!(strip().accessible_checked(), Some(false));
+    assert!(
+        elements(&app, "About::content").is_empty(),
+        "clicking the strip a second time left the pane up"
+    );
+
+    // Criterion 8 again: choosing a product is choosing to look at it. Without
+    // this the click lands, the selection changes, and nothing visible happens
+    // because the columns that would show it are covered — a list that looks
+    // broken. The charger is selected going in, so the row clicked here is a
+    // different product and the pane cannot be said to have closed onto the one
+    // that was already open.
+    click(&strip());
+    assert_eq!(elements(&app, "About::content").len(), 1);
+    click(&elements(&app, "AppWindow::row-touch")[0]);
+    assert_eq!(app.get_selected_name(), "QD-OLED Monitor");
+    assert!(
+        elements(&app, "About::content").is_empty(),
+        "a product was selected behind a pane that stayed up"
+    );
+    assert_eq!(strip().accessible_checked(), Some(false));
+    assert_eq!(
+        elements(&app, "AppWindow::viewer").len(),
+        1,
+        "and the product it chose is what is now on screen"
+    );
 }
 
 /// The Slint colour `theme.rs` would have pushed for an `0xRRGGBB` value.

@@ -1,18 +1,18 @@
 # Chron8 — About view, search and polish
 
 **Milestone:** 8 of ~9 (CORE §9)
-**Status:** planned
+**Status:** done
 **Builds against:** CORE §1 (identity — the icon, the repo, the maintainer, the licence the About pane names), §3 (data model — the fields the search matches, and the folding rule), §4 (the About view in full, the column-1 search bar, layout, app-wide principles), §5 (themes — both new surfaces are themed like everything else), §7 (packaging — Chron9 supplies the release date this milestone renders), §8 (conventions & development rules), §10 (open items — the subtitle and the motto are closed here)
 
 ## Goal
 
 Three things, in one milestone because they all land in the same column.
 
-The About strip at the bottom of column 1 stops being inert. Selecting it swaps columns 2+3 for a single centred pane carrying the icon, the wordmark, the subtitle, the maker, the version, the release date, both URLs as plain text, the licence and its full bundled text, and the footer motto. Everything CORE §4 lists, nothing it does not.
+The About strip at the bottom of column 1 stops being inert. Selecting it puts a single pane over columns 2+3 carrying the icon, the wordmark, the subtitle, the maker, the version, the release date, both URLs as plain text, the licence and its full bundled text, and the footer motto. Everything CORE §4 lists, nothing it does not.
 
 Directly above the entries, a search bar narrows the list as you type, matching product names and serial numbers. It is full column width and a fixed height, it never leaves the list showing nothing without saying why, and it never hides a broken folder from the person looking for it.
 
-And the seven milestones behind this one get their loose ends collected in one place — the floor that has never been enforced in code, the stale allowances whose own comments said they would come off, the copy that says it succeeded when it did not, and the doc comments that still describe a milestone as forthcoming when it shipped three ago.
+And the seven milestones behind this one get their loose ends collected in one place — the floor that has never been enforced in code, the stale allowances whose own comments said they would come off, and the doc comments that still describe a milestone as forthcoming when it shipped three ago.
 
 Chron9 then packages what this milestone leaves.
 
@@ -20,7 +20,7 @@ Chron9 then packages what this milestone leaves.
 
 ## Scope
 
-**In:** the About pane, swapped into the content area · the full licence text, bundled and readable in the app · `build.rs` stamping a build date · version and licence id read from the manifest at compile time · the column-1 search bar, matching name and serial, folded · the vault filtering as well as ordering · a no-matches state distinct from the empty-vault one · about twenty-five new string keys in both languages · CORE §10's two wording items closed · the 1000×700 floor enforced where a test can see it · the stale `#[allow(dead_code)]` allowances and stale doc comments cleared · the exhaustiveness test's duplicate hole closed · the `Paths::resolve` failure row given a folder to name.
+**In:** the About pane, swapped into the content area · the full licence text, bundled and readable in the app · `build.rs` stamping a build date · version and licence id read from the manifest at compile time · the column-1 search bar, matching name and serial, folded · the vault filtering as well as ordering · a no-matches state distinct from the empty-vault one · eighteen new string keys in both languages · CORE §10's two wording items closed · the 1000×700 floor enforced where a test can see it · the stale `#[allow(dead_code)]` allowances and stale doc comments cleared · the exhaustiveness test's duplicate hole closed · the `Paths::resolve` failure row pinned by a test.
 
 **Out (explicitly):** packaging, CI, the `.desktop` file, the `README.md` and everything that ships an artefact (Chron9) · searching *inside* documents, which is full-text search over PDFs and a different feature with an index behind it · matching the purchase link, which would let a row match on text column 1 cannot show · fuzzy or typo-tolerant matching, which turns "why did that match?" into a question with no answer a user can check · regular expressions · search history, saved searches, or persisting the query across a restart (Technical notes) · a keyboard shortcut to focus the bar, which is a shortcut scheme this app does not otherwise have and should not grow one corner of · a settings or preferences screen — theme and language have their routes already and CORE §4 describes no third one · a changelog or release-notes pane, which is what the repo is for · checking for updates, which is a network call in an app that has none · opening either URL, which CORE §4 forbids outright · a twelfth theme, a third language, deleting a product, warranty reminders, drag-and-drop — all refused by earlier milestones with their reasons, and none of them become polish by being listed under it · replacing column 1's `ListView` (see the open question below, which is the one thing in this file that is a question rather than a plan).
 
@@ -81,55 +81,55 @@ ui/
 
 ### The swap
 
-- [ ] `app.slint`: wrap `col2` and `col3` in a `content := Rectangle { x: col1.width; width: body.width - col1.width; }` and move the `if` inside it. The two columns keep referencing each other by id — which is the whole reason for the wrapper, see Technical notes — and `assert_columns` keeps finding `col1`/`col2`/`col3` unchanged
-- [ ] `app.slint`: `about-open` as a private property beside `menu-open` and `theme-open`; opening a pane is a UI gesture and Rust only needs to hear what is chosen
-- [ ] `app.slint`: the About strip gains an `id`, a `TouchArea`, hover, the accessible quartet the other rows carry (`accessible-role`, `accessible-label`, `accessible-action-default`), and `Palette.text` when it is the active view rather than `Palette.muted` always
-- [ ] `app.slint`: Escape closes About, through the same `KeyBinding` route the form uses
-- [ ] Selecting a product while About is open closes About and shows that product (Technical notes)
+- [x] `app.slint`: About covers columns 2 and 3 rather than replacing them — declared after them, at `col1.width` with the remaining width. Neither column ever goes inside a conditional, so `col3` keeps referencing `col2` by id and `assert_columns` keeps finding all three (Technical notes for the wrapper this replaced)
+- [x] `app.slint`: `about-open` as a private property beside `menu-open` and `theme-open`; opening a pane is a UI gesture and Rust only needs to hear what is chosen
+- [x] `app.slint`: the About strip gains an `id`, a `TouchArea`, hover, the accessible quartet the other rows carry (`accessible-role`, `accessible-label`, `accessible-action-default`), and `Palette.text` when it is the active view rather than `Palette.muted` always
+- [x] `app.slint`: Escape closes About, through the same `KeyBinding` route the form uses
+- [x] Selecting a product while About is open closes About and shows that product (Technical notes)
 
 ### The pane
 
-- [ ] `about.slint`: the pane — icon, letter-spaced wordmark, subtitle, then the label/value rows, the not-a-link note, the licence row, and the italic motto — centred, `no text of its own`, following the `Viewer` and `Details` boundary
-- [ ] `about.slint`: label/value rows reuse the `DetailRow` shape from `details.slint` rather than a second one
-- [ ] `about.slint`: the two URLs render as plain text with the copy affordance and the same single-shot confirmation the serial strip and the purchase link share — no browser, ever (CORE §4)
-- [ ] `about.slint`: `read the full license` opens a `Sheet` holding the bundled text in a `Flickable`, with a Close button; the backdrop does not dismiss, as in every other sheet
-- [ ] `about.rs`: version from `env!("CARGO_PKG_VERSION")`, licence id from `env!("CARGO_PKG_LICENSE")`, build date from `env!("PARACHRON_BUILD_DATE")`, licence text from `include_str!("../LICENSE")`
-- [ ] `build.rs`: emit `cargo:rustc-env=PARACHRON_BUILD_DATE=<YYYY-MM-DD>`, formatted for display through the same `DD-MM-YYYY` rule CORE §3 sets for every other date on screen
-- [ ] `about.rs`: install — push the values once at startup; they are language-independent and therefore survive a language switch without a `set_lang` (Technical notes)
+- [x] `about.slint`: the pane — icon, letter-spaced wordmark, subtitle, then the label/value rows, the not-a-link note, the licence row, and the italic motto — centred, `no text of its own`, following the `Viewer` and `Details` boundary
+- [x] `about.slint`: label/value rows reuse the `DetailRow` shape from `details.slint` rather than a second one
+- [x] `about.slint`: the two URLs render as plain text with the copy affordance and the same single-shot confirmation the serial strip and the purchase link share — no browser, ever (CORE §4)
+- [x] `about.slint`: `read the full license` opens a `Sheet` holding the bundled text in a `Flickable`, with a Close button; the backdrop does not dismiss, as in every other sheet
+- [x] `about.rs`: version from `env!("CARGO_PKG_VERSION")`, licence id from `env!("CARGO_PKG_LICENSE")`, build date from `env!("PARACHRON_BUILD_DATE")`, licence text from `include_str!("../LICENSE")`
+- [x] `build.rs`: emit `cargo:rustc-env=PARACHRON_BUILD_DATE=<YYYY-MM-DD>`, formatted for display through the same `DD-MM-YYYY` rule CORE §3 sets for every other date on screen
+- [x] `about.rs`: install — push the values once at startup; they are language-independent and therefore survive a language switch without a `set_lang` (Technical notes)
 
 ### Search
 
-- [ ] `data.rs`: a matching fold — case- and accent-folded, applied to both the query and the field, reusing the İ/ı handling `fold` already has and **not** `folder_slug`, which slugs (Technical notes)
-- [ ] `vault.rs`: `query: String` beside `sort: SortMode`, and a `plan_query` that takes a new query and re-plans
-- [ ] `vault.rs`: `plan` filters, then orders — visible entries computed once, and every index downstream is an index into *that*, not into `entries`
-- [ ] `vault.rs`: a `Product` matches on `name` or `serial`; a `Broken` entry matches on its folder name, because that is the only text its row shows
-- [ ] `vault.rs`: a query change must not touch the viewer — no new render request, no generation-token bump, no page reset (Technical notes; this is the one that would otherwise blink on every keystroke)
-- [ ] `app.slint`: the viewer's gate stops being "a row is selected" and becomes "a product is selected", which a filter has made into two different questions
-- [ ] `widgets.slint`: `SearchBar` — one line, a placeholder, a clear affordance when non-empty, `Palette` throughout, and the accessible quartet the other interactive elements carry
-- [ ] `app.slint`: the bar between the sort row and the list, full column width, fixed height (Technical notes for the number)
-- [ ] `app.slint`: Escape clears the query when the bar has focus; the clear affordance does the same by mouse
-- [ ] A no-matches state, worded differently from the empty-vault state and reachable only when the vault is not empty (Technical notes)
-- [ ] The query survives a sort toggle, a language switch, an add and an edit; it is not written to `config.toml` and `persist` gains no field
+- [x] `data.rs`: a matching fold — case- and accent-folded, applied to both the query and the field, reusing the İ/ı handling `fold` already has and **not** `folder_slug`, which slugs (Technical notes)
+- [x] `vault.rs`: `query: String` beside `sort: SortMode`, and a `plan_query` that takes a new query and re-plans
+- [x] `vault.rs`: `plan` filters, then orders — visible entries computed once, and every index downstream is an index into *that*, not into `entries`
+- [x] `vault.rs`: a `Product` matches on `name` or `serial`; a `Broken` entry matches on its folder name, because that is the only text its row shows
+- [x] `vault.rs`: a query change must not touch the viewer — no new render request, no generation-token bump, no page reset (Technical notes; this is the one that would otherwise blink on every keystroke)
+- [x] `app.slint`: the viewer's gate stops being "a row is selected" and becomes "a product is selected", which a filter has made into two different questions
+- [x] `widgets.slint`: `SearchBar` — one line, a placeholder, a clear affordance when non-empty, `Palette` throughout, and the accessible quartet the other interactive elements carry
+- [x] `app.slint`: the bar between the sort row and the list, full column width, fixed height (Technical notes for the number)
+- [x] `app.slint`: Escape clears the query when the bar has focus; the clear affordance does the same by mouse
+- [x] A no-matches state, worded differently from the empty-vault state and reachable only when the vault is not empty (Technical notes)
+- [x] The query survives a sort toggle, a language switch, an add and an edit; it is not written to `config.toml` and `persist` gains no field
 
 ### Strings
 
-- [ ] `strings.rs` / `strings.slint`: the search placeholder, the clear glyph and the no-matches line, in both languages — the placeholder as an imperative in Turkish (`Ürünlerde ara`), per Chron6's register note
-- [ ] `strings.rs` / `strings.slint`: the About keys in both languages, in one `// About (Chron8)` group — subtitle, maker label, version label, release-date label, source label, docs label, the not-a-link note, licence label, the read-the-licence entry, the licence sheet's title, the motto, the wordmark, the `ⓘ` glyph, the maker name, and both URLs
-- [ ] `strings.rs`: `Key::ALL` gains every one of them, and the count assertion moves off 88
-- [ ] `strings.rs`: `SAME_IN_BOTH` gains the keys that are identical by nature — the wordmark, `sudo-megas`, both URLs and the glyph — each with its reason, in the style of the nineteen already there
-- [ ] `strings.rs`: the duplicate check sorts before it dedups, so a non-adjacent duplicate is caught
-- [ ] `main.rs`: `apply_strings` gains every new key and stays exhaustive
-- [ ] CORE §10: the subtitle is `Paper Vault` / `Belge Kasası` and the motto is `Built with Reason and Passion` / `Akıl ve Tutkuyla`; strike the open item
+- [x] `strings.rs` / `strings.slint`: the search placeholder, the clear glyph and the no-matches line, in both languages — the placeholder as an imperative in Turkish (`Ürünlerde ara`), per Chron6's register note
+- [x] `strings.rs` / `strings.slint`: the About keys in both languages, in one `// About (Chron8)` group — subtitle, maker label, version label, release-date label, source label, docs label, the not-a-link note, licence label, the read-the-licence entry, the licence sheet's title, the motto, the wordmark, the `ⓘ` glyph, the maker name, and both URLs
+- [x] `strings.rs`: `Key::ALL` gains every one of them, and the count assertion moves off 88
+- [x] `strings.rs`: `SAME_IN_BOTH` gains the keys that are identical by nature — the wordmark, `sudo-megas`, both URLs and the glyph — each with its reason, in the style of the nineteen already there
+- [x] `strings.rs`: the duplicate check sorts before it dedups, so a non-adjacent duplicate is caught
+- [x] `main.rs`: `apply_strings` gains every new key and stays exhaustive
+- [x] CORE §10: the subtitle is `Paper Vault` / `Belge Kasası` and the motto is `Built with Reason and Passion` / `Akıl ve Tutkuyla`; strike the open item
 
 ### Polish
 
-- [ ] `config.rs`: `MIN_WIDTH` / `MIN_HEIGHT` constants beside the defaults, and `load` clamps `window_width`/`window_height` up to them
-- [ ] `main.rs`: size the shown window from the clamped values, so the floor holds without a window manager's help
-- [ ] `data.rs`: `#[allow(dead_code)]` off `Product`; audit the other five and remove each one that no longer allows anything
-- [ ] `strings.rs`, `config.rs`, `app.slint`, `strings.slint`: the four stale doc comments corrected to describe what shipped
-- [ ] `vault.rs`: a test pinning the row a `Paths::resolve` failure produces — a readable heading and a readable reason, from an entry with no folder name at all
-- [ ] `main.rs`: `ErrConfigSave` reaches somewhere a user could see it, or the code says plainly why it cannot (Technical notes)
-- [ ] Close the persistence gap: a test that exercises the load → clamp → size → read-back → `persist` path without needing a window manager to deliver a close event
+- [x] `config.rs`: `MIN_WIDTH` / `MIN_HEIGHT` constants beside the defaults, and `load` clamps `window_width`/`window_height` up to them
+- [x] `main.rs`: size the shown window from the clamped values, so the floor holds without a window manager's help
+- [x] `data.rs`: `#[allow(dead_code)]` off `Product`; audit the other five and remove each one that no longer allows anything
+- [x] `strings.rs`, `config.rs`, `app.slint`, `strings.slint`: the four stale doc comments corrected to describe what shipped
+- [x] `vault.rs`: a test pinning the row a `Paths::resolve` failure produces — a readable heading and a readable reason, from an entry with no folder name at all
+- [x] `main.rs`: `ErrConfigSave` reaches somewhere a user could see it, or the code says plainly why it cannot (Technical notes)
+- [x] Close the persistence gap: a test that exercises the load → clamp → size → read-back → `persist` path without needing a window manager to deliver a close event
 
 ## Acceptance criteria
 
@@ -160,7 +160,13 @@ ui/
 
 ## Technical notes
 
-**The swap has one real obstacle, and it is an id.** `col3`'s geometry is written as `col1.width + col2.width` and `body.width - col1.width - col2.width`, and the comment above it explains why: column 3 takes the remainder so rounding can never leave a seam. That means `col3` references `col2` by id — and an element inside an `if` cannot be referenced by id from a sibling, so the obvious `if !about-open: col2 := …` does not compile. Re-expressing the arithmetic off `body.width` alone would compile and would quietly give up the seam guarantee that `assert_columns` pins to half a pixel. Wrapping both columns in one `content` element and putting the `if` inside keeps the ids adjacent, keeps the remainder arithmetic, keeps the three assertions passing unchanged, and is the smaller diff. Making the columns `visible: false` instead is the third option and the wrong one: an invisible element is still realised, so an element-id lookup would find two content trees at once and the headless tests would stop meaning what they say.
+**The swap has one real obstacle, it is an id, and the answer turned out to be not to swap at all.** `col3`'s geometry is written as `col1.width + col2.width` and `body.width - col1.width - col2.width`, and the comment above it explains why: column 3 takes the remainder so rounding can never leave a seam. That means `col3` references `col2` by id — and an element inside an `if` cannot be referenced by id from a sibling, so the obvious `if !about-open: col2 := …` does not compile. Re-expressing the arithmetic off `body.width` alone would compile and would quietly give up the seam guarantee that `assert_columns` pins to half a pixel.
+
+The plan was to wrap both columns in one `content` element and put the `if` inside it, which keeps the ids adjacent and the arithmetic intact. That works, and it was written, and then it was thrown away: it costs a level of nesting through two hundred lines of the file for a conditional that does not need to exist. **About covers columns 2 and 3 rather than replacing them** — declared after them in `body`, positioned at `col1.width` with the remaining width, so it draws over both. The columns are never inside a conditional, every id stays exactly where `assert_columns` looks for it, and the diff is four lines rather than a re-indent.
+
+Covering has a second benefit that argues for it independently: the viewer is never torn down by opening About, so coming back is instant instead of paying the resize debounce to rebuild a document that was already open. That is the same cost Chron3 recorded for a `selected-index` passing through -1, and the same reason this milestone split the viewer's gate off the index. The headless test pins it — `assert_columns` is asserted **with the About pane open**, at two window sizes, with the product rows still live underneath.
+
+Making the columns `visible: false` was the third option and the wrong one: an invisible element is still realised, so an element-id lookup would find two content trees at once and the headless tests would stop meaning what they say.
 
 **About is a pane, not a sheet, and that is the whole language-switch question.** Chron6 wrote down why the form and the theme picker cannot go stale: their backdrops fill the window, so `Document ▾` is unreachable while they are up, and they are rebuilt from scratch every time they open. `lang.rs` carries the same sentence as a trip-wire — "if a later milestone makes a sheet dismissable by clicking away, or puts a menu above one, that is the sentence that stops being true." An About *pane* leaves column 1 and the title bar live, so the language can change while it is on screen. The trip-wire is not tripped, because the answer is to not compose anything: every label in the pane is bound to `Strings` and follows `apply_strings` immediately, and every *value* — version, build date, URLs, maker, licence id — is language-independent and pushed once at startup. So About needs no `set_lang`, no fifth owner, and no row in `lang.rs`'s table of composed sites. That is the cheapest correct design and the reason to take it is that the alternative adds a sixth thing to a list whose only safeguard is that it has exactly one caller.
 
@@ -214,7 +220,39 @@ The pattern is worth naming, because it cost a string-table key that had to be t
 
 ## How the criteria were verified
 
-Written when the milestone is done, as in Chron1–7.
+155 tests pass (`cargo test`), up from Chron7's 129 in this tree, with no warnings from `cargo test` or `cargo build` — the distinction Chron6 paid for, and one worth re-checking in a milestone whose whole business was removing allowances.
+
+**Automated, the parts that are arithmetic.** `data.rs` pins the fold in both directions: `search_fold("Şarj Cihazı")` contains the fold of `sarj`, `ŞARJ`, `şarj` and `SARJ`, and `search_fold("İST-0042-ĞŞ")` is `ist-0042-gs` and contains **no** U+0307 — the combining dot `"İ".to_lowercase()` would otherwise leave in it, which is the difference between a serial that can be searched from a keyboard and one that cannot. It is also pinned *against* `folder_slug` on the same inputs, so the Chron7 trap of reaching for the slugger where a fold is wanted fails loudly rather than silently rewriting what somebody typed. `config.rs` pins the floor at exactly 1000×700 rather than at "≥" — `Config::default()` is 1280×800 and satisfies a `>=` assertion just as well, so the test asserts the theme was loaded first, proving the file was parsed at all, and only then the size.
+
+**Automated, the parts that are the milestone's real risk.** `vault.rs` has twenty-two tests. Three matter more than the rest. A row index is asserted not to be an entry index: with a query on, row 0 is entry 2, and clicking it must resolve to `drive` — an implementation that indexed `entries` would have selected `keyboard`, which does not crash and does not look wrong until somebody notices they are reading the wrong invoice. A filter that hides the selection is asserted to leave `index` at -1 **and** `open` true, with the pane still naming the product it is showing. And a query change is asserted to carry `view: false` while `plan_select`, `plan_sort` and a plain re-plan all carry `view: true` — a narrow exemption, not the viewer being cut out of the loop.
+
+**Through the real element tree, headless.** Four new sections in `ui_tests.rs`, which is still one test function for the reason its header gives. The load-bearing assertion there is not on `selected-open`: that flag is pushed from Rust, so a `.slint` gate regressed to `selected-index >= 0` would leave it true and tear the viewer down anyway. The test asserts `AppWindow::viewer` is realised, and a broken-folder click in the same section asserts it is *not* — without that negative control the first assertion could be a constant. The filtered-click section chooses a query where no row index equals its entry index and asserts on the folder that comes back. And `assert_columns` is run **with the About pane open**, at two window sizes, which is what tests this milestone's claim that covering rather than replacing "keeps every id exactly where `assert_columns` looks for it".
+
+**By eye, on an isolated display, which no assertion replaces.** `Xvfb :98` at exactly **1000×700** — CORE §4's floor, not a comfortable size — against a scratch vault under `XDG_DATA_HOME`, launched through `env -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE` for the reason Chron3 wrote down. `xdotool getwindowgeometry` confirmed 1000×700 at the origin.
+
+| Action | Result |
+|---|---|
+| Launch | Search bar full column width above the entries, under the sort chips; About strip with its `ⓘ` |
+| Click About | Icon, `P A R A C H R O N`, `Paper Vault`, `sudo-megas`, `0.1.0`, `06-08-2026`, both addresses with the copy glyph, the not-a-link note, `AGPL-3.0-only`, the licence button, and `Built with Reason and Passion` — all inside 700px |
+| `Read the full license` | Sheet over a dimmed window, the AGPL from `GNU AFFERO GENERAL PUBLIC LICENSE` down, scrollable, Close returns to the pane |
+| Type `sarj` | List narrows to `Şarj Cihazı` — a plain ASCII query finding an accented name; the `✕` affordance appears |
+| Select it, then type `iron` | List shows only `IronWolf Pro 6TB`, **no row highlighted**, and `Şarj Cihazı` still open: serial `İST-0042-ĞŞ`, its dates, `880 days`, viewer intact |
+| Type `zzzz` | `No products match your search.` — not `No products yet.` |
+| Türkçe, then About | `Belge Kasası`, `Yapımcı`, `Sürüm`, `Yayın tarihi`, `Kaynak kodu`, `Dokümantasyon`, `Lisans`, `Tam lisansı oku`, `Akıl ve Tutkuyla`; `Ürünlerde ara` in the bar and `Hakkında` on the strip — and `0.1.0`, `06-08-2026`, both URLs and `AGPL-3.0-only` unchanged, because none of them is UI copy |
+
+The `880 days` is the same figure Chron4 checked against a paper calendar for 2026-08-06 → 2029-01-02, arrived at independently here.
+
+**The sweeps.** Colour literals in `ui/` return one hit, a comment in `form.slint` describing the literal Chron5 removed. User-visible literals in `.slint` return comments, `""` emptiness comparisons, `@image-url` resource paths and the `"monospace"` font identifier — the same allow-list Chron3 and Chron5 established, with nothing added by `about.slint` or the new `SearchBar`. The bundled licence is the one stated exception and it is a property, not a literal.
+
+**One thing the harness taught.** The licence sheet did not appear in a screenshot taken two seconds after the click that opened it, and appeared in the next one. Reopening it with a six-second wait and no intervening event showed it, so it is the first layout of 34,020 characters being slow rather than a click being lost. Worth knowing before somebody reports the button as dead; not worth fixing for a sheet opened once.
+
+**Not verified.** Named rather than implied, in the manner of every milestone here.
+
+- **The clipboard.** Neither About URL's copy was verified end to end. Chron2 checked the serial strip through Klipper's D-Bus interface on the real session; under `Xvfb` there is no clipboard owner to ask. The code path is `arboard` called exactly as `details.rs` and `viewer.rs` call it, and the confirmation is shown only on `Ok` — but "the tick appears" was not observed.
+- **A language switch with About already open.** Turkish was verified by switching first and opening the pane after. Every string in it binds to `Strings`, so it follows `apply_strings` like the rest of the window, and that is an argument rather than an observation.
+- **Escape closing About**, and Escape clearing the query. Both are wired the way `Sheet` and the form are, and neither was driven — `xdotool key` needs an explicit window focus under a WM-less display, and the pane's own `FocusScope` makes that a second thing to get right.
+- **Eight of the eleven themes.** The pane was seen on Default Dark, **Catppuccin Latte** and **Paperlike** — the two light ones deliberately, because Chron5's contrast floor exists to catch a light theme built by inverting a dark one, and a light theme is where an unthemed element stops hiding. Both render correctly: the search bar, its border and placeholder, the About strip's selected state, the rules and the muted labels all follow the palette, and Paperlike's warm near-white ladder reads as itself. The remaining eight are dark variants of palettes already exercised, and both new surfaces read every colour from `Palette` with a clean literal sweep — which is the same evidence Chron5 called insufficient when a screenshot caught the zoom slider. Eight screenshots were not taken.
+- **The licence sheet's last line.** The first line was read; that the AGPL's `END OF TERMS AND CONDITIONS` is reachable by scrolling is asserted in `about.rs` against the string, not against the rendered sheet.
 
 ## Done when
 

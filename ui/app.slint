@@ -783,6 +783,9 @@ export component AppWindow inherits Window {
                 read-license => {
                     root.license-open = true;
                 }
+                dismissed => {
+                    root.about-open = false;
+                }
             }
         }
     }

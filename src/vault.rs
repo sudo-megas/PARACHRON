@@ -836,6 +836,30 @@ mod tests {
         assert!(vault.plan(true).view);
     }
 
+    /// The query is session state, so it survives everything the window does to
+    /// the list and nothing survives a restart.
+    ///
+    /// A sort toggle and a language switch both re-plan, and neither is a reason
+    /// to throw away what the user typed — a filter that cleared itself because
+    /// the list was reordered underneath it would be a bug nobody could describe.
+    #[test]
+    fn the_query_survives_a_sort_toggle_and_a_language_switch() {
+        let mut vault = a_vault(vault());
+        assert_eq!(vault.plan_query("iron".to_string()).rows.len(), 1);
+
+        assert_eq!(vault.plan_sort(SortMode::Name).rows.len(), 1);
+        assert_eq!(vault.query, "iron");
+
+        // What `lang::switch` does: set the language, then one re-push.
+        vault.set_lang(Lang::Tr);
+        assert_eq!(vault.plan(true).rows.len(), 1);
+        assert_eq!(vault.query, "iron");
+
+        // And a rescan, which is what a save comes back through.
+        assert_eq!(vault.plan_rescan(None).rows.len(), 0, "the scratch root is empty");
+        assert_eq!(vault.query, "iron", "a rescan is not a reason to clear it either");
+    }
+
     /// A query nothing matches empties the list rather than falling back to
     /// showing everything, which is the tempting way to "helpfully" recover and
     /// would leave the user unable to tell that their query did anything at all.

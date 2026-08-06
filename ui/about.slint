@@ -103,9 +103,30 @@ export component About inherits Rectangle {
     callback copy-source();
     callback copy-docs();
     callback read-license();
+    /// Escape was pressed. The pane is not a sheet, so it cannot borrow
+    /// `Sheet`'s key handling and needs its own scope.
+    callback dismissed();
 
     background: Palette.bg;
     clip: true;
+
+    // Escape closes, the same gesture the form and the picker answer to. Taking
+    // focus on init is safe here in a way it would not be for a permanent
+    // element: this whole component only exists while About is open, and the one
+    // way to open it is a click on the strip, which has taken focus already.
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.dismissed();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    init => {
+        keys.focus();
+    }
 
     // A Flickable rather than a plain layout, because this is the one surface
     // whose height is the sum of eleven rows of translated text. At the 1000×700

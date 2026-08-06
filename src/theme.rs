@@ -435,10 +435,15 @@ impl Themes {
         self.current
     }
 
-    /// Chron6 calls this: two of the eleven names translate, and two more carry
-    /// an English common noun. The allowance comes off there, the way Chron1's
-    /// allowance on `Product` came off in Chron4.
-    #[allow(dead_code)]
+    /// Called by the language switch: two of the eleven names translate, and two
+    /// more carry an English common noun.
+    ///
+    /// Carried an `#[allow(dead_code)]` whose comment said it would come off in
+    /// Chron6 when `lang::switch` gained a call to it. Chron6 shipped, the call
+    /// exists, and the allowance stayed on until Chron8 audited the four that
+    /// were left — the same way `Product`'s outlived its own note by four
+    /// milestones. An allowance nobody revisits is a claim about the code that
+    /// quietly stops being true.
     pub fn set_lang(&mut self, lang: Lang) {
         self.lang = lang;
     }

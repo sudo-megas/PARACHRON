@@ -123,6 +123,25 @@ mod tests {
         assert_eq!(config.sort, "added");
     }
 
+    /// The search query is deliberately not a setting (Chron8).
+    ///
+    /// A sort order that survives a restart reorders the list; a filter that
+    /// survives one *hides* most of it, and an app that opens showing three of
+    /// eleven products — with a search box the user has forgotten they filled in
+    /// — has lost the other eight as far as they can tell. Asserted against the
+    /// written file rather than the struct, because the thing that would break
+    /// this is somebody adding a field, and a field is what shows up here.
+    #[test]
+    fn the_written_config_holds_no_search_query() {
+        let text = toml::to_string_pretty(&Config::default()).unwrap();
+        assert!(!text.contains("query"), "config.toml grew a query field:\n{text}");
+        // The five that are settings, so this test fails if one goes missing
+        // rather than only if one is added.
+        for key in ["lang", "theme", "sort", "window_width", "window_height"] {
+            assert!(text.contains(key), "config.toml lost {key}:\n{text}");
+        }
+    }
+
     #[test]
     fn round_trips_through_toml() {
         let config = Config {

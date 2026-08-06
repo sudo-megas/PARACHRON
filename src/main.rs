@@ -142,6 +142,21 @@ fn main() -> Result<(), slint::PlatformError> {
             width: size.width,
             height: size.height,
         };
+        // Reported to stderr and nowhere else, and Chron8 looked at whether that
+        // could be better rather than leaving it to be rediscovered.
+        //
+        // It cannot, without changing what shutdown means. This runs after
+        // `app.hide()`, so there is no window left to put a message in; showing
+        // one would turn "the app is closing" into "the app is asking you
+        // something", which is the wrong trade for a preferences file. Saving
+        // *before* hiding would mean writing a window size the user is still able
+        // to change.
+        //
+        // So the limitation is written down instead of fixed: on Linux this
+        // reaches a terminal if the app was launched from one, and on a release
+        // Windows build `windows_subsystem = "windows"` means there is no stderr
+        // at all and a failed config save is silent. The vault itself is never at
+        // risk — this is the file that remembers a theme and a window size.
         if let Err(detail) = persist(&paths.config, session) {
             eprintln!("{}: {detail}", tr(session.lang, Key::ErrConfigSave));
         }
