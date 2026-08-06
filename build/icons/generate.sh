@@ -31,7 +31,8 @@
 # The crop numbers were measured off the master with a coordinate overlay:
 # wordmark y 704..810, hexagon y 90..660, hexagon x 240..800 (centre x 520).
 # A 670-square ending at y=700 clears the text with room to spare. The tile's
-# own rim runs 110..910 on both axes, and its corner arc crosses the 45-degree
+# own rim runs 110..910 on both axes, so an 800-square from 110 gives up only
+# the last and dimmest column of it; the rim's corner arc crosses the 45-degree
 # diagonal about 60px in from the corner, which puts a circular radius at
 # 60/(1 - 1/sqrt2) ~= 205.
 set -euo pipefail
