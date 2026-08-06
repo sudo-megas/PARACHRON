@@ -23,6 +23,24 @@ on:
     tags:
       - 'v*'
 
+  # A manual start, against a tag ref, and it exists because the tag push is a
+  # single event with no retry. `v1.0.0` was pushed during a GitHub Actions
+  # incident and no run was ever created for it — the workflow was registered
+  # and valid, the tag was correct, and the event was simply dropped. With only
+  # the trigger above, the sole remedy is to delete the tag and push it again,
+  # which rewrites release history to work around an outage.
+  #
+  # Run it with the tag as the ref, not a branch:
+  #
+  #     gh workflow run release.yml --ref v1.0.0
+  #
+  # `GITHUB_REF_NAME` is then the tag name, exactly as it is for a tag push, so
+  # every job below behaves identically. Dispatching against a *branch* instead
+  # makes `verify-tag` compare a branch name to a version and fail with a
+  # readable error rather than building something mislabelled — see the guard in
+  # that job.
+  workflow_dispatch:
+
 permissions:
   contents: write
 
@@ -63,6 +81,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          # `workflow_dispatch` can be pointed at any ref, so the first thing to
+          # establish is that this one is a tag. Dispatched against `master`,
+          # every check below would compare the string "master" to a version
+          # number and the errors would describe the symptom rather than the
+          # mistake.
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "::error::This workflow releases a tag. It was run against $GITHUB_REF_TYPE '$GITHUB_REF_NAME'. Re-run with: gh workflow run release.yml --ref vX.Y.Z"
+            exit 1
+          fi
+
           tag="${GITHUB_REF_NAME}"
           tag_version="${tag#v}"
           manifest_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
