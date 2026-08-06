@@ -241,7 +241,9 @@ git for-each-ref --format='%(creatordate:short)' …   → 2026-08-06   (the tag
 
 Worth recording as its own correction because of where it sat: in a workflow that has never run, describing a value nobody can see until a release exists, backed by a sentence in CORE that had already been written to match the wrong command. Nothing except reading the command against its own claim would have caught it.
 
-**Checked rather than assumed: the test tree does compile for Windows.** Criterion 8 wants `cargo test` green on every target, and "the binary compiles" is a different statement — the test tree reaches for `std::os::unix::ffi::OsStringExt` and `std::os::unix::fs::PermissionsExt` in `relocate.rs` and `export.rs`, to build the non-UTF-8 destination and unwritable-destination cases CORE §3 cares about. All four uses already carry `#[cfg(unix)]`, put there by the milestones that wrote them. That is a reading rather than a compile, so `spike.yml` gained a `cargo test --no-run` step to make it an observation on the target itself.
+**Checked, then observed: the test tree compiles *and passes* on Windows.** Criterion 8 wants `cargo test` green on every target, and "the binary compiles" is a different statement — the test tree reaches for `std::os::unix::ffi::OsStringExt` and `std::os::unix::fs::PermissionsExt` in `relocate.rs` and `export.rs`, to build the non-UTF-8 destination and unwritable-destination cases CORE §3 cares about. All four uses already carry `#[cfg(unix)]`, put there by the milestones that wrote them, and a fifth test carries `#[cfg(target_os = "linux")]`.
+
+Reading that was an argument; `ci.yml`'s Windows job turned it into an observation: **182 passed, 0 failed**, against Linux's 187, and 187 − 5 is exactly 182 — so the gated five are the whole of the difference and nothing else quietly dropped out. `spike.yml` keeps a `cargo test --no-run` step anyway, because the spike is the thing that runs before the release workflow is trusted and it should answer this without depending on `ci.yml` having run first.
 
 **Found by running it: the Arch package does not link unless the `PKGBUILD` says `options=(!lto)`.** Arch's stock `/etc/makepkg.conf` ships `OPTIONS=(… lto)` with `LTOFLAGS="-flto=auto"`, so makepkg appends GCC's link-time-optimisation flag to `CFLAGS`, `CXXFLAGS` and `LDFLAGS` for every package built on the machine. `mupdf-sys` compiles MuPDF's C source through `cc`, which picks those flags up, and the archive it produces then holds GCC LTO bytecode rather than native objects. `rust-lld` cannot read that format and does not say so — it reports every MuPDF symbol as undefined, which reads exactly like a missing library:
 
@@ -305,6 +307,11 @@ The genre is Chron8's, as this file already specified: a bolded noun phrase, wha
 - **`mupdf-sys` builds under MSVC**, in 484 seconds, and the icon and manifest reach the linker as `resource.res`. See **What the spike returned**.
 - **`rfd` and `arboard` resolve their Win32 backends on the runner itself**, not only in the maintainer's dependency graph.
 - **That this crate did not compile for Windows at all.** No local instrument could have produced that, and eleven milestones of green Linux builds are the proof: the defect was found the first time a compiler was pointed at the target.
+- **The whole suite is green on Windows: `182 passed; 0 failed`,** with `cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings` and `cargo build` clean beside it, in the dev profile, on `windows-latest`. That is **criterion 8 closed for the Windows target** — the first time these tests have ever run on anything but Linux.
+
+  The count is 182 against Linux's 187, and the five are accounted for rather than shrugged at: four tests carry `#[cfg(unix)]` (two in `relocate.rs` for a non-UTF-8 destination and an unwritable one, one in `export.rs` for a non-UTF-8 output path, one more in `relocate.rs`) and a fifth carries `#[cfg(target_os = "linux")]`. 187 − 5 = 182 exactly, so nothing was silently skipped. Those five are the tests that exist *because* a Unix path is bytes, which is the same fact `for_mupdf` had to split on.
+- **The cache reports itself.** The first Windows run printed `MuPDF cache: MISS — MuPDF will be compiled from vendored source`, which is correct for a first run and proves the mechanism criterion 9 needs. The `HIT` half needs a second run on an unchanged lockfile and has not happened yet.
+- **A user-facing README bug**, caught by a Debian-flavoured runner doing what the page said. See the correction in Technical notes.
 
 ### Not verified. And these are the honest ones.
 
@@ -319,9 +326,11 @@ The genre is Chron8's, as this file already specified: a bolded noun phrase, wha
 
 ### The ratio, stated plainly
 
-Of thirteen criteria, two are fully verified here (12 and 13), one is verified locally in the only way it can be until a release exists (8's content), three are verified in their layout or resolution half and not their install or functioning half (2, 3, 4), one is half verified (7), and five are not verified at all (1, 5, 6, 9, 11). Criterion 10 is struck with the AUR, which removes a row rather than answering one.
+Of thirteen criteria: **three are closed** — 8 (green in CI on Windows, and locally on Linux), 12 and 13. Three are verified in their layout or build half and open in their install half (2, 3, 4). One is half verified (7). Four are not verified at all (1, 5, 6, 11), and one has its mechanism proved and its observation outstanding (9). Criterion 10 is struck with the AUR, which removes a row rather than answering one.
 
 That is not a milestone that passed. It is a milestone whose every writable part is written and whose every locally-checkable part is checked, waiting on two things no amount of further work here can supply: a Windows machine, and a person deciding to cut a release.
+
+**A note on the runs themselves, because it bears on how much the green ones are worth.** Six workflow runs were started over roughly ninety minutes. Four died without executing anything — two on `Failed to resolve action download info: Service Unavailable`, two on `The job was not acquired by Runner of type hosted even after multiple attempts`. Both are GitHub availability rather than anything in this repository, and none of the four says anything about Parachron either way. The runs that did execute are the ones quoted above. It is worth writing down that "CI is green" and "CI ran" are separate claims, on top of the separation this file already makes between "CI is green" and "the code is right" — a milestone whose acceptance depends on a hosted runner inherits that runner's availability as a term.
 
 ## Done when
 
