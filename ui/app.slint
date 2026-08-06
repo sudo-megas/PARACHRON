@@ -9,11 +9,17 @@ import { Palette } from "palette.slint";
 import { Strings } from "strings.slint";
 import { Viewer, DocTab } from "viewer.slint";
 import { FormSheet, FormDoc } from "form.slint";
+import { ThemeSheet, ThemeItem } from "theme.slint";
 import { Details } from "details.slint";
 import { Btn } from "widgets.slint";
 
-// Re-exported so Rust can reach the global and the structs.
-export { Strings, DocTab, FormDoc }
+// Re-exported so Rust can reach the globals and the structs.
+//
+// `Palette` is here as of Chron5 and this is not cosmetic: `include_modules!`
+// generates Rust bindings for exported globals only, so `app.global::<Palette>()`
+// does not compile until the name is in this list. The whole of `theme.rs`
+// depends on that one word.
+export { Strings, Palette, DocTab, FormDoc, ThemeItem }
 
 // One row of the product list. Assembled in Rust so that every string it
 // carries — including the broken/warning prefixes — comes from the string table.
@@ -224,9 +230,19 @@ export component AppWindow inherits Window {
     /// clears it back to 0.
     in property <int> sort-mode;
 
-    // Menu state is nobody's business but this file's.
-    property <bool> menu-open: false;
+    // ── Theming (Chron5) ─────────────────────────────────────────────────
+    //
+    // The rows carry their own labels and their own active flag, both filled by
+    // `theme.rs`, so nothing on this side knows how many themes there are.
+    in property <[ThemeItem]> theme-rows;
 
+    // Menu state is nobody's business but this file's, and so is whether the
+    // theme picker is up: opening it is a UI gesture, and the only thing Rust
+    // needs to hear about is a row being chosen.
+    property <bool> menu-open: false;
+    property <bool> theme-open: false;
+
+    callback theme-selected(int);
     callback product-selected(int);
     callback tab-selected(int);
     callback page-requested(int);
@@ -579,6 +595,10 @@ export component AppWindow inherits Window {
                     copy-link => {
                         root.copy-link();
                     }
+                    open-theme => {
+                        root.menu-open = false;
+                        root.theme-open = true;
+                    }
                 }
             }
         }
@@ -670,6 +690,26 @@ export component AppWindow inherits Window {
         }
         edited => {
             root.form-edited();
+        }
+    }
+
+    // ── Theme picker (Chron5) ────────────────────────────────────────────
+    //
+    // Declared after the form sheet so it would draw over one if both were ever
+    // up. They cannot be: a sheet's backdrop covers the whole window, so THEME
+    // is unreachable while the form is open and the menu is unreachable while
+    // the picker is.
+    if root.theme-open: ThemeSheet {
+        width: root.width;
+        height: root.height;
+
+        rows: root.theme-rows;
+
+        theme-selected(index) => {
+            root.theme-selected(index);
+        }
+        closed => {
+            root.theme-open = false;
         }
     }
 }

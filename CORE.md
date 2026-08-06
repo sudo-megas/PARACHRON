@@ -127,21 +127,29 @@ Anaphored from JADEITE's About. Selecting About in the column-1 footer swaps the
 
 ## 5. Themes
 
-All themes are baked into the binary as Slint globals. Switching is instant and persisted in `config.toml`.
+All themes are baked into the binary. Switching is instant and persisted in `config.toml`.
 
-| Theme | Mode |
-|---|---|
-| Default Light | light |
-| Default Dark | dark |
-| Noctalia | dark |
-| Catppuccin Latte | light |
-| Catppuccin Frappé | dark |
-| Catppuccin Macchiato | dark |
-| Catppuccin Mocha | dark |
-| Rosé Pine | light/dawn |
-| Ruby Theme | dark |
-| Ubuntu Canonical Aubergine | dark |
-| Paperlike gradient theme | light |
+| Theme | Mode | `config.toml` id | Palette source |
+|---|---|---|---|
+| Default Light | light | `default-light` | this project |
+| Default Dark | dark | `default-dark` | this project (Chron1's) |
+| Noctalia | dark | `noctalia` | interpretation |
+| Catppuccin Latte | light | `catppuccin-latte` | upstream |
+| Catppuccin Frappé | dark | `catppuccin-frappe` | upstream |
+| Catppuccin Macchiato | dark | `catppuccin-macchiato` | upstream |
+| Catppuccin Mocha | dark | `catppuccin-mocha` | upstream |
+| Rosé Pine | light/dawn | `rose-pine` | upstream (Dawn) |
+| Ruby Theme | dark | `ruby` | interpretation |
+| Ubuntu Canonical Aubergine | dark | `ubuntu-aubergine` | Canonical brand colours |
+| Paperlike gradient theme | light | `paperlike` | interpretation (see below) |
+
+Pinned in Chron5. The hex sets live in `src/theme.rs` as one `const` per theme and are pushed into the `Palette` global in `ui/palette.slint`, the same way `src/strings.rs` fills `Strings`; the global holds initializers for Default Dark so a default start paints no intermediate frame. **Themes are colour tables and nothing else** — no per-theme fonts, radii or spacing. Twelve roles: five surfaces (`bg`, `panel`, `raised`, `selection`, `border`, in order of distance from the canvas), `text`, `muted`, `accent`, `danger`, `paper`, `paper-edge`, and `backdrop`.
+
+Three things about that table are decisions rather than details. `paper` is white in every theme, because a rendered page arrives opaque and white-backed and the image covers the sheet exactly; only `paper-edge` varies. `backdrop` carries its own alpha and is the dim behind a sheet — it was a literal in `ui/form.slint` until Chron5, and it is what makes a sheet over a light theme dim a light window. And Ruby's `danger` is amber rather than red: in a theme whose accents are already ruby, another red does not read as an error.
+
+**Paperlike is a ladder, not a literal gradient.** A real `@linear-gradient` would mean every themed `background:` in every `.slint` file taking a brush rather than a colour — the whole UI's colour plumbing changed for one theme of eleven. What ships is the warm near-white ladder that gradient implies. A real gradient is a later change to the palette's *type*, not to its values.
+
+Every palette is held to a contrast floor by test: body text at 4.5:1 against `bg` and `panel`, and `muted`, `accent` and `danger` at 3.0:1 against `panel`. The floor exists to catch a light theme built by inverting a dark one; it is not a design review.
 
 ## 6. Export
 
@@ -200,4 +208,5 @@ One line of planned scope per milestone. Each Chron file is written in detail on
 
 - About subtitle and footer motto: wording to be chosen, in both EN and TR (JADEITE's: "Ekonomi Defteri" / "Built with Reason and Passion").
 - ~~Serial-number strip exact size ratio~~ — settled in Chron2: a fixed **44px**, not a proportion. It holds one line of text, and a proportional strip would grow absurd on a tall window.
-- Theme palettes: exact hex sets per theme to be pinned in the first UI milestone. Every colour already lives in the `Palette` global in `ui/palette.slint`, so Chron5 is a contained change.
+- ~~Theme palettes: exact hex sets per theme~~ — pinned in Chron5; see §5 for where they live and which are upstream. The prediction that this would be a contained change was *nearly* right: every colour did live behind the `Palette` global except the sheet backdrop, which Chron3 had added as a literal, and two colours that were in the global but never reached the screen — the page's edge, drawn as a border the page image painted over, and the zoom slider, which came from `std-widgets` and so read the Slint style rather than the palette.
+- Remaining unthemed: the `std-widgets` `ListView` scrollbar in column 1, which appears only when the product list overflows (about seventeen products). Replacing it means replacing a virtualizing list, which is a different job from replacing a slider.

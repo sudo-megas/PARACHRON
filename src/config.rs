@@ -20,11 +20,11 @@ const DEFAULT_HEIGHT: u32 = 800;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// `"en"` or `"tr"` (CORE §4).
+    /// `"en"` or `"tr"` (CORE §4). The switch arrives in Chron6.
     pub lang: String,
-    /// Theme id; the full set of palettes arrives in Chron5.
+    /// One of the eleven theme ids from CORE §5; see `theme::Theme::code`.
     pub theme: String,
-    /// `"added"`, `"name"` or `"purchase"`; the toggles arrive in Chron4.
+    /// `"added"`, `"name"` or `"purchase"`.
     pub sort: String,
     pub window_width: u32,
     pub window_height: u32,

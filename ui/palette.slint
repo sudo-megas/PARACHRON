@@ -1,24 +1,67 @@
-// The one hardcoded palette Chron1 allowed, lifted out of `app.slint` in
-// Chron2 so the viewer can share it without importing the window.
+// The colour table (CORE §5).
 //
-// Chron5 replaces this with the eleven themes from CORE §5, switchable at
-// runtime — keeping every colour behind this global is what makes that a
-// contained change.
+// Chron1 put every colour behind this global and Chron2 lifted it into its own
+// file, both so that theming would be a contained change. Chron5 is where that
+// is collected on: the properties are `in` rather than `out` and `src/theme.rs`
+// fills them, exactly the way `src/strings.rs` fills the `Strings` global.
+//
+// The initializers are kept, and they are Default Dark — `config.toml`'s own
+// default. Without them the window paints one frame in whatever an unset colour
+// means before Rust's push lands, which is a visible flash on every start; with
+// them the pre-push frame and the post-push frame are identical for the common
+// case, so the flash is absent rather than merely hidden. They also keep
+// `ui_tests.rs` honest, which builds a window and calls `apply_strings` and
+// nothing else.
+//
+// Five of these are surfaces, and they are a ladder rather than five unrelated
+// colours — `bg`, `panel`, `raised`, `selection`, `border`, in order of distance
+// from the canvas. A new theme is built by walking a source palette's surface
+// tokens in that order.
 
 export global Palette {
-    out property <color> bg: #1b1b1d;
-    out property <color> panel: #232326;
-    out property <color> raised: #2c2c31;
-    out property <color> border: #3a3a40;
-    out property <color> text: #e6e6e8;
-    out property <color> muted: #9a9aa2;
-    out property <color> accent: #6fb2d2;
-    out property <color> danger: #e0736d;
-    out property <color> selection: #34343b;
+    // The canvas: the window behind everything, and the pane a page sits in.
+    in property <color> bg: #1b1b1d;
+    // Panels that sit above the canvas — the title bar, the list, column 3.
+    // Lighter than `bg` in every theme, light ones included: it is what makes
+    // the three-column structure legible without borders doing all the work.
+    in property <color> panel: #232326;
+    // Hovered. One step further from the panel than at rest, which on a dark
+    // theme means lighter and on a light theme means darker — "more contrast",
+    // not "brighter". Reading the role literally is what makes hand-converted
+    // light themes look washed out.
+    in property <color> raised: #2c2c31;
+    // Hairlines.
+    in property <color> border: #3a3a40;
+    in property <color> text: #e6e6e8;
+    // Labels and secondary lines. Deliberately quiet, so it is held to the
+    // large-text contrast floor rather than the body-text one (see theme.rs).
+    in property <color> muted: #9a9aa2;
+    in property <color> accent: #6fb2d2;
+    // Broken folders, expired warranties, refused files. Red in ten of the
+    // eleven themes; see theme.rs for the one where it cannot be.
+    in property <color> danger: #e0736d;
+    // The selected row, and an active chip.
+    in property <color> selection: #34343b;
 
     // The sheet a page is drawn on, and the shadow that separates it from the
     // panel behind. A white page against a dark pane needs an edge or it
     // reads as a hole.
-    out property <color> paper: #ffffff;
-    out property <color> paper-edge: #101012;
+    //
+    // `paper` is white in every theme and is not a design choice to revisit:
+    // `render.rs` rasterizes with `alpha: false`, so a page arrives already
+    // opaque and white-backed and the `Image` covers this rectangle exactly.
+    // A themed `paper` would be invisible except for the instant before the
+    // first page lands, where it would flash a colour the page is not. Only
+    // `paper-edge` varies — and on a light theme it has to get lighter, or it
+    // reads as a black frame.
+    in property <color> paper: #ffffff;
+    in property <color> paper-edge: #101012;
+
+    // The dim behind a sheet. Carries its own alpha.
+    //
+    // This was a literal in `form.slint` until Chron5 — the one colour in `ui/`
+    // that was not here, and exactly the one that would have made "switch the
+    // theme and the window follows" quietly false: a sheet over a light theme
+    // would have dimmed it with the 55% black that suits a dark one.
+    in property <color> backdrop: #0000008c;
 }

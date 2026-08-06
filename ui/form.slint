@@ -4,6 +4,12 @@
 // lost behind the main window, no second lifecycle to manage, Chron5 themes it
 // for free, and the headless harness can reach it like anything else.
 //
+// The backdrop-and-card recipe moved to `sheet.slint` in Chron5, when the theme
+// picker became the second sheet. What was a `#000000.with-alpha(0.55)` literal
+// here is now `Palette.backdrop`, which is the whole point: it was the one colour
+// in `ui/` outside the palette, and exactly the one that would have dimmed a
+// light theme with a dark theme's black.
+//
 // This component holds no text of its own. Labels come through the `Strings`
 // global; the heading and every message arrive as properties, already composed
 // by Rust, the same way the viewer's error text does.
@@ -11,6 +17,7 @@
 import { Palette } from "palette.slint";
 import { Strings } from "strings.slint";
 import { Btn, GlyphBtn, Field } from "widgets.slint";
+import { Sheet } from "sheet.slint";
 
 /// One document attached to the product being edited.
 export struct FormDoc {
@@ -21,7 +28,7 @@ export struct FormDoc {
     failed: bool,
 }
 
-export component FormSheet inherits Rectangle {
+export component FormSheet inherits Sheet {
     in property <string> heading;
 
     in-out property <string> name;
@@ -50,205 +57,165 @@ export component FormSheet inherits Rectangle {
     callback cancel();
     callback edited();
 
-    // The backdrop. It swallows every click that misses the card but does not
-    // dismiss: a form with three dates typed into it should not be destroyed
-    // by a stray click. Cancel and Escape are deliberate, and are enough.
-    background: #000000.with-alpha(0.55);
-
-    backdrop := TouchArea {
-        mouse-cursor: MouseCursor.default;
+    // Escape cancels the edit. The backdrop deliberately does not — see
+    // `sheet.slint` for why a half-filled form is not thrown away by a stray
+    // click.
+    dismissed => {
+        root.cancel();
     }
 
-    keys := FocusScope {
-        key-pressed(event) => {
-            if (event.text == Key.Escape) {
-                root.cancel();
-                return accept;
-            }
-            reject
+    Text {
+        text: root.heading;
+        color: Palette.text;
+        font-size: 18px;
+        font-weight: 700;
+    }
+
+    Field {
+        label: Strings.field-name;
+        text <=> root.name;
+        error: root.name-error;
+        edited => { root.edited(); }
+        accepted => { root.save(); }
+    }
+
+    Field {
+        label: Strings.serial-label;
+        text <=> root.serial;
+        edited => { root.edited(); }
+        accepted => { root.save(); }
+    }
+
+    Field {
+        label: Strings.field-link;
+        text <=> root.link;
+        edited => { root.edited(); }
+        accepted => { root.save(); }
+    }
+
+    HorizontalLayout {
+        spacing: 12px;
+
+        Field {
+            label: Strings.field-purchase-date;
+            hint: Strings.date-hint;
+            text <=> root.purchase-date;
+            error: root.purchase-date-error;
+            edited => { root.edited(); }
+            accepted => { root.save(); }
+        }
+
+        Field {
+            label: Strings.field-warranty-start;
+            hint: Strings.date-hint;
+            text <=> root.warranty-start;
+            error: root.warranty-start-error;
+            edited => { root.edited(); }
+            accepted => { root.save(); }
+        }
+
+        Field {
+            label: Strings.field-warranty-end;
+            hint: Strings.date-hint;
+            text <=> root.warranty-end;
+            error: root.warranty-end-error;
+            edited => { root.edited(); }
+            accepted => { root.save(); }
         }
     }
 
-    card := Rectangle {
-        width: min(560px, parent.width - 80px);
-        height: min(content.preferred-height, parent.height - 60px);
-        background: Palette.panel;
-        border-radius: 8px;
-        border-width: 1px;
-        border-color: Palette.border;
-        clip: true;
+    // ── Documents ────────────────────────────────────────────────
+    Text {
+        text: Strings.field-documents;
+        color: Palette.muted;
+        font-size: 12px;
+        letter-spacing: 1px;
+    }
 
-        // Clicks on the card must not reach the backdrop behind it.
-        TouchArea {
-            mouse-cursor: MouseCursor.default;
-        }
+    if root.docs.length == 0: Text {
+        text: Strings.no-documents-yet;
+        color: Palette.muted;
+        font-size: 13px;
+    }
 
-        content := VerticalLayout {
-            padding: 20px;
-            spacing: 14px;
+    for doc[idx] in root.docs: Rectangle {
+        height: 30px;
+
+        HorizontalLayout {
+            spacing: 8px;
 
             Text {
-                text: root.heading;
-                color: Palette.text;
-                font-size: 18px;
-                font-weight: 700;
+                text: doc.label;
+                color: doc.failed ? Palette.danger : Palette.text;
+                font-size: 13px;
+                vertical-alignment: center;
+                overflow: elide;
             }
 
-            Field {
-                label: Strings.field-name;
-                text <=> root.name;
-                error: root.name-error;
-                edited => { root.edited(); }
-                accepted => { root.save(); }
-            }
-
-            Field {
-                label: Strings.serial-label;
-                text <=> root.serial;
-                edited => { root.edited(); }
-                accepted => { root.save(); }
-            }
-
-            Field {
-                label: Strings.field-link;
-                text <=> root.link;
-                edited => { root.edited(); }
-                accepted => { root.save(); }
-            }
-
-            HorizontalLayout {
-                spacing: 12px;
-
-                Field {
-                    label: Strings.field-purchase-date;
-                    hint: Strings.date-hint;
-                    text <=> root.purchase-date;
-                    error: root.purchase-date-error;
-                    edited => { root.edited(); }
-                    accepted => { root.save(); }
-                }
-
-                Field {
-                    label: Strings.field-warranty-start;
-                    hint: Strings.date-hint;
-                    text <=> root.warranty-start;
-                    error: root.warranty-start-error;
-                    edited => { root.edited(); }
-                    accepted => { root.save(); }
-                }
-
-                Field {
-                    label: Strings.field-warranty-end;
-                    hint: Strings.date-hint;
-                    text <=> root.warranty-end;
-                    error: root.warranty-end-error;
-                    edited => { root.edited(); }
-                    accepted => { root.save(); }
-                }
-            }
-
-            // ── Documents ────────────────────────────────────────────────
             Text {
-                text: Strings.field-documents;
-                color: Palette.muted;
+                text: doc.detail;
+                color: doc.failed ? Palette.danger : Palette.muted;
                 font-size: 12px;
-                letter-spacing: 1px;
-            }
-
-            if root.docs.length == 0: Text {
-                text: Strings.no-documents-yet;
-                color: Palette.muted;
-                font-size: 13px;
-            }
-
-            for doc[idx] in root.docs: Rectangle {
-                height: 30px;
-
-                HorizontalLayout {
-                    spacing: 8px;
-
-                    Text {
-                        text: doc.label;
-                        color: doc.failed ? Palette.danger : Palette.text;
-                        font-size: 13px;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
-
-                    Text {
-                        text: doc.detail;
-                        color: doc.failed ? Palette.danger : Palette.muted;
-                        font-size: 12px;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                    }
-
-                    remove-doc := GlyphBtn {
-                        glyph: Strings.remove-glyph;
-                        accessible-label: Strings.remove-glyph;
-                        clicked => {
-                            root.remove-pdf(idx);
-                        }
-                    }
-                }
-            }
-
-            HorizontalLayout {
-                add-pdf := Btn {
-                    label: Strings.action-add-pdf;
-                    enabled: !root.busy;
-                    clicked => {
-                        root.add-pdf();
-                    }
-                }
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
-            }
-
-            if root.busy || root.notice != "": Text {
-                text: root.busy ? Strings.checking : root.notice;
-                color: root.busy ? Palette.muted : Palette.danger;
-                font-size: 13px;
-                wrap: word-wrap;
+                vertical-alignment: center;
+                overflow: elide;
             }
 
             Rectangle {
-                vertical-stretch: 1;
+                horizontal-stretch: 1;
             }
 
-            HorizontalLayout {
-                spacing: 8px;
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
-                cancel := Btn {
-                    label: Strings.action-cancel;
-                    clicked => {
-                        root.cancel();
-                    }
-                }
-                save := Btn {
-                    label: Strings.action-save;
-                    primary: true;
-                    enabled: !root.busy;
-                    clicked => {
-                        root.save();
-                    }
+            remove-doc := GlyphBtn {
+                glyph: Strings.remove-glyph;
+                accessible-label: Strings.remove-glyph;
+                clicked => {
+                    root.remove-pdf(idx);
                 }
             }
         }
-
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
     }
 
-    // Escape has to reach the scope, so take focus as the sheet appears.
-    init => {
-        keys.focus();
+    HorizontalLayout {
+        add-pdf := Btn {
+            label: Strings.action-add-pdf;
+            enabled: !root.busy;
+            clicked => {
+                root.add-pdf();
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+    }
+
+    if root.busy || root.notice != "": Text {
+        text: root.busy ? Strings.checking : root.notice;
+        color: root.busy ? Palette.muted : Palette.danger;
+        font-size: 13px;
+        wrap: word-wrap;
+    }
+
+    Rectangle {
+        vertical-stretch: 1;
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        cancel := Btn {
+            label: Strings.action-cancel;
+            clicked => {
+                root.cancel();
+            }
+        }
+        save := Btn {
+            label: Strings.action-save;
+            primary: true;
+            enabled: !root.busy;
+            clicked => {
+                root.save();
+            }
+        }
     }
 }

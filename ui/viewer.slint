@@ -7,9 +7,9 @@
 // This component holds no text of its own: every string arrives through the
 // `Strings` global or as a property filled from Rust.
 
-import { Slider } from "std-widgets.slint";
 import { Palette } from "palette.slint";
 import { Strings } from "strings.slint";
+import { Slider } from "widgets.slint";
 
 /// One tab. `missing` marks a file named in `product.toml` that is not on disk.
 export struct DocTab {
@@ -186,16 +186,36 @@ export component Viewer inherits Rectangle {
                 viewport-width: max(root.page-width, self.width);
                 viewport-height: max(root.page-height, self.height);
 
-                // The paper, with an edge so a white page does not read as a
-                // hole punched in the panel.
+                // The page's edge, so a white page does not read as a hole
+                // punched in the panel.
+                //
+                // Drawn as a rectangle one pixel *outside* the page rather than
+                // as that rectangle's `border-width`, which is how Chron2 wrote
+                // it and which never appeared: a `border` is inset within the
+                // rectangle's own bounds, and the `Image` below is positioned at
+                // its origin at the full page size, so it painted straight over
+                // the border every time a page was loaded. Chron5 found this by
+                // asserting the colour was distinguishable from the pane, and a
+                // palette role that is never drawn is Chron5's business.
+                //
+                // Putting the edge outside also keeps Chron2's other rule: the
+                // image stays at exactly the pixels it was rasterized for, so
+                // nothing is resampled. Insetting the image by a pixel instead
+                // would have traded one defect for the other.
+                Rectangle {
+                    x: (parent.viewport-width - root.page-width) / 2 - 1px;
+                    y: (parent.viewport-height - root.page-height) / 2 - 1px;
+                    width: root.page-width + 2px;
+                    height: root.page-height + 2px;
+                    background: Palette.paper-edge;
+                }
+
                 Rectangle {
                     x: (parent.viewport-width - root.page-width) / 2;
                     y: (parent.viewport-height - root.page-height) / 2;
                     width: root.page-width;
                     height: root.page-height;
                     background: Palette.paper;
-                    border-width: 1px;
-                    border-color: Palette.paper-edge;
 
                     Image {
                         width: parent.width;
@@ -279,7 +299,8 @@ export component Viewer inherits Rectangle {
                     minimum: 1.0;
                     maximum: 4.0;
                     value: root.zoom;
-                    changed(v) => {
+                    accessible-label: Strings.zoom-label;
+                    moved(v) => {
                         root.zoom-changed(v);
                     }
                 }

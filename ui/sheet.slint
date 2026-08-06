@@ -1,0 +1,81 @@
+// The overlay recipe: a dim backdrop and a centred card.
+//
+// Chron3 built this inside `form.slint` when there was one sheet. Chron5 adds
+// the theme picker, and two copies of a dozen lines with three decisions baked
+// into them is how Chron1's and Chron2's two button copies drifted before Chron3
+// lifted `Btn`. Lifting on the second use rather than the third is the cheap
+// moment.
+//
+// The three decisions, kept verbatim from Chron3:
+//
+//   * The backdrop swallows every click that misses the card and does **not**
+//     dismiss. A form with three dates typed into it should not be destroyed by
+//     a stray click; Cancel and Escape are deliberate, and are enough.
+//   * Escape asks to close. What that means is the caller's business — the form
+//     cancels an edit, the picker just closes.
+//   * The card is centred and capped against the window, so it cannot grow past
+//     the 1000x700 floor CORE §4 sets.
+//
+// A consequence worth knowing, because Chron6 depends on it: while a sheet is up
+// the backdrop covers the whole window, so `Document ▾` is unreachable and no
+// text composed into the sheet from Rust can go stale underneath it.
+
+import { Palette } from "palette.slint";
+
+export component Sheet inherits Rectangle {
+    /// How wide the card is, capped against the window.
+    in property <length> card-width: 560px;
+    /// A floor for the card's height. Zero hugs the content, which is what a
+    /// form wants; a list that should be scrollable rather than short sets one.
+    in property <length> min-card-height: 0px;
+
+    /// Escape was pressed.
+    callback dismissed();
+
+    background: Palette.backdrop;
+
+    // Catches every click outside the card. Deliberately does nothing.
+    backdrop := TouchArea {
+        mouse-cursor: MouseCursor.default;
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.dismissed();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    card := Rectangle {
+        width: min(root.card-width, parent.width - 80px);
+        height: min(max(body.preferred-height, root.min-card-height), parent.height - 60px);
+        background: Palette.panel;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Palette.border;
+        clip: true;
+
+        // Clicks on the card must not reach the backdrop behind it.
+        TouchArea {
+            mouse-cursor: MouseCursor.default;
+        }
+
+        body := VerticalLayout {
+            padding: 20px;
+            spacing: 14px;
+
+            @children
+        }
+
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    // Escape has to reach the scope, so take focus as the sheet appears.
+    init => {
+        keys.focus();
+    }
+}

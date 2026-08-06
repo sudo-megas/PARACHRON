@@ -94,6 +94,91 @@ export component GlyphBtn inherits Rectangle {
     }
 }
 
+/// A horizontal slider.
+///
+/// Hand-rolled for the reason at the top of this file, and Chron5 is where that
+/// reason stopped being hypothetical. The zoom control was `std-widgets`' own
+/// `Slider`, which draws itself from the Slint style rather than from `Palette` —
+/// so it stayed the same blue-grey whatever theme was chosen, and on Catppuccin
+/// Latte or Paperlike it was the one object on screen that had not changed. A
+/// screenshot found it; no test would have, because no test looks at a colour it
+/// did not push.
+export component Slider inherits Rectangle {
+    in property <float> minimum: 0.0;
+    in property <float> maximum: 1.0;
+    in property <float> value: 0.0;
+    /// The value under the pointer. Emitted continuously while dragging, so the
+    /// caller is expected to debounce — `viewer.rs` already does.
+    callback moved(float);
+
+    height: 20px;
+    min-width: 60px;
+
+    property <length> knob: 14px;
+    /// The distance the knob's own left edge travels, so it never overhangs.
+    property <length> span: max(root.width - root.knob, 1px);
+    property <float> range: max(root.maximum - root.minimum, 0.000001);
+    property <float> fraction: clamp((root.value - root.minimum) / root.range, 0.0, 1.0);
+
+    accessible-role: slider;
+    accessible-value: root.value;
+    accessible-value-minimum: root.minimum;
+    accessible-value-maximum: root.maximum;
+
+    // The track, and the part of it behind the knob.
+    Rectangle {
+        x: root.knob / 2;
+        y: (parent.height - 4px) / 2;
+        width: root.span;
+        height: 4px;
+        border-radius: 2px;
+        background: Palette.border;
+
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width * root.fraction;
+            height: parent.height;
+            border-radius: 2px;
+            background: Palette.accent;
+        }
+    }
+
+    Rectangle {
+        x: root.span * root.fraction;
+        y: (parent.height - root.knob) / 2;
+        width: root.knob;
+        height: root.knob;
+        border-radius: root.knob / 2;
+        background: Palette.accent;
+        // Against the panel, so the knob reads as sitting on the track rather
+        // than merging with the filled part of it.
+        border-width: 2px;
+        border-color: Palette.panel;
+    }
+
+    // Reports where the pointer is, not where the knob was: clicking anywhere on
+    // the track jumps to that value, which is what every slider does.
+    function report(at: length) {
+        root.moved(root.minimum + clamp((at - root.knob / 2) / root.span, 0.0, 1.0) * root.range);
+    }
+
+    touch := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+
+        moved => {
+            if (self.pressed) {
+                root.report(self.mouse-x);
+            }
+        }
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                root.report(self.mouse-x);
+            }
+        }
+    }
+}
+
 /// A labelled single-line text field, with room for a message under it.
 ///
 /// `error` is empty when the field is fine, and arrives pre-formatted from

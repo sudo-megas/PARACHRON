@@ -48,6 +48,7 @@ export component Details inherits Rectangle {
     in property <bool> link-copied;
 
     callback copy-link();
+    callback open-theme();
 
     background: Palette.panel;
 
@@ -55,12 +56,14 @@ export component Details inherits Rectangle {
         padding: 16px;
         spacing: 16px;
 
-        // THEME arrives in Chron5, EXPORT in Chron7.
+        // THEME is live as of Chron5. EXPORT arrives in Chron7.
         HorizontalLayout {
             spacing: 8px;
-            Btn {
+            theme-button := Btn {
                 label: Strings.action-theme;
-                enabled: false;
+                clicked => {
+                    root.open-theme();
+                }
             }
             Btn {
                 label: Strings.action-export;

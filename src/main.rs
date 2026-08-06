@@ -13,6 +13,7 @@ mod editor;
 mod import;
 mod render;
 mod strings;
+mod theme;
 mod vault;
 mod viewer;
 
@@ -21,6 +22,7 @@ use std::rc::Rc;
 use config::Config;
 use data::{Entry, Paths};
 use strings::{Key, Lang};
+use theme::Theme;
 use vault::SortMode;
 
 slint::include_modules!();
@@ -39,9 +41,16 @@ fn main() -> Result<(), slint::PlatformError> {
         .unwrap_or_default();
     let lang = Lang::from_code(&settings.lang);
     let sort = SortMode::from_code(&settings.sort);
+    let theme = Theme::from_code(&settings.theme);
 
     let app = AppWindow::new()?;
     apply_strings(&app, lang);
+
+    // Colours before anything measures or draws. `palette.slint`'s initializers
+    // are Default Dark, so a default start paints the same frame either way and
+    // there is no flash; a non-default theme is in place before the window is
+    // shown, which is the other half of the same promise.
+    let themes = theme::install(&app, theme, lang);
 
     let products_root = paths
         .as_ref()
@@ -93,8 +102,14 @@ fn main() -> Result<(), slint::PlatformError> {
     // reported, never fatal.
     if let Some(paths) = &paths {
         let size = app.window().size().to_logical(app.window().scale_factor());
-        let sort = vault.borrow().sort();
-        if let Err(detail) = persist(&paths.config, settings, lang, sort, size.width, size.height) {
+        let session = Session {
+            lang,
+            sort: vault.borrow().sort(),
+            theme: themes.borrow().current(),
+            width: size.width,
+            height: size.height,
+        };
+        if let Err(detail) = persist(&paths.config, session) {
             eprintln!("{}: {detail}", tr(lang, Key::ErrConfigSave));
         }
     }
@@ -102,23 +117,44 @@ fn main() -> Result<(), slint::PlatformError> {
     Ok(())
 }
 
-/// Write the session's state back to `config.toml`.
-fn persist(
-    path: &std::path::Path,
-    settings: Config,
+/// What this run changed, gathered at the moment the window closes.
+///
+/// A struct rather than five positional arguments because `persist` had reached
+/// six and the next milestone adds one more. `lang` is a field for the same
+/// reason `theme` is: Chron6 makes it mutable, and reading it from one place is
+/// what stops a stale copy being written.
+struct Session {
     lang: Lang,
     sort: SortMode,
+    theme: Theme,
     width: f32,
     height: f32,
-) -> Result<(), String> {
+}
+
+/// Write the session's state back to `config.toml`.
+///
+/// **Every field is named, and there is no `..` spread.** There used to be one —
+/// `..settings`, carrying the loaded config through for anything not overwritten
+/// — and it is the direct cause of three bugs in a row: the sort mode never
+/// reached the disk until Chron4 noticed, the theme would not have until Chron5
+/// did, and the language would not in Chron6. Each time, a value the session had
+/// changed was silently replaced by the value that was loaded.
+///
+/// Naming every field turns the next one into a compile error instead. `Config`
+/// holds exactly the five things a session owns, so a sixth field cannot be added
+/// without this function failing to build and somebody deciding, on purpose,
+/// whether the session owns it. `..Config::default()` would be no better than
+/// `..settings` — it would silently reset rather than silently carry.
+fn persist(path: &std::path::Path, session: Session) -> Result<(), String> {
     Config {
-        // Normalise on the way out, so an unrecognised `lang` or `sort` is
-        // rewritten as the default it already fell back to.
-        lang: lang.code().to_string(),
-        sort: sort.code().to_string(),
-        window_width: width as u32,
-        window_height: height as u32,
-        ..settings
+        // Normalised on the way out by construction: these come from typed
+        // values, so an unrecognised string in the file is rewritten as the
+        // default it already fell back to on load.
+        lang: session.lang.code().to_string(),
+        sort: session.sort.code().to_string(),
+        theme: session.theme.code().to_string(),
+        window_width: session.width as u32,
+        window_height: session.height as u32,
     }
     .save(path)
 }
@@ -192,6 +228,9 @@ fn apply_strings(app: &AppWindow, lang: Lang) {
     table.set_sort_purchase(tr(lang, Key::SortPurchase).into());
     table.set_sort_by_name(tr(lang, Key::SortByName).into());
     table.set_sort_by_purchase(tr(lang, Key::SortByPurchase).into());
+    table.set_theme_title(tr(lang, Key::ThemeTitle).into());
+    table.set_action_close(tr(lang, Key::ActionClose).into());
+    table.set_check_glyph(tr(lang, Key::CheckGlyph).into());
 }
 
 /// Shorthand for a string-table lookup.
@@ -211,19 +250,38 @@ mod tests {
         let dir = tempfile::tempdir().expect("a temp dir must be available");
         let path = dir.path().join("config.toml");
 
-        // An unrecognised language on the way in is normalised on the way out.
-        let stale = Config {
+        // A file already on disk holding values the session is about to replace,
+        // two of which do not parse. Nothing in it may survive.
+        Config {
             lang: "klingon".to_string(),
             theme: "noctalia".to_string(),
             sort: "sideways".to_string(),
             ..Config::default()
+        }
+        .save(&path)
+        .expect("the stale config must be written first");
+
+        let session = Session {
+            lang: Lang::En,
+            sort: SortMode::Name,
+            theme: Theme::Latte,
+            width: 1440.0,
+            height: 910.0,
         };
-        persist(&path, stale, Lang::En, SortMode::Name, 1440.0, 910.0).expect("config must save");
+        persist(&path, session).expect("config must save");
 
         let reloaded = Config::load(&path);
-        assert_eq!(reloaded.lang, "en");
+        assert_eq!(reloaded.lang, "en", "an unrecognised value is normalised");
         assert_eq!(reloaded.sort, "name", "the session's sort mode is written");
-        assert_eq!(reloaded.theme, "noctalia", "unrelated settings survive");
+        // Chron5. This assertion used to read the other way round — `theme` was
+        // the *unrelated* setting that survived a save, because `persist` carried
+        // it through from load. That was the defect; a theme chosen in the picker
+        // never reached the disk. Its changing is the evidence the plumbing
+        // landed.
+        assert_eq!(
+            reloaded.theme, "catppuccin-latte",
+            "the session's theme is written, not the one that was loaded"
+        );
         assert_eq!(reloaded.window_width, 1440);
         assert_eq!(reloaded.window_height, 910);
     }

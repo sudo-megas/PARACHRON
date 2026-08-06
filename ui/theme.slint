@@ -1,0 +1,145 @@
+// The theme picker (CORE §5).
+//
+// A sheet rather than a dropdown under the THEME button: column 3 is a quarter
+// of a window whose floor is 1000px, so about 250px wide, and eleven rows do not
+// hang under a button in it. And the reason Chron3 hand-rolled its menu instead
+// of using a `PopupWindow` applies here unchanged — elements inside a popup are
+// not reliably realised for the testing backend's element lookup, which would
+// put the whole picker outside the headless tests.
+//
+// This component holds no text of its own; the eleven names arrive as rows,
+// already looked up in the string table by Rust.
+
+import { Palette } from "palette.slint";
+import { Strings } from "strings.slint";
+import { Btn } from "widgets.slint";
+import { Sheet } from "sheet.slint";
+
+/// One theme in the list.
+export struct ThemeItem {
+    label: string,
+    active: bool,
+}
+
+component ThemeRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+
+    height: 32px;
+    border-radius: 5px;
+    background: root.active
+        ? Palette.selection
+        : (touch.has-hover ? Palette.raised : transparent);
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.active;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+
+        Text {
+            text: root.label;
+            color: root.active ? Palette.text : Palette.muted;
+            font-size: 13px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        // The tick replaces nothing, so a row does not reflow when it becomes
+        // the active one.
+        Text {
+            text: root.active ? Strings.check-glyph : "";
+            color: Palette.accent;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component ThemeSheet inherits Sheet {
+    in property <[ThemeItem]> rows;
+
+    callback theme-selected(int);
+    callback closed();
+
+    // Narrower than the form. The card hugs its content and `Sheet` caps it
+    // against the window, so no height is set here.
+    card-width: 380px;
+
+    dismissed => {
+        root.closed();
+    }
+
+    Text {
+        text: Strings.theme-title;
+        color: Palette.text;
+        font-size: 18px;
+        font-weight: 700;
+    }
+
+    // A plain layout, not a `ListView`.
+    //
+    // The first version used one and it was wrong in a way only a screenshot
+    // showed: a `ListView` virtualizes, so it needs a height rather than taking
+    // one from its rows, and whatever height it was given left the eleventh theme
+    // below the fold behind a scrollbar nobody would look for. The headless test
+    // did not catch it either, because it asked whether the rows were *realised*
+    // — a `ListView` realises a row just past the edge of its viewport, so the
+    // answer was yes while Paperlike was invisible.
+    //
+    // Eleven rows of 32px is 352px of content, and CORE §4 puts a hard floor of
+    // 700px under the window, which leaves 640px of card. There is nothing to
+    // virtualize and nothing to scroll: the list is short, fixed, and known.
+    VerticalLayout {
+        spacing: 0px;
+
+        for item[idx] in root.rows: ThemeRow {
+            label: item.label;
+            active: item.active;
+            clicked => {
+                root.theme-selected(idx);
+            }
+        }
+    }
+
+    Rectangle {
+        vertical-stretch: 1;
+    }
+
+    // No Cancel, because there is nothing to cancel: the change is already in
+    // effect and undoing it is one more click on the row above. The sheet stays
+    // up after a choice so eleven themes can be compared without reopening the
+    // picker eleven times.
+    HorizontalLayout {
+        spacing: 8px;
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        close := Btn {
+            label: Strings.action-close;
+            primary: true;
+            clicked => {
+                root.closed();
+            }
+        }
+    }
+}

@@ -1,7 +1,7 @@
 # Chron5 — Theming
 
 **Milestone:** 5 of ~9 (CORE §9)
-**Status:** planned
+**Status:** done
 **Builds against:** CORE §4 (layout, column 3's THEME button, app-wide principles), §5 (the eleven themes), §7 (packaging — palettes are baked in, nothing to install), §8 (conventions & development rules), §10 (open items — this is where the hex sets get pinned)
 
 ## Goal
@@ -32,6 +32,24 @@ which is the only colour literal in `ui/` outside `palette.slint`. It is one lin
 
 `Palette` is also not exported from `app.slint`, which lists only `Strings`, `DocTab` and `FormDoc`. `slint::include_modules!` generates Rust bindings for exported globals only, so `app.global::<Palette>()` does not compile until the export list grows by one word. Verified before anything else in this milestone was written, because the whole approach depends on it.
 
+## Three more defects, found by building it
+
+Chron2 fixed a Chron1 defect it tripped over. Chron3 fixed two of Chron2's. The pattern holds: making the palette real turned up three things that were wrong before this milestone started, and all three are in scope because all three are a themed colour that did not reach the screen.
+
+**1. `paper-edge` was never drawn at all.** `viewer.slint` set it as `border-color` on the rectangle holding the page, and put the `Image` at that rectangle's origin at the full page size. A Slint border is inset *within* the element's own bounds and children paint after it, so the image covered the border completely — every time a page was loaded, which is every time there is anything to look at. The colour had been in the palette since Chron2 and had never once been visible.
+
+The fix draws the edge as its own rectangle one pixel outside the page rather than as a border inside it. That also keeps Chron2's other rule intact: the image stays at exactly the pixels it was rasterized for. Insetting the image by a pixel would have been the obvious fix and would have traded this defect for resampling every page.
+
+This was found by asserting, in a test, that `paper-edge` was distinguishable from the pane behind it — and then asking why the assertion mattered.
+
+**2. The zoom slider could not be themed.** `widgets.slint` opens by explaining that nothing from `std-widgets` is used, because those follow the Slint style rather than the `Palette` global and "would leave them the only things on screen that Chron5 could not theme". `viewer.slint` then imported `Slider` from `std-widgets`. On Default Dark it passes for a muted control; on Catppuccin Latte and Paperlike it was a bright blue-orange object that stayed exactly the same whatever theme was chosen — the one thing on screen that visibly did not belong. No test would ever have caught it: a test can only check a colour it pushed, and nothing pushed this one. A screenshot caught it immediately.
+
+`Slider` is now hand-rolled beside `Btn`, `GlyphBtn` and `Field`, which is what the file said all along.
+
+**3. The picker hid its eleventh theme, and the test agreed that it did not.** The first version put the rows in a `ListView`. A `ListView` virtualizes, so it takes a height rather than giving one, and the height it was given left Paperlike below the fold behind a scrollbar. The headless test asked whether all eleven rows were *realised* and got yes — because a `ListView` realises a row just past the edge of its viewport. The test was checking something adjacent to what it claimed.
+
+Eleven rows of 32px is 352px, and CORE §4 puts a hard 700px floor under the window, which leaves 640px of card: there was never anything to virtualize. The rows are a plain layout now, and the test asks where each row actually *is* relative to the card rather than whether it exists.
+
 ## Files to add and change
 
 ```
@@ -44,9 +62,11 @@ ui/
 ├── palette.slint     # every colour `out` → `in`, filled from Rust, defaults kept
 ├── theme.slint       # NEW — the picker sheet
 ├── sheet.slint       # NEW — the backdrop/card recipe, lifted out of form.slint
-├── app.slint         # + export Palette; + host the picker; + the menu route to it
+├── app.slint         # + export Palette; + host the picker
 ├── details.slint     # THEME becomes live
 ├── form.slint        # the sheet recipe and the backdrop colour both come from elsewhere
+├── widgets.slint     # + Slider, hand-rolled (defect 2)
+├── viewer.slint      # the page's edge is drawn (defect 1); the new Slider
 └── strings.slint     # + theme names and picker chrome
 ```
 
@@ -56,20 +76,22 @@ ui/
 
 ## Tasks
 
-- [ ] `app.slint`: add `Palette` to the export list, and confirm `app.global::<Palette>()` compiles
-- [ ] `palette.slint`: every property `out` → `in`, keeping its current value as the initializer; `+ backdrop`
-- [ ] `theme.rs`: `Theme` — the eleven ids, their display-name keys, their mode, and `from_code`/`code` with a fallback for a config somebody has typed into
-- [ ] `theme.rs`: `Palette` as plain Rust data, one `const` per theme, and `push(app, palette)`
-- [ ] `theme.rs`: the contrast floor, as a test over all eleven — no palette ships unreadable
-- [ ] `sheet.slint`: `Sheet` — dim backdrop that swallows clicks without dismissing, Escape, centred card
-- [ ] `form.slint`: rebuilt on `Sheet`; the hardcoded backdrop colour goes
-- [ ] `theme.slint`: the picker — eleven rows, the active one marked, scrolling at the 700px floor
-- [ ] `app.slint`: `Document ▾` gains the route to the picker; column 3's THEME opens it too
-- [ ] `details.slint`: THEME loses `enabled: false` and calls out
-- [ ] `theme.rs`: choosing a theme pushes the palette immediately and leaves the sheet open
-- [ ] `main.rs`: `persist` writes the session's theme rather than carrying the loaded one through
-- [ ] `strings.slint` / `strings.rs`: eleven theme names and the picker's chrome through the table
-- [ ] `grep` sweep: no colour literal anywhere in `ui/` outside `palette.slint`
+- [x] `app.slint`: add `Palette` to the export list, and confirm `app.global::<Palette>()` compiles
+- [x] `palette.slint`: every property `out` → `in`, keeping its current value as the initializer; `+ backdrop`
+- [x] `theme.rs`: `Theme` — the eleven ids, their display-name keys, their mode, and `from_code`/`code` with a fallback for a config somebody has typed into
+- [x] `theme.rs`: `Palette` as plain Rust data, one `const` per theme, and `push(app, palette)`
+- [x] `theme.rs`: the contrast floor, as a test over all eleven — no palette ships unreadable
+- [x] `sheet.slint`: `Sheet` — dim backdrop that swallows clicks without dismissing, Escape, centred card
+- [x] `form.slint`: rebuilt on `Sheet`; the hardcoded backdrop colour goes
+- [x] `theme.slint`: the picker — eleven rows, the active one marked, all of them visible at the 700px floor
+- [x] `widgets.slint`: `Slider`, hand-rolled, because the `std-widgets` one cannot be themed
+- [x] `viewer.slint`: draw the page's edge outside the page, so the palette's colour actually appears
+- [x] `app.slint`: host the picker, and keep whether it is open on the Slint side
+- [x] `details.slint`: THEME loses `enabled: false` and calls out — the only route to the picker, because CORE §4 gives the theme a button in column 3 and a second entry in `Document ▾` would be a route the specification does not describe
+- [x] `theme.rs`: choosing a theme pushes the palette immediately and leaves the sheet open
+- [x] `main.rs`: `persist` writes the session's theme rather than carrying the loaded one through
+- [x] `strings.slint` / `strings.rs`: eleven theme names and the picker's chrome through the table
+- [x] `grep` sweep: no colour literal anywhere in `ui/` outside `palette.slint`
 
 ## Acceptance criteria
 
@@ -113,7 +135,38 @@ ui/
 
 ## How the criteria were verified
 
-*(Filled in when the milestone lands.)*
+106 tests pass (`cargo test`), up from Chron4's 94, with no warnings.
+
+**Automated, and this is where the palettes earn their place in Rust.** Twelve tests walk all eleven themes. Body text clears 4.5:1 against both `bg` and `panel`; `muted`, `accent` and `danger` clear 3.0:1 against `panel`. The contrast function is checked against WCAG's own reference points first — black on white is 21:1, white on white is 1:1, and the ratio is symmetric — because an unverified metric would let every palette pass for the wrong reason. The five surface roles are all distinct and step monotonically away from the canvas in whichever direction the theme runs, which is what catches a light theme converted from a dark one with `raised` left on the wrong side. `panel` is lighter than `bg` everywhere. `paper` is white everywhere. Every backdrop is translucent and none is opaque. No two themes are the same twelve values, no two share a config id or a name key, `Theme::ALL` has eleven entries with no duplicates, ids round-trip through `config.toml` and an unknown id falls back to Default Dark. Default Dark is asserted to still be Chron1's exact palette, because that is what makes a default start flash-free — if it drifts from `palette.slint`'s initializers the app flashes on every launch and nothing else would notice.
+
+**The contrast floor found a real defect in a palette I had just written.** Ruby's `paper-edge` was a near-black one step off its near-black `bg`, which reads as no edge at all. Fixing it properly meant admitting the rule was wrong rather than the value: on a dark theme no shadow can be meaningfully darker than a canvas that is already nearly black, and it does not need to be, because white paper against a near-black pane is already a hard boundary. The rule is now that a page must be distinguishable from its pane *either* by its own brightness *or* by its edge — which is a statement about the design rather than a threshold fitted to eleven data points, and it is what made defect 1 above visible.
+
+**Headless, through the real element tree.** `ui_tests.rs` clicks the THEME button, counts the picker's rows against `Theme::ALL`, checks that exactly the active theme is marked, clicks Catppuccin Latte, and then asserts the `Palette` global's `bg`, `text` and `backdrop` alpha are the values `theme.rs` holds for it — so the palette was pushed, not merely recorded. It checks the tick moved, that the sheet stays up after a choice, that re-choosing the active theme is a no-op, and that Close closes. At the 1000×700 floor it asserts the card lies inside the window and that every row's own top and bottom lie inside the card, which is the assertion that replaced the one defect 3 slipped through.
+
+**By real clicks, on an isolated display, against a scratch vault.** `Xvfb :98` at exactly 1000×700 — CORE §4's floor, the hardest case for the picker and the size the headless test measured, so the click coordinates are measured rather than guessed. `XDG_DATA_HOME` points at a temporary directory. The vault is seeded with a product named `Şarj Cihazı` whose serial is `İST-0042-ĞŞ`, a product with an expired warranty, and a folder with no manifest, so every state column 1 and column 3 can be in is on screen at once.
+
+All eleven themes were applied by clicking their rows, each confirmed against a screenshot:
+
+| Theme | Result |
+|---|---|
+| Default Dark → Default Light | Whole window inverts; accents darken rather than staying dark-theme bright |
+| Catppuccin Latte | Panels, list, viewer chrome, details column, hairlines and both buttons follow; the zoom slider is Latte's blue |
+| Catppuccin Frappé, Macchiato, Mocha | Each distinctly its own flavour, matching the upstream swatches |
+| Rosé Pine Dawn | Warm light surfaces, pine accent, love as the error colour |
+| Ruby Theme | Wine surfaces, ruby-rose accent, `Expired` in amber — the one theme where the error colour is not red, working as designed |
+| Ubuntu Canonical Aubergine | Aubergine ladder, Ubuntu Orange accent, Warm Grey for the quiet text |
+| Paperlike | Warm near-white ladder, slate-blue ink, iron-gall red |
+| Noctalia | Near-black blue with the lavender accent |
+
+**Criteria 2 and 6 were checked numerically rather than by eye,** because "looks about right" is exactly the standard a scrim is easy to get wrong against. Sampling the same two points in column 1 and column 3 with the sheet closed and open: on Catppuccin Latte, `#EFF1F5` closed — byte-identical to the palette's `panel` — and `#838487` open, against `#83848B` predicted for a 45% scrim. On Default Dark, `#232326` closed, again byte-identical, and `#101011` open against `#0F0F11` predicted for 55%. So the palette reaches the screen exactly, and a light theme is dimmed by a light theme's scrim.
+
+**Criterion 8** is verified twice, which it needed: the headless test measures every row against the card at the floor, and the screenshot at that same size shows all eleven names with `Paperlike gradient theme` fully inside the card above the Close button.
+
+**Three corrections to Chron3's click harness,** all of which cost a wasted run before being noticed. The window size has to be pinned in `config.toml` before launch, or the app opens at its 1280×800 default and every coordinate computed for another size misses — silently, because a click on nothing looks the same as a click that worked. `cargo test` does not necessarily relink `target/debug/parachron`, so the script builds first; two runs produced byte-identical screenshots from a stale binary before that was understood. And every screenshot is md5'd against the previous one, so a tap that changed nothing says so instead of being read as a theme that happens to look similar — which is how the off-by-one row alignment was caught rather than mislabelled.
+
+**Not verified end to end: criterion 3.** `xdotool windowclose` does not make the app exit under `Xvfb` — the window advertises `WM_DELETE_WINDOW` in `WM_PROTOCOLS` and the event does not arrive, and there is no window manager to route it. `persist` runs after `run_event_loop` returns, so it never ran and `config.toml` was never rewritten. What *is* verified is every link of the chain: the headless test asserts a click updates `Themes::current`; `main.rs`'s test asserts `persist` writes the session's theme over a file already holding a different one; `config.rs`'s tests assert the value reloads; and `theme.rs` asserts the id round-trips and that an unknown one falls back. The single unverified step is the three lines in `main` that read `themes.borrow().current()` into `Session`. That is an honest gap rather than a claim, and it is the same shape as Chron1's: the 1000×700 floor is enforced by a window manager the harness does not have either.
+
+**Still not themed, and known.** `app.slint` uses `std-widgets`' `ListView` for the product list, and its scrollbar is drawn from the Slint style rather than the palette. It appears only when the list overflows column 1, which is at about seventeen products, so it is invisible in every screenshot above. Replacing it is not the same job as replacing a slider — the list virtualizes and should keep doing so — and it is recorded here rather than left to be rediscovered.
 
 ## Done when
 

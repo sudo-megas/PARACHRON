@@ -100,6 +100,24 @@ pub enum Key {
     SortByName,
     SortByPurchase,
 
+    // Theming (Chron5). The eleven names are on screen, so they live here with
+    // everything else the user can see — proper nouns included, same rule the
+    // glyphs follow.
+    ThemeTitle,
+    ActionClose,
+    CheckGlyph,
+    ThemeDefaultLight,
+    ThemeDefaultDark,
+    ThemeNoctalia,
+    ThemeCatppuccinLatte,
+    ThemeCatppuccinFrappe,
+    ThemeCatppuccinMacchiato,
+    ThemeCatppuccinMocha,
+    ThemeRosePine,
+    ThemeRuby,
+    ThemeUbuntuAubergine,
+    ThemePaperlike,
+
     // Broken and incomplete entries
     BrokenTitle,
     MissingFiles,
@@ -176,6 +194,20 @@ impl Key {
         Key::SortPurchase,
         Key::SortByName,
         Key::SortByPurchase,
+        Key::ThemeTitle,
+        Key::ActionClose,
+        Key::CheckGlyph,
+        Key::ThemeDefaultLight,
+        Key::ThemeDefaultDark,
+        Key::ThemeNoctalia,
+        Key::ThemeCatppuccinLatte,
+        Key::ThemeCatppuccinFrappe,
+        Key::ThemeCatppuccinMacchiato,
+        Key::ThemeCatppuccinMocha,
+        Key::ThemeRosePine,
+        Key::ThemeRuby,
+        Key::ThemeUbuntuAubergine,
+        Key::ThemePaperlike,
         Key::BrokenTitle,
         Key::MissingFiles,
         Key::ErrNoHome,
@@ -283,6 +315,31 @@ fn table(key: Key) -> (&'static str, &'static str) {
             "Satın alma tarihine göre sırala",
         ),
 
+        // Title case, unlike `ActionTheme`'s shouting THEME. Both are stored as
+        // they appear and never passed through `to_uppercase`: Turkish maps `i`
+        // to `İ` and `ı` to `I`, so upper-casing in code gets `DIŞA AKTAR`
+        // wrong. `data::fold` documents the same trap in the other direction.
+        ThemeTitle => ("Theme", "Tema"),
+        ActionClose => ("Close", "Kapat"),
+        CheckGlyph => ("✓", "✓"),
+        // The eleven names, in CORE §5's order. Only the two Default entries and
+        // the two that carry an English common noun translate; the rest are
+        // proper nouns and are the same in both tables on purpose.
+        ThemeDefaultLight => ("Default Light", "Varsayılan Açık"),
+        ThemeDefaultDark => ("Default Dark", "Varsayılan Koyu"),
+        ThemeNoctalia => ("Noctalia", "Noctalia"),
+        ThemeCatppuccinLatte => ("Catppuccin Latte", "Catppuccin Latte"),
+        ThemeCatppuccinFrappe => ("Catppuccin Frappé", "Catppuccin Frappé"),
+        ThemeCatppuccinMacchiato => ("Catppuccin Macchiato", "Catppuccin Macchiato"),
+        ThemeCatppuccinMocha => ("Catppuccin Mocha", "Catppuccin Mocha"),
+        ThemeRosePine => ("Rosé Pine", "Rosé Pine"),
+        ThemeRuby => ("Ruby Theme", "Ruby Teması"),
+        ThemeUbuntuAubergine => ("Ubuntu Canonical Aubergine", "Ubuntu Canonical Aubergine"),
+        ThemePaperlike => (
+            "Paperlike gradient theme",
+            "Kâğıt görünümlü gradyan tema",
+        ),
+
         BrokenTitle => ("Broken entry", "Bozuk kayıt"),
         MissingFiles => ("Missing files", "Eksik dosyalar"),
         ErrNoHome => (
@@ -340,7 +397,7 @@ mod tests {
         assert_eq!(before, seen.len(), "Key::ALL contains a duplicate");
         assert_eq!(
             Key::ALL.len(),
-            63,
+            77,
             "Key::ALL is out of step with the enum — add the new key to it"
         );
     }
