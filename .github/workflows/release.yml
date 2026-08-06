@@ -462,6 +462,21 @@ jobs:
           Building from source, where your data lives, and what each part of the
           window does are all in the [README](https://github.com/sudo-megas/PARACHRON#readme).
 
+          **Two things Windows users should know.** These are in the notes rather
+          than only in the README because both produce an app that will not start,
+          and somebody who downloaded an `.exe` is not necessarily reading a
+          repository page.
+
+          Parachron needs Microsoft's Visual C++ Redistributable, which Windows
+          does not ship. Most machines already have it — it arrives with Office,
+          with games and with a great many installers. If yours does not, Windows
+          names the missing file (`VCRUNTIME140.dll was not found`); the fix is a
+          one-time download of the [Visual C++ Redistributable for x64](https://aka.ms/vs/17/release/vc_redist.x64.exe).
+
+          On a virtual machine or over remote desktop, where there is no real
+          OpenGL driver, it exits at once saying it could not find
+          `glCreateShader`. Set `SLINT_BACKEND=winit-software` and it will start.
+
           Parachron is free software under the GNU AGPL-3.0. The Windows build is
           produced by this repository's own public workflow and is not code-signed,
           so Windows may show a SmartScreen warning the first time.

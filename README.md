@@ -60,7 +60,7 @@ sudo apt install build-essential clang python3 libfontconfig1-dev
 
 ## Installation
 
-> Packaged downloads (`.pkg.tar.zst`, `.deb`, `.exe`) arrive with the first tagged release. Until then, **Build from source** below works today.
+> **1.0.1 is out.** All three packaged downloads — `.pkg.tar.zst`, `.deb` and `.exe` — are on the [Releases](https://github.com/sudo-megas/PARACHRON/releases/latest) page, built by this repository's own public workflow.
 
 ### Build from source
 
