@@ -219,7 +219,7 @@ One line of planned scope per milestone. Each Chron file is written in detail on
 | Chron6 | Localization: full EN/TR string tables, language switch |
 | Chron7 | Export: summary page generation + PDF merge |
 | Chron8 | About view + column-1 search bar + polish: error states, min-size behavior, edge cases. The search bar was asked for after Chron7 closed and folded in here rather than becoming a milestone of its own — it lands in column 1, which is where this milestone's other layout work already is. It does mean Chron7's line about being the last milestone to add a feature stopped being true one milestone later; §9 is the map, and the map changed |
-| Chron9 | Packaging & CI: PKGBUILD, .deb, Windows .exe, GitHub Actions, AUR; `README.md` written per `usereadme.md` (§8 rule 3) once release assets exist |
+| Chron9 | Packaging & CI: PKGBUILD, .deb, Windows .exe, GitHub Actions, AUR. `README.md` was written per `usereadme.md` (§8 rule 3) *before* this milestone rather than after it — the page is what a visitor lands on, and having it ready means Chron9 only has to cut a tag rather than write a page as well. The cost is stated on the page itself: the download links point at a Releases page that is empty until the first tag, and build-from-source is what works until then |
 
 ## 10. Open items
 
