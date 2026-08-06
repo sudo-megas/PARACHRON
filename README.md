@@ -8,7 +8,6 @@
 
 [![Latest version](https://img.shields.io/github/v/release/sudo-megas/PARACHRON?label=latest&color=6c8cd5)](https://github.com/sudo-megas/PARACHRON/releases/latest)
 [![Release date](https://img.shields.io/github/release-date/sudo-megas/PARACHRON?label=released&color=6c8cd5)](https://github.com/sudo-megas/PARACHRON/releases/latest)
-[![Download size](https://img.shields.io/github/downloads/sudo-megas/PARACHRON/total?label=downloads&color=6c8cd5)](https://github.com/sudo-megas/PARACHRON/releases/latest)
 [![Arch Linux](https://img.shields.io/badge/Arch-.pkg.tar.zst-1793d1?logo=archlinux&logoColor=white)](#arch-linux--cachyos)
 [![Debian](https://img.shields.io/badge/Debian-.deb-a80030?logo=debian&logoColor=white)](#debian--ubuntu)
 [![Windows](https://img.shields.io/badge/Windows-.exe-0078d4?logo=windows&logoColor=white)](#windows)
