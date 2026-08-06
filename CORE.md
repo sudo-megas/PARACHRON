@@ -29,14 +29,56 @@ Single source of truth for the Parachron project. Every Chron milestone file bui
 | PDF export | MuPDF (reused) | generates summary page + merges product PDFs; text drawn through `mupdf::shape::Shape` with **composite** font registration (see §6 — a simple Latin encoding silently drops Turkish letters) |
 | Data format | TOML (`toml` + `serde`) | one file per product; `preserve_order` so hand-added keys keep the order they were written in |
 | Dates | `time` crate | Stored as native TOML dates (ISO `YYYY-MM-DD`); displayed as `DD-MM-YYYY`; days-left computed at runtime. Features `macros`, `formatting`, `parsing`, `local-offset` — and the offset **must** be read at the top of `main`, before any thread exists (Chron4) |
-| File picker | `rfd`, `default-features = false` + `xdg-portal` | Native dialogs with no GTK development headers, which keeps §7's three targets cheap. `wayland` is deliberately **off**: its window identifier roundtrips a second event queue on Slint's own display from a foreign thread, which risks a deadlock in exchange for cosmetic dialog parenting. Always driven through `AsyncFileDialog` — the blocking call parks the caller in an untimeouted D-Bus read |
-| Clipboard | `arboard`, `wayland-data-control` only | No image support; Parachron only ever copies text |
+| File picker | `rfd` — `xdg-portal` on Unix, no features on Windows | Native dialogs with no GTK development headers, which keeps §7's three targets cheap. `wayland` is deliberately **off**: its window identifier roundtrips a second event queue on Slint's own display from a foreign thread, which risks a deadlock in exchange for cosmetic dialog parenting. Always driven through `AsyncFileDialog` — the blocking call parks the caller in an untimeouted D-Bus read. **Target-split in Chron11** (see below) |
+| Clipboard | `arboard` — `wayland-data-control` on Unix, no features on Windows | No image support; Parachron only ever copies text. Target-split in Chron11 |
+
+**The two split rows are hygiene, not a fix, and the distinction is the record
+worth keeping.** Both feature sets name a Linux mechanism, and the obvious
+reading — that a Windows build therefore has neither a file dialog nor a
+clipboard, which would make Add Document, EXPORT, the serial strip, the purchase
+link and both About URLs dead on the target §7 says CI owns — was written into
+Chron11 as a defect before anybody checked it. It is wrong.
+`cargo tree --target x86_64-pc-windows-msvc -e features` resolves `rfd` with
+`windows-sys` and `Win32_UI_Shell`, and `arboard` with `clipboard-win`: the
+platform backends are gated on `cfg(target_os = …)`, not on cargo features, so
+asking for a Linux backend on Windows is inert rather than exclusive. The split
+buys two things — the next reader does not have to run that command, and a
+future release that *does* make those features exclusive cannot break the
+Windows target silently.
 
 Rejected during planning: Python, TypeScript, Qt, Electron (vetoed on sketch); iced, egui, GTK4 (GUI runners-up); pdfium-render, Poppler, pure-Rust PDF (render runners-up); SQLite, JSON, RON (storage runners-up).
 
 ## 3. Data model
 
-Data lives under the XDG data dir: `~/.local/share/parachron/`.
+Data lives under the platform's own data directory. Until Chron11 this section
+named one path, because there was one target that anybody could install; a
+Windows asset makes it three, and the path is not the same on all of them.
+
+| Target | Data directory |
+|---|---|
+| Arch / CachyOS, Debian / Ubuntu | `$XDG_DATA_HOME/parachron/`, in practice `~/.local/share/parachron/` |
+| Windows | `%APPDATA%\parachron\data\`, in practice `C:\Users\<user>\AppData\Roaming\parachron\data\` |
+
+The tree below is written with the Linux path, which is the one the rest of this
+document and the README use.
+
+**The Windows path has a `data` segment nobody chose, and it is worth naming
+rather than discovering.** `data.rs` calls `ProjectDirs::from_path("parachron")`
+— pinned literally rather than built from a qualifier/organisation triple, so
+the directory is named `parachron` and not `com.sudo-megas.Parachron` on one
+platform and something else on another. On Linux `directories` resolves that to
+`$XDG_DATA_HOME/parachron`. On Windows it resolves to
+`%APPDATA%\parachron\data`, because `ProjectDirs` reserves the project folder
+for a set of siblings — `data`, `config`, `cache` — where XDG already separates
+those at the root. Parachron only ever uses `data_dir()`, so `config.toml` lives
+inside `data\` on Windows alongside `products\` exactly as it does on Linux;
+`config\` is created by nothing and stays absent. Read from the source at
+`directories-6.0.0/src/win.rs:77` rather than from its documentation, since this
+is a path a user is going to be asked to paste into Explorer.
+
+macOS is not a target (§7) and so has no row. `directories` would resolve it to
+`~/Library/Application Support/parachron`, which is recorded here only so that
+the absence reads as a decision rather than an oversight.
 
 ```
 ~/.local/share/parachron/
@@ -167,7 +209,14 @@ Anaphored from JADEITE's About. Selecting About in the column-1 footer swaps the
 - Subtitle line (one-phrase app description — wording open, see §10)
 - Maker — `sudo-megas`
 - Version — from `Cargo.toml` at build time
-- Release date
+- Release date — and it has **two honest sources, not one** (Chron11). `build.rs`
+  emits `PARACHRON_BUILD_DATE` at compile time, and an existing value in the
+  environment wins over the runner's clock. So a build from source reports the
+  day it was compiled, which is the only date such a binary can truthfully
+  claim; a tagged release has `release.yml` set the variable from the tag's own
+  date, so the asset a person downloads shows the day it was released rather
+  than the day a runner happened to pick the job up. The pane renders whichever
+  it got through the same `fmt_date` as every other date on screen
 - Vault — where the products actually are (Chron9). Plain text with copy-to-clipboard and nothing that opens: §3 promises no hidden state, and a folder chosen through a dialog that cannot be read back afterwards is hidden state. It is the one value in this pane that can change while the window is open, so a move pushes it again
 - Source code — `https://github.com/sudo-megas/PARACHRON` (plain text)
 - Docs — `https://github.com/sudo-megas/PARACHRON#readme` (plain text)
@@ -231,7 +280,29 @@ Targets, built by GitHub Actions on tagged releases:
 
 Install layout (Linux): binary to `/usr/bin/parachron`; icons from `build/icons/` into `/usr/share/icons/hicolor/<size>/apps/parachron.png`; desktop entry `org.parachron.Parachron.desktop` to `/usr/share/applications/`. The `.ico` feeds the Windows build.
 
-MuPDF note: AGPL-3.0 obligations are satisfied by the public repo; CI must build MuPDF statically or bundle its library per target.
+Sizes 16 through 512 are installed; `parachron-1024.png` is 1.6MB, is larger than any icon theme will ask for, and stays in the repository as artwork for a README header rather than shipping in a package.
+
+The licence text ships at **the path each distribution's own tooling reads**, which is not one path for both: `/usr/share/licenses/parachron/LICENSE` on Arch, `/usr/share/doc/parachron/copyright` on Debian. On Windows there is no such path at all, so the About pane and the executable's `LegalCopyright` resource are the only places the terms appear.
+
+MuPDF note: AGPL-3.0 obligations are satisfied by the public repo; CI must build MuPDF statically or bundle its library per target. `release.yml` asserts this on the artefact rather than trusting the intention — `ldd` on the two Linux binaries and `dumpbin /dependents` on the `.exe`, each failing the job if anything named `mupdf` appears.
+
+### Runtime dependencies are two lists, and the second is invisible (Chron11)
+
+`ldd target/release/parachron` reports twelve libraries. Slint's winit backend and `rfd` open **thirteen more** with `dlopen` at runtime, and a `dlopen`ed library appears in no `ldd` output and is missed by `dpkg-shlibdeps`, which is what `cargo-deb`'s `$auto` runs. A dependency list built from `ldd` alone therefore produces a package that installs cleanly, appears in the menu, and then does nothing when it is clicked.
+
+Both lists are written out in full in `packaging/PKGBUILD` and in `[package.metadata.deb]`, they are the same list, and they move together. Twelve of the thirteen are the X11, Wayland and GL libraries a window needs. The thirteenth is **libdbus**, which `rfd` opens for the portal file dialog and whose absence it *logs rather than raises* — so omitting it yields an app that starts, draws its window, opens its menu, and silently declines to add a document. That is a worse failure than the other twelve, all of which produce an app that visibly does not start.
+
+### Windows resources (Chron11)
+
+`build.rs` compiles `build/icons/parachron.ico` and `build/parachron.manifest` into the executable through `winresource`. The manifest carries DPI awareness (`PerMonitorV2`), `asInvoker`, and UTF-8 as the process code page — all three read by Windows before the program's own code runs, so none can be set at runtime.
+
+**The resource step is gated on `CARGO_CFG_TARGET_OS`, not on `cfg!(windows)`.** Inside a build script the `cfg` macros describe the host; the question is the target. `winresource` is declared under `[target.'cfg(windows)'.build-dependencies]`, which Cargo also resolves against the host — so a *cross*-build for Windows from Linux cannot embed resources at all. `release.yml` therefore builds Windows on `windows-latest`, and `build.rs` emits a loud `cargo:warning` rather than silently producing an icon-less `.exe` if anybody takes the cross-build route this table still permits.
+
+### The AUR was designed and withdrawn
+
+An AUR package (`paru -S parachron`) was fully designed in Chron11 and then not shipped: the Arch User Repository was temporarily disabled by its own maintainers following attacks on it. The design is kept struck through in that file rather than deleted, so it can be restored rather than re-derived.
+
+**The condition for its return is simply that the AUR reopens.** What comes back with it: an AUR account with an SSH public key registered and that key held as a repository secret; a `release.yml` step pushing to `ssh://aur@aur.archlinux.org/parachron.git`; the README's Arch section regaining an AUR route; and CORE §8 rule 2 applying to that push in full, because publishing to the AUR *is* a git commit in a git repository and must be authored by `sudo-megas`. With it gone, no workflow in this repository makes a commit anywhere.
 
 ## 8. Conventions
 
@@ -246,6 +317,17 @@ Chron files live in `chrons/` at the project root (`/home/megas/PARACHRON/chrons
 
 1. **No AI attribution anywhere.** Commits, code comments, README, release notes and UI must never contain trailers like "Made by Claude", "Claude Session", "Claude Code", "Co-Authored-By: Claude" or similar. Banned outright.
 2. **Single author.** All commits, pushes and pull requests are authored by the `sudo-megas` GitHub account — never a bot or AI account identity.
+
+   **How this applies to a release (Chron11).** A GitHub release created by
+   `release.yml` is attributed to the workflow's token, which is neither a
+   person nor a commit — it is an artefact upload against a tag, and *the tag is
+   the authored thing*. Rule 2 binds the tag, which a person pushes by hand and
+   nothing in this repository can push for them. Stated here rather than left
+   for a future reader to discover, so that "no bots" is not quietly read as
+   having been interpreted loosely. Nothing in any workflow makes a commit; the
+   one step that was going to — publishing to the AUR, which is a `git push` to
+   a git repository and would have needed a credential — went away with the AUR
+   itself (§7).
 3. **User-facing README.** `README.md` follows the layout prompt in `usereadme.md` (anaphored from JADEITE): written for users landing on the GitHub page, friendly, minimal — no changelogs, no developer oceans of info.
 
 ## 9. Chron roadmap

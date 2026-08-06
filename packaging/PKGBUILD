@@ -1,0 +1,157 @@
+# Maintainer: sudo-megas <296978292+sudo-megas@users.noreply.github.com>
+#
+# Parachron — a desktop vault for purchases (Chron11).
+#
+# Build and install from a clone of the repository:
+#
+#     git clone https://github.com/sudo-megas/PARACHRON.git
+#     cd PARACHRON/packaging
+#     makepkg -si
+#
+# This PKGBUILD builds the working tree it sits in, rather than downloading a
+# release tarball. That is a deliberate choice and it is the one the README
+# depends on: the page tells a visitor to clone and run `makepkg -si`, and it
+# has to work *today*, before the first tag exists. A `source=()` pointing at
+# `v$pkgver.tar.gz` would be the more conventional shape and would fail on a
+# repository whose Releases page is empty — which is exactly the state this one
+# is in until a person pushes a tag.
+#
+# `pkgver` below is kept in step with `Cargo.toml` by a check in
+# `.github/workflows/ci.yml`, so the two cannot drift into a package whose
+# filename disagrees with the version its own About pane reports.
+
+pkgname=parachron
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="A desktop vault for purchases: invoices, warranty documents, serial numbers and a warranty countdown, kept together"
+arch=('x86_64')
+url="https://github.com/sudo-megas/PARACHRON"
+license=('AGPL-3.0-only')
+
+# Two lists, and the second one is the reason this file has a comment block
+# rather than a one-line `depends`.
+#
+# `ldd target/release/parachron` reports the first group: the libraries the
+# binary links at load time. Building `depends` from that alone produces a
+# package that installs cleanly, appears in the menu, and then produces nothing
+# when it is clicked — because the toolkit and the file-dialog crate open the
+# second group with `dlopen` at runtime, and a `dlopen`ed library appears in no
+# `ldd` output at all.
+#
+# That is the worst shape a packaging bug can take: it passes every check a
+# packager runs and fails on somebody else's machine, at the only moment that
+# matters. The two lists are written out in full here and in
+# `[package.metadata.deb]`, they are the same list, and they move together.
+#
+# Both were measured rather than recalled: `ldd` for the first, and the soname
+# literals carried in the release binary itself for the second.
+depends=(
+  # ── Linked at load time — what `ldd` reports. ──
+  'fontconfig'
+  'freetype2'
+  'libpng'
+  'expat'
+  'bzip2'
+  'brotli'          # libbrotlidec.so.1, libbrotlicommon.so.1
+  'zlib'
+  'glibc'           # libc.so.6, libm.so.6, ld-linux
+  'gcc-libs'        # libgcc_s.so.1
+
+  # ── Opened at runtime with `dlopen`. Invisible to `ldd`. ──
+  #
+  # Slint's winit backend needs these to put a window on screen, under X11 and
+  # under Wayland both. A package must carry both sets: which one is used is a
+  # fact about the session the app is launched in, not about the build.
+  'libx11'           # libX11.so.6, libX11-xcb.so.1
+  'libxcb'           # libxcb.so.1
+  'libxcursor'       # libXcursor.so.1
+  'libxrender'       # libXrender.so.1
+  'libxi'            # libXi.so.6
+  'libxkbcommon'     # libxkbcommon.so.0
+  'libxkbcommon-x11' # libxkbcommon-x11.so.0
+  'wayland'          # libwayland-client.so.0, libwayland-egl.so.1
+  'libglvnd'         # libEGL.so.1, libGL.so.1
+
+  # The thirteenth, and the one worth its own paragraph.
+  #
+  # `rfd`'s xdg-desktop-portal backend opens libdbus itself, at
+  # `rfd/src/backend/xdg_desktop_portal/portal/ffi.rs:199`:
+  #
+  #     Liblary::open(c"libdbus-1.so.3").or_else(|| Liblary::open(c"libdbus-1.so"))
+  #
+  # and when it is missing it does not panic — `portal/libdbus.rs:77` logs
+  # "Can't connect to a portal: libdbus-1.so not found" and carries on. Every
+  # other library above is needed to open a window, so omitting one produces an
+  # app that does not start: loud, and caught by the first person to click the
+  # launcher. This one is needed to open a *file dialog*, so omitting it
+  # produces an app that starts, draws its window, opens its menu, and then does
+  # nothing at all when `Add Document` or `EXPORT` is chosen. An app that cannot
+  # add a document is not a working app.
+  'dbus'             # libdbus-1.so.3
+)
+
+makedepends=('cargo' 'clang')
+
+# Nothing is downloaded. The build reads the checkout this file lives in; see
+# the header for why.
+source=()
+sha256sums=()
+
+_srcdir() {
+  # `$startdir` is `packaging/`; the crate root is its parent. Resolved through
+  # a function so the path appears once rather than in three build stages.
+  printf '%s' "$(realpath "$startdir/..")"
+}
+
+build() {
+  cd "$(_srcdir)"
+
+  # Arch packaging convention: pin the toolchain and keep Cargo's output inside
+  # the checkout rather than wherever a user's environment points it.
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR="$(_srcdir)/target"
+
+  # `--locked` builds exactly what `Cargo.lock` records. A package built from a
+  # silently-updated dependency graph is not the package that was tested.
+  cargo build --release --locked
+}
+
+check() {
+  cd "$(_srcdir)"
+
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR="$(_srcdir)/target"
+
+  # Dev profile, deliberately, and `--release` here would be a mistake rather
+  # than an optimisation. `build.rs` emits Slint's debug info only when Cargo
+  # sets `DEBUG=true`, and Slint records the element ids that every headless
+  # assertion in `src/ui_tests.rs` looks up only when debug info is present. A
+  # release-profile test run does not run a faster suite; it runs one where
+  # every element lookup finds nothing.
+  cargo test --locked
+}
+
+package() {
+  cd "$(_srcdir)"
+
+  install -Dm755 "target/release/${pkgname}" "${pkgdir}/usr/bin/${pkgname}"
+
+  # CORE §7's install layout. 1024 is deliberately absent: it is 1.6MB on its
+  # own, larger than any icon theme will ever ask for, and exists as artwork for
+  # a README header rather than as an icon. It stays in the repository and ships
+  # in nothing.
+  local size
+  for size in 16 24 32 48 64 96 128 256 512; do
+    install -Dm644 "build/icons/${pkgname}-${size}.png" \
+      "${pkgdir}/usr/share/icons/hicolor/${size}x${size}/apps/${pkgname}.png"
+  done
+
+  install -Dm644 "packaging/org.parachron.Parachron.desktop" \
+    "${pkgdir}/usr/share/applications/org.parachron.Parachron.desktop"
+
+  # Arch's own policy path, which is not the path Debian uses for the same file
+  # — `[package.metadata.deb]` installs it to /usr/share/doc/parachron/copyright
+  # instead. Each distribution's tooling reads its own, and AGPL-3.0 requires the
+  # text to actually be there (CORE §1).
+  install -Dm644 "LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

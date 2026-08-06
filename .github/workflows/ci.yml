@@ -1,0 +1,188 @@
+# Parachron — continuous integration (Chron11).
+#
+# Runs on every push and every pull request. Three things it is deliberately
+# strict about, each for a reason written at the step rather than here.
+#
+# Only `actions/checkout` and `actions/cache` are used, both published by
+# GitHub itself. Every other step is a shell command. That is a supply-chain
+# choice rather than a style one: this repository's own packaging milestone lost
+# its AUR route to an attack on a package repository, and a workflow that pulls
+# in third-party actions to save four lines of YAML is the same shape of trust.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# A second push to the same branch cancels the first. The vendored MuPDF build
+# is the expensive part of this workflow and there is no value in finishing a
+# run whose commit has already been replaced.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # A build log that has to be read to diagnose a Windows failure is worth more
+  # than a short one.
+  CARGO_NET_RETRY: 3
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One target failing should not cancel the other. When Windows breaks,
+      # the Linux result is how we find out whether it broke for a
+      # Windows-specific reason or for a reason that would have broken both.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux
+          - os: windows-latest
+            name: Windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # `mupdf-sys` vendors MuPDF's C source and runs `bindgen` over its
+      # headers, so a C toolchain and libclang are build requirements rather
+      # than conveniences. Chron2 had to install clang on the maintainer's own
+      # machine before the first build would go through; the runner is no
+      # different.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            libclang-dev \
+            libfontconfig-1-dev \
+            desktop-file-utils
+
+      # `windows-latest` ships LLVM, but `bindgen` finds it only when
+      # `LIBCLANG_PATH` points at the directory holding `libclang.dll`. Left
+      # unset, the failure is a `bindgen` panic several minutes into a vendored
+      # C build, which is an expensive way to learn about an environment
+      # variable.
+      - name: Point bindgen at libclang
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path "$llvm\libclang.dll")) {
+            choco install llvm --no-progress -y
+          }
+          "LIBCLANG_PATH=$llvm" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          & "$llvm\clang.exe" --version
+
+      - name: Install rustfmt and clippy
+        run: rustup component add rustfmt clippy
+
+      - name: Record the toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      # Cached per target and keyed on the lockfile. `target/` is in the list
+      # because that is where `mupdf-sys` leaves its vendored build — caching
+      # only the registry would re-download nothing and rebuild everything,
+      # which is the expensive half.
+      - name: Cache cargo registry and the vendored MuPDF build
+        id: mupdf-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'build.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # Chron11's acceptance criterion 9 asks that a second run hit this cache
+      # and be materially faster. A cache that is assumed to be hit is not
+      # evidence, so the run log says which happened in as many words.
+      - name: Report the cache result
+        shell: bash
+        run: |
+          if [ "${{ steps.mupdf-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "MuPDF cache: HIT (exact key) — this run should not rebuild MuPDF."
+          else
+            echo "MuPDF cache: MISS — MuPDF will be compiled from vendored source."
+          fi
+          echo "matched key: ${{ steps.mupdf-cache.outputs.cache-matched-key }}"
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      # `--all-targets` reaches the test code as well as the binary, and
+      # `-D warnings` promotes rustc's own warnings alongside clippy's. That is
+      # what makes this one step cover criterion 8's "no warnings from
+      # `cargo build` either" rather than needing a separate strict build.
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build
+
+      # Dev profile, and this is not a preference. `build.rs` enables Slint's
+      # debug info only when Cargo sets `DEBUG=true`, and Slint records the
+      # element ids that every headless assertion in `src/ui_tests.rs` looks up
+      # only when debug info is emitted. `cargo test --release` does not run a
+      # faster suite; it runs one where every element lookup finds nothing.
+      - name: Test (dev profile — see the comment)
+        run: cargo test
+
+      # Validated on every push rather than only when somebody packages, so a
+      # malformed entry is caught by the commit that malforms it. The entry is
+      # the file CORE §7 installs to /usr/share/applications/, and a desktop
+      # that cannot parse it shows the app with no name and no icon.
+      - name: Validate the desktop entry
+        if: runner.os == 'Linux'
+        run: desktop-file-validate packaging/org.parachron.Parachron.desktop
+
+      # The PKGBUILD carries its version as a literal, because that is the shape
+      # every Arch packaging tool expects to read. That makes drift possible, so
+      # it is made impossible here instead: two files holding the same version
+      # means a package whose filename and whose About pane cannot disagree.
+      - name: PKGBUILD version agrees with Cargo.toml
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          pkgbuild="$(sed -n 's/^pkgver=\(.*\)$/\1/p' packaging/PKGBUILD | head -1)"
+          echo "Cargo.toml: $manifest"
+          echo "PKGBUILD:   $pkgbuild"
+          if [ "$manifest" != "$pkgbuild" ]; then
+            echo "::error::PKGBUILD pkgver=$pkgbuild does not match Cargo.toml version=$manifest."
+            exit 1
+          fi
+
+      # The desktop entry's StartupWMClass has to match what the toolkit
+      # actually reports, and the value was measured rather than derived:
+      # `xprop WM_CLASS` under Xvfb returns `"", "org.parachron.Parachron"`, so
+      # the app id lands in the class member. `main.rs` holds the same string as
+      # APP_ID. If somebody edits one, this catches it before a desktop stops
+      # associating the window with its launcher — a failure whose only symptom
+      # is the wrong icon in a task bar.
+      - name: Desktop entry agrees with the app id in main.rs
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_id="$(sed -n 's/^const APP_ID: &str = "\(.*\)";$/\1/p' src/main.rs)"
+          wm_class="$(sed -n 's/^StartupWMClass=\(.*\)$/\1/p' packaging/org.parachron.Parachron.desktop)"
+          entry_name="$(basename packaging/org.parachron.Parachron.desktop .desktop)"
+          echo "main.rs APP_ID:  $app_id"
+          echo "StartupWMClass:  $wm_class"
+          echo "entry basename:  $entry_name"
+          if [ "$app_id" != "$wm_class" ] || [ "$app_id" != "$entry_name" ]; then
+            echo "::error::The app id, the StartupWMClass and the entry filename must be one string."
+            exit 1
+          fi

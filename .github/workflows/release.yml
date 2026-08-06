@@ -1,0 +1,287 @@
+# Parachron — release (Chron11).
+#
+# A pushed `v*` tag produces a GitHub release carrying exactly three assets:
+# `.pkg.tar.zst`, `.deb`, `.exe` (acceptance criterion 1).
+#
+# Two notes that belong at the top of this file rather than buried in a step.
+#
+# **A release is not a commit.** CORE §8 rule 2 says every commit, push and pull
+# request is authored by `sudo-megas` and never by a bot. A GitHub release
+# created by this workflow is attributed to the workflow's token, which is not a
+# person — and also not a commit. It is an artefact upload against a tag that a
+# person pushed, and the tag is the authored thing. Nothing here commits.
+#
+# **Nothing here pushes a tag either.** The trigger is a human action by design.
+# Chron11 lists "a tag has to be pushed by a person" as one of the milestone's
+# human prerequisites precisely because nothing should be able to cut a release
+# on its own.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── The guard that runs before anything is built ────────────────────────────
+  # A tag that disagrees with `Cargo.toml`'s version produces assets whose file
+  # names say one thing and whose About pane says another, and the mismatch is
+  # only discoverable by installing them. Ten seconds here is cheaper than a
+  # deleted release.
+  verify-tag:
+    name: Tag agrees with Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      date: ${{ steps.check.outputs.date }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          tag_version="${tag#v}"
+          manifest_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+
+          echo "tag:      $tag  (version $tag_version)"
+          echo "manifest: $manifest_version"
+
+          if [ "$tag_version" != "$manifest_version" ]; then
+            echo "::error::Tag $tag says version $tag_version but Cargo.toml says $manifest_version."
+            exit 1
+          fi
+
+          # The date the release is stamped with. CORE §4 asks the About pane
+          # for a release date, and Chron8 built `build.rs` so that an existing
+          # PARACHRON_BUILD_DATE in the environment wins over the runner's
+          # clock. This is that seam: a source build honestly reports the day it
+          # was compiled, and a released asset carries the day it was tagged.
+          date="$(git log -1 --format=%cs "$GITHUB_REF_NAME")"
+          echo "release date (from the tag): $date"
+
+          echo "version=$tag_version" >> "$GITHUB_OUTPUT"
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+
+  # ── Arch / CachyOS ─────────────────────────────────────────────────────────
+  arch:
+    name: .pkg.tar.zst
+    needs: verify-tag
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed git rust clang fontconfig
+
+      - uses: actions/checkout@v4
+
+      # `makepkg` refuses to run as root, and a container runs as root. The
+      # build user is the standard way around it rather than a workaround
+      # peculiar to this project.
+      - name: Build the package
+        env:
+          PARACHRON_BUILD_DATE: ${{ needs.verify-tag.outputs.date }}
+        run: |
+          set -euo pipefail
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          cd packaging
+          sudo -u builder --preserve-env=PARACHRON_BUILD_DATE makepkg -f --noconfirm
+
+      # CORE §7: "CI must build MuPDF statically or bundle its library per
+      # target." The natural failure is a package that declares a runtime
+      # dependency on a system libmupdf that no distribution ships in the
+      # version this needs, so the check is on the artefact rather than on the
+      # intention.
+      - name: Assert MuPDF is not a runtime dependency
+        run: |
+          set -euo pipefail
+          binary="$(find "$GITHUB_WORKSPACE" -name parachron -type f -perm -u+x | head -1)"
+          echo "checking: $binary"
+          ldd "$binary"
+          if ldd "$binary" | grep -qi mupdf; then
+            echo "::error::The binary links a system MuPDF. It must be static or bundled."
+            exit 1
+          fi
+          echo "MuPDF is statically linked — no system libmupdf in the link map."
+
+      - name: Show what is in the package
+        run: |
+          cd packaging
+          for pkg in *.pkg.tar.zst; do
+            echo "=== $pkg ==="
+            bsdtar -tf "$pkg"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-package
+          path: packaging/*.pkg.tar.zst
+          if-no-files-found: error
+
+  # ── Debian / Ubuntu ────────────────────────────────────────────────────────
+  debian:
+    name: .deb
+    needs: verify-tag
+    # Deliberately the oldest supported runner rather than `ubuntu-latest`. A
+    # `.deb` built against a newer glibc will not install on an older Debian,
+    # and the asset is meant for "Debian / Ubuntu" rather than for whatever
+    # GitHub last promoted.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libclang-dev libfontconfig-1-dev
+          cargo install cargo-deb
+
+      - name: Build the package
+        env:
+          PARACHRON_BUILD_DATE: ${{ needs.verify-tag.outputs.date }}
+        run: cargo deb
+
+      - name: Assert MuPDF is not a runtime dependency
+        run: |
+          set -euo pipefail
+          ldd target/release/parachron
+          if ldd target/release/parachron | grep -qi mupdf; then
+            echo "::error::The binary links a system MuPDF. It must be static or bundled."
+            exit 1
+          fi
+          echo "MuPDF is statically linked — no system libmupdf in the link map."
+
+      - name: Show what is in the package
+        run: |
+          for deb in target/debian/*.deb; do
+            echo "=== $deb ==="
+            dpkg-deb --contents "$deb"
+            echo "--- control ---"
+            dpkg-deb --info "$deb"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian-package
+          path: target/debian/*.deb
+          if-no-files-found: error
+
+  # ── Windows ────────────────────────────────────────────────────────────────
+  windows:
+    name: .exe
+    needs: verify-tag
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Point bindgen at libclang
+        shell: pwsh
+        run: |
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path "$llvm\libclang.dll")) {
+            choco install llvm --no-progress -y
+          }
+          "LIBCLANG_PATH=$llvm" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build
+        env:
+          PARACHRON_BUILD_DATE: ${{ needs.verify-tag.outputs.date }}
+        run: cargo build --release
+
+      # The Windows equivalent of the `ldd` gate the two Linux jobs run. A
+      # `mupdf.dll` in the import table would mean the same failure in a
+      # different file format: an asset that installs and then cannot open a
+      # document on a machine that does not already have MuPDF.
+      - name: Assert MuPDF is not a runtime dependency
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationPath
+          $dumpbin = Get-ChildItem -Path "$vs\VC\Tools\MSVC" -Filter dumpbin.exe -Recurse |
+                     Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          $imports = & $dumpbin.FullName /dependents target\release\parachron.exe
+          $imports
+          if ($imports -match 'mupdf') {
+            echo "::error::The exe imports a MuPDF DLL. It must be static."
+            exit 1
+          }
+          echo "MuPDF is statically linked — no mupdf DLL in the import table."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: target/release/parachron.exe
+          if-no-files-found: error
+
+  # ── The release itself ─────────────────────────────────────────────────────
+  publish:
+    name: Publish the release
+    needs: [verify-tag, arch, debian, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+
+      - name: Collect the three assets
+        run: |
+          set -euo pipefail
+          mkdir -p upload
+          find assets -type f \( -name '*.pkg.tar.zst' -o -name '*.deb' -o -name '*.exe' \) \
+            -exec cp {} upload/ \;
+          ls -la upload
+
+          count="$(find upload -type f | wc -l)"
+          if [ "$count" -ne 3 ]; then
+            echo "::error::Expected exactly three assets, found $count."
+            exit 1
+          fi
+
+      # The release notes are written by hand, not generated. CORE §8 rule 1
+      # bans AI attribution in release notes as firmly as in commits, and rule 3
+      # keeps changelogs out of the user-facing surface — so this body points at
+      # the README and the assets rather than reciting what changed.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<'NOTES'
+          A desktop vault for your purchases — invoices, warranty documents,
+          serial numbers and a warranty countdown, kept together.
+
+          **Downloads**
+
+          | File | For |
+          |---|---|
+          | `parachron-*.pkg.tar.zst` | Arch Linux / CachyOS — `sudo pacman -U <file>` |
+          | `parachron_*.deb` | Debian / Ubuntu — `sudo apt install ./<file>` |
+          | `parachron.exe` | Windows — download and run |
+
+          Building from source, where your data lives, and what each part of the
+          window does are all in the [README](https://github.com/sudo-megas/PARACHRON#readme).
+
+          Parachron is free software under the GNU AGPL-3.0. The Windows build is
+          produced by this repository's own public workflow and is not code-signed,
+          so Windows may show a SmartScreen warning the first time.
+          NOTES
+
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Parachron $VERSION" \
+            --notes-file notes.md \
+            upload/*

@@ -9,15 +9,8 @@ repository = "https://github.com/sudo-megas/PARACHRON"
 readme = "README.md"
 
 [dependencies]
-arboard = { version = "3.6.1", features = ["wayland-data-control"], default-features = false }
 directories = "6.0.0"
 mupdf = { version = "0.8.0", default-features = false, features = ["base14-fonts", "system-fonts", "brotli", "img"] }
-# `xdg-portal` only. The default set also pulls `wayland`, whose window
-# identifier roundtrips a second event queue on Slint's own display from a
-# foreign thread — a deadlock risk bought for cosmetic dialog parenting. The
-# `gtk3` backend is the other alternative and would make GTK development
-# headers a build dependency on all three of CORE §7's targets.
-rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 serde = { version = "1.0.229", features = ["derive"] }
 # `raw-window-handle-06` exposes `Window::window_handle`, which is what parents
 # the file dialog to the window on X11 and Windows.
@@ -27,6 +20,41 @@ time = { version = "0.3.55", features = ["macros", "formatting", "parsing", "loc
 # than alphabetising somebody's file for them (CORE §3).
 toml = { version = "1.1.4", features = ["preserve_order"] }
 
+# The file dialog and the clipboard, split by target (Chron11).
+#
+# The split is hygiene rather than a fix, and the difference is worth recording
+# because the first draft of Chron11 got it wrong. Both feature sets below name
+# a Linux mechanism, and the obvious reading — that a Windows build therefore
+# has no file dialog and no clipboard — was written into that file as a defect
+# before anyone checked it. Ten seconds of
+# `cargo tree --target x86_64-pc-windows-msvc -e features -p rfd` disproves it:
+# rfd resolves there with `windows-sys` and `Win32_UI_Shell`, arboard with
+# `clipboard-win`. The platform backends are gated on `cfg(target_os = …)`, not
+# on cargo features, so asking for a Linux backend on Windows is inert rather
+# than exclusive.
+#
+# What the split buys is that the next reader does not have to run that command
+# to find out whether the Windows build works, and that a future release of
+# either crate which *does* make its features exclusive cannot break the Windows
+# target silently.
+
+[target.'cfg(unix)'.dependencies]
+arboard = { version = "3.6.1", features = ["wayland-data-control"], default-features = false }
+# `xdg-portal` only. The default set also pulls `wayland`, whose window
+# identifier roundtrips a second event queue on Slint's own display from a
+# foreign thread — a deadlock risk bought for cosmetic dialog parenting. The
+# `gtk3` backend is the other alternative and would make GTK development
+# headers a build dependency on all three of CORE §7's targets.
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+
+[target.'cfg(windows)'.dependencies]
+# No features named. Both crates reach their Win32 backends through
+# `cfg(target_os = "windows")` in their own manifests, so there is nothing here
+# to ask for — and naming a Linux feature set on this target, as the single
+# unsplit dependency line used to, only ever looked like it meant something.
+arboard = { version = "3.6.1", default-features = false }
+rfd = { version = "0.17.2", default-features = false }
+
 [build-dependencies]
 slint-build = "1.17.1"
 # `build.rs` stamps the date the binary was built, for the About pane's release
@@ -34,6 +62,101 @@ slint-build = "1.17.1"
 # feature resolution and no new download.
 time = { version = "0.3.55", features = ["macros", "formatting"] }
 
+# The Windows resource compiler, which puts `build/icons/parachron.ico` and
+# `build/parachron.manifest` inside the executable (Chron11). CORE §7 has always
+# said the `.ico` feeds the Windows build; until now nothing referenced it.
+#
+# **This section is gated on the host, not the target, and that is a cargo rule
+# rather than a choice.** Cargo evaluates `[target.'cfg(…)'.build-dependencies]`
+# against the machine running the build script. On the `windows-latest` runner
+# CORE §7 names, host and target are both Windows and this resolves. Under a
+# *cross*-build from Linux it would not, and `build.rs` would silently skip the
+# resource step and emit an icon-less, manifest-less `.exe` — a green build that
+# fails acceptance criterion 5. `release.yml` builds Windows on a Windows runner
+# for exactly this reason; anyone who moves it to a cross-build has to move this
+# line to an unconditional build-dependency at the same time.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.31"
+
 [dev-dependencies]
 i-slint-backend-testing = "1.17.1"
 tempfile = "3"
+
+# Release profile (Chron11). The dev profile is untouched: `cargo test` runs
+# there, and `build.rs` emits Slint's element ids only when Cargo sets
+# `DEBUG=true`, which is what every headless assertion in `src/ui_tests.rs`
+# looks up.
+[profile.release]
+# Whole-program optimisation across crate boundaries. The vendored MuPDF C code
+# is compiled by `cc` outside this and is unaffected; what this reaches is the
+# Rust half, which is where Slint's generated UI code lives.
+lto = true
+codegen-units = 1
+# The binary is 42MB unstripped, and almost all of that is symbols and debug
+# information for a vendored C library nobody is going to debug from a
+# downloaded release. Anybody who needs symbols builds from source, which is a
+# route the README documents and which this repository exists to make possible.
+strip = true
+
+# **Unwind, deliberately, and this is the one line here that is not about size.**
+#
+# `abort` would produce a smaller binary by dropping the landing pads. It would
+# also mean that a panic anywhere kills the process — including in the render
+# worker, which is the thread that hands a user-supplied PDF to MuPDF and is
+# therefore the thread most likely to meet a file that surprises it. CORE §3's
+# standing promise is that malformed input never crashes the app: a broken
+# product appears in the list flagged as broken, with a readable error. A
+# release profile that turns a bad PDF into an instant process death would make
+# the shipped binary break a promise the debug binary keeps, and it would break
+# it only for the people who downloaded rather than built.
+panic = "unwind"
+
+# ── Debian packaging (Chron11) ─────────────────────────────────────────────────
+#
+# Read by `cargo deb`. The install layout is CORE §7's, with one deliberate
+# difference from the PKGBUILD beside it: the licence goes to
+# /usr/share/doc/parachron/copyright here and to
+# /usr/share/licenses/parachron/LICENSE there, because that is the policy path
+# each distribution's own tooling reads. AGPL-3.0 requires the text to be
+# present (CORE §1); each distribution decides where present means.
+[package.metadata.deb]
+# `authors = ["sudo-megas"]` has no `<…>` part, and `cargo-deb` would emit a
+# malformed `Maintainer:` field from it. Debian requires an address.
+maintainer = "sudo-megas <296978292+sudo-megas@users.noreply.github.com>"
+copyright = "2026, sudo-megas <296978292+sudo-megas@users.noreply.github.com>"
+license-file = ["LICENSE", "0"]
+extended-description = """
+Parachron keeps every product's invoices, warranty PDFs, serial number and \
+purchase details together in one place, and counts down the warranty in days. \
+Everything lives in plain folders on your own disk, one folder per product, \
+human-readable and easy to back up. No account, no cloud, no telemetry."""
+section = "utils"
+priority = "optional"
+
+# Written out rather than generated, and the reason is the same one the PKGBUILD
+# gives at greater length. `cargo-deb`'s `$auto` runs `dpkg-shlibdeps`, which
+# reads the twelve sonames `ldd` reports and misses all thirteen of the ones
+# opened with `dlopen` at runtime — the X11 and Wayland libraries a window needs,
+# and libdbus, which `rfd` opens for the file dialog and whose absence it logs
+# rather than raises. A `Depends:` built from `$auto` therefore installs without
+# complaint and produces an app that either shows no window or adds no document.
+#
+# This list and the PKGBUILD's are the same list and move together.
+depends = "libfontconfig1, libfreetype6, libpng16-16, libexpat1, libbz2-1.0, libbrotli1, zlib1g, libc6, libgcc-s1, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxrender1, libxi6, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-egl1, libegl1, libgl1, libdbus-1-3"
+
+# CORE §7's layout. 1024 is deliberately absent: 1.6MB on its own, larger than
+# any icon theme will ever ask for, and kept in the repository as artwork for a
+# README header rather than shipped as an icon.
+assets = [
+    ["target/release/parachron", "usr/bin/", "755"],
+    ["packaging/org.parachron.Parachron.desktop", "usr/share/applications/", "644"],
+    ["build/icons/parachron-16.png", "usr/share/icons/hicolor/16x16/apps/parachron.png", "644"],
+    ["build/icons/parachron-24.png", "usr/share/icons/hicolor/24x24/apps/parachron.png", "644"],
+    ["build/icons/parachron-32.png", "usr/share/icons/hicolor/32x32/apps/parachron.png", "644"],
+    ["build/icons/parachron-48.png", "usr/share/icons/hicolor/48x48/apps/parachron.png", "644"],
+    ["build/icons/parachron-64.png", "usr/share/icons/hicolor/64x64/apps/parachron.png", "644"],
+    ["build/icons/parachron-96.png", "usr/share/icons/hicolor/96x96/apps/parachron.png", "644"],
+    ["build/icons/parachron-128.png", "usr/share/icons/hicolor/128x128/apps/parachron.png", "644"],
+    ["build/icons/parachron-256.png", "usr/share/icons/hicolor/256x256/apps/parachron.png", "644"],
+    ["build/icons/parachron-512.png", "usr/share/icons/hicolor/512x512/apps/parachron.png", "644"],
+]
