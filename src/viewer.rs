@@ -29,6 +29,10 @@ const TAB_ROW: f32 = 40.0;
 const CONTROL_ROW: f32 = 40.0;
 const SERIAL_STRIP: f32 = 44.0;
 
+/// The page's frame, in logical pixels: one on each side. Kept here rather than
+/// in `viewer.slint` because it is the renderer that has to leave room for it.
+const EDGE: f32 = 2.0;
+
 /// How long the window must sit still before a resize is worth re-rendering.
 const RESIZE_SETTLE: Duration = Duration::from_millis(120);
 /// How long the "copied" confirmation stays up.
@@ -242,6 +246,22 @@ impl State {
             // The layout has not run yet; the resize callback will come back.
             return Plan::Idle;
         }
+
+        // Fit into the pane *minus the frame*, which is the other half of Chron5's
+        // paper-edge fix.
+        //
+        // `viewer.slint` draws a one-pixel frame around the page, so the page and
+        // its edge together are `page + 2px`. At 1× the fitted page fills one axis
+        // of the pane exactly — that is what fitting means — so asking for the
+        // whole pane leaves the edge 2px larger than the space it has, and the far
+        // side of the frame hangs past the pane where it can only be reached by
+        // scrolling. Reserving the two pixels here means a page at 1× has its whole
+        // border inside the pane and nothing scrolls.
+        //
+        // Above 1× the page is bigger than the pane in both axes and scrolling is
+        // the point, so the frame is reached the same way the rest of the page is.
+        let width = (width - EDGE).max(1.0);
+        let height = (height - EDGE).max(1.0);
 
         // Zoom folds straight into the target box: asking for twice the pane
         // and fitting the page inside it *is* 2× zoom.
@@ -720,15 +740,38 @@ mod tests {
         );
         assert_eq!(page, 0);
         assert_eq!(token, 1);
-        // 600×800 logical at 2× display scale, 1× zoom.
-        assert_eq!(target, (1200, 1600));
+        // 600×800 logical, less the page's 2px frame, at 2× display scale and 1×
+        // zoom: (600−2)×2 by (800−2)×2. The two reserved pixels are Chron5's — a
+        // page fitted to the whole pane fills one axis exactly, so its frame would
+        // be 2px larger than the space available and the far side of it would hang
+        // past the pane.
+        assert_eq!(target, (1196, 1596));
 
         state.zoom = 2.0;
         let Plan::Render { target, token, .. } = state.plan(2.0) else {
             panic!("zooming still renders");
         };
-        assert_eq!(target, (2400, 3200), "zoom multiplies the fit box");
+        assert_eq!(target, (2392, 3192), "zoom multiplies the fit box");
         assert_eq!(token, 2, "every request supersedes the last");
+    }
+
+    /// The frame is reserved out of the pane, not out of the page — so a page
+    /// fitted at 1× is exactly two logical pixels smaller than the pane it sits
+    /// in, which is what leaves room for a one-pixel border on each side.
+    #[test]
+    fn a_page_fitted_at_one_times_leaves_room_for_its_own_frame() {
+        let mut state = state();
+        state.show(Some(monitor()), false);
+
+        let Plan::Render { target, .. } = state.plan(1.0) else {
+            panic!("a present document must render");
+        };
+        let (pane_w, pane_h) = state.viewport;
+        assert_eq!(
+            (target.0 as f32, target.1 as f32),
+            (pane_w - EDGE, pane_h - EDGE),
+            "the frame has to fit inside the pane, or half of it is unreachable"
+        );
     }
 
     /// The Chron2 defect this milestone fixes.

@@ -42,6 +42,12 @@ The fix draws the edge as its own rectangle one pixel outside the page rather th
 
 This was found by asserting, in a test, that `paper-edge` was distinguishable from the pane behind it — and then asking why the assertion mattered.
 
+**And that fix was itself only half a fix, which sampling the pixels showed.** Drawing the edge outside the page puts it outside the `Flickable`'s viewport too, because the viewport was bound to the page's own size and a `Flickable` clips hard to its bounds. At 1× zoom the fitted page fills one axis of the pane *exactly* — that is what fitting means — so on that axis the frame had nowhere to go: the top line sat at −1 and the bottom line at exactly the viewport's height, both outside the clip, and panning could not reach either. A portrait invoice in a wide column had left and right edges and no top or bottom.
+
+Two changes together close it. The viewport is sized to the page **plus** its frame, and the renderer is asked to fit the page into the pane **minus** the frame — so at 1× the page is two logical pixels smaller than the pane, its border fits inside, and nothing scrolls. Above 1× the page is larger than the pane anyway and the frame is reached the same way the rest of the page is.
+
+The lesson worth keeping is about how this was caught rather than what it was. The first fix looked right, rendered, and produced a visible frame in a screenshot — because the two edges that *were* showing are the ones the eye notices. It took sampling the pixels along a slice through the page to see that two of the four were missing.
+
 **2. The zoom slider could not be themed.** `widgets.slint` opens by explaining that nothing from `std-widgets` is used, because those follow the Slint style rather than the `Palette` global and "would leave them the only things on screen that Chron5 could not theme". `viewer.slint` then imported `Slider` from `std-widgets`. On Default Dark it passes for a muted control; on Catppuccin Latte and Paperlike it was a bright blue-orange object that stayed exactly the same whatever theme was chosen — the one thing on screen that visibly did not belong. No test would ever have caught it: a test can only check a colour it pushed, and nothing pushed this one. A screenshot caught it immediately.
 
 `Slider` is now hand-rolled beside `Btn`, `GlyphBtn` and `Field`, which is what the file said all along.
