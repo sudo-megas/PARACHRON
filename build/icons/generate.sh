@@ -28,20 +28,29 @@
 # tile on a near-black backdrop, and margin around an opaque square only draws
 # attention to the square.
 #
-# The crop numbers were measured off the master with a coordinate overlay:
-# wordmark y 704..810, hexagon y 90..660, hexagon x 240..800 (centre x 520).
-# A 670-square ending at y=700 clears the text with room to spare. The tile's
-# own rim runs 110..910 on both axes, so an 800-square from 110 gives up only
-# the last and dimmest column of it; the rim's corner arc crosses the 45-degree
-# diagonal about 60px in from the corner, which puts a circular radius at
-# 60/(1 - 1/sqrt2) ~= 205.
+# The crop numbers are measured off the master, and they have to be re-measured
+# whenever the master is redrawn. The first set here was not: it was carried over
+# from the previous artwork and kept working well enough to look deliberate. On
+# this master it began at y=30 — eighty pixels *above* the tile's own rim at
+# y=110 — so every icon below the wordmark floor carried a dead band of backdrop
+# across its top and wore the hexagon pushed off centre beneath it. On a task bar
+# that reads as an icon that has been cut off, which is exactly what it was.
+#
+# Measured against this master: the tile's rim runs 110..910 on both axes, and
+# its corner arc crosses the 45-degree diagonal about 60px in, which puts a
+# circular radius at 60/(1 - 1/sqrt2) ~= 205. An 800-square from 110 gives up
+# only the last and dimmest column of that rim. Inside it the hexagon spans
+# roughly x 310..715 and y 210..665, centred on (512, 437), and the wordmark
+# starts at y~705 — so a 520-square centred on the hexagon ends at y=697, which
+# clears the text by a hair and fills the icon with the mark rather than with
+# the plate around it.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 MASTER=parachron-1024.png
-MARK_CROP="670x670+185+30"
-MARK_SIZE=670
-MARK_RADIUS=120           # ~18% of 670, matching the tile's own corner radius
+MARK_CROP="520x520+252+177"
+MARK_SIZE=520
+MARK_RADIUS=94            # ~18% of 520, matching the tile's own corner radius
 TILE_CROP="800x800+110+110"
 TILE_SIZE=800
 TILE_RADIUS=205           # the arc the painted rim itself follows; see above
