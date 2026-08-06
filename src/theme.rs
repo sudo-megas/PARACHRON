@@ -387,12 +387,7 @@ impl Theme {
 
 /// `0xRRGGBB` as an opaque Slint colour.
 fn rgb(value: u32) -> Color {
-    Color::from_argb_u8(
-        0xff,
-        (value >> 16) as u8,
-        (value >> 8) as u8,
-        value as u8,
-    )
+    Color::from_argb_u8(0xff, (value >> 16) as u8, (value >> 8) as u8, value as u8)
 }
 
 /// `0xAARRGGBB`, for the one role that carries its own alpha.
@@ -600,7 +595,11 @@ mod tests {
                 );
             }
 
-            for (colour, name) in [(p.muted, "muted"), (p.accent, "accent"), (p.danger, "danger")] {
+            for (colour, name) in [
+                (p.muted, "muted"),
+                (p.accent, "accent"),
+                (p.danger, "danger"),
+            ] {
                 for (surface, where_) in [(p.panel, "panel"), (p.selection, "selection")] {
                     let ratio = contrast(colour, surface);
                     assert!(
@@ -664,7 +663,8 @@ mod tests {
             for (i, &a) in distinct.iter().enumerate() {
                 for (j, &b) in distinct.iter().enumerate().skip(i + 1) {
                     assert_ne!(
-                        a, b,
+                        a,
+                        b,
                         "{}: {} and {} are both {a:#08x}",
                         theme.code(),
                         names[i],

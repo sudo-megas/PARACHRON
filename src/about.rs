@@ -185,7 +185,11 @@ mod tests {
         // The last section, so a truncated include is caught rather than a
         // merely non-empty one passing.
         assert!(text.contains("END OF TERMS AND CONDITIONS"));
-        assert!(text.len() > 30_000, "licence looks truncated: {}", text.len());
+        assert!(
+            text.len() > 30_000,
+            "licence looks truncated: {}",
+            text.len()
+        );
     }
 
     #[test]

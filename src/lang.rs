@@ -38,13 +38,13 @@ use std::rc::Rc;
 
 use slint::ComponentHandle;
 
+use crate::AppWindow;
 use crate::editor::Editors;
 use crate::export::Exports;
 use crate::strings::Lang;
 use crate::theme::{self, Themes};
 use crate::vault::{self, Vault};
 use crate::viewer::Viewer;
-use crate::AppWindow;
 
 /// Everything the switch has to reach, gathered once so the callback does not
 /// take seven arguments.

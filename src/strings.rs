@@ -406,10 +406,7 @@ fn table(key: Key) -> (&'static str, &'static str) {
         // `Denetleniyor` is what this said, and it means "being audited" — the
         // register of an inspection rather than of a program looking at a file.
         Checking => ("Checking…", "Kontrol ediliyor…"),
-        NoDocumentsYet => (
-            "No documents attached yet.",
-            "Henüz belge eklenmedi.",
-        ),
+        NoDocumentsYet => ("No documents attached yet.", "Henüz belge eklenmedi."),
         ErrNameRequired => ("A name is required.", "Bir ad gerekli."),
         ErrDateInvalid => ("Not a real date.", "Geçerli bir tarih değil."),
         ErrWarrantyBackwards => (
@@ -428,10 +425,7 @@ fn table(key: Key) -> (&'static str, &'static str) {
         SortName => ("A–Z", "A–Z"),
         SortPurchase => ("Date", "Tarih"),
         SortByName => ("Sort alphabetically", "Alfabetik sırala"),
-        SortByPurchase => (
-            "Sort by purchase date",
-            "Satın alma tarihine göre sırala",
-        ),
+        SortByPurchase => ("Sort by purchase date", "Satın alma tarihine göre sırala"),
 
         // Title case, unlike `ActionTheme`'s shouting THEME. Both are stored as
         // they appear and never passed through `to_uppercase`: Turkish maps `i`
@@ -453,10 +447,7 @@ fn table(key: Key) -> (&'static str, &'static str) {
         ThemeRosePine => ("Rosé Pine", "Rosé Pine"),
         ThemeRuby => ("Ruby Theme", "Ruby Teması"),
         ThemeUbuntuAubergine => ("Ubuntu Canonical Aubergine", "Ubuntu Canonical Aubergine"),
-        ThemePaperlike => (
-            "Paperlike gradient theme",
-            "Kâğıt görünümlü gradyan tema",
-        ),
+        ThemePaperlike => ("Paperlike gradient theme", "Kâğıt görünümlü gradyan tema"),
 
         MenuLanguage => ("Language", "Dil"),
         // Each language named in its own language, identically in both tables.
@@ -500,7 +491,10 @@ fn table(key: Key) -> (&'static str, &'static str) {
             "Ev dizini bulunamadı, kasa için yer yok",
         ),
         ErrUnreadable => ("Could not be read", "Okunamadı"),
-        ErrMissingToml => ("No product.toml in this folder", "Bu klasörde product.toml yok"),
+        ErrMissingToml => (
+            "No product.toml in this folder",
+            "Bu klasörde product.toml yok",
+        ),
         ErrMalformed => ("product.toml is not valid", "product.toml geçerli değil"),
         // Deliberately almost the same as `ErrDateInvalid`, and identical to it in
         // Turkish. They say the same thing to the user because the same thing is
@@ -516,10 +510,7 @@ fn table(key: Key) -> (&'static str, &'static str) {
             "Bu dosya ürün klasöründe yok",
         ),
         ErrNotAPdf => ("Not a readable PDF", "Okunabilir bir PDF değil"),
-        ErrEncrypted => (
-            "This PDF is password-protected",
-            "Bu PDF parola korumalı",
-        ),
+        ErrEncrypted => ("This PDF is password-protected", "Bu PDF parola korumalı"),
         ErrNoPages => ("This PDF has no pages", "Bu PDF hiç sayfa içermiyor"),
         ErrRenderFailed => ("This page could not be shown", "Bu sayfa görüntülenemedi"),
 
@@ -595,8 +586,14 @@ mod tests {
     #[test]
     fn every_key_has_both_languages() {
         for &key in Key::ALL {
-            assert!(!get(Lang::En, key).is_empty(), "empty EN string for {key:?}");
-            assert!(!get(Lang::Tr, key).is_empty(), "empty TR string for {key:?}");
+            assert!(
+                !get(Lang::En, key).is_empty(),
+                "empty EN string for {key:?}"
+            );
+            assert!(
+                !get(Lang::Tr, key).is_empty(),
+                "empty TR string for {key:?}"
+            );
         }
     }
 
@@ -695,7 +692,11 @@ mod tests {
     /// consecutive equal elements only, so `[A, B, A]` survived it untouched.
     #[test]
     fn a_duplicate_is_caught_wherever_it_sits() {
-        assert!(!has_duplicate(&[Key::AppTitle, Key::NavAbout, Key::ListEmpty]));
+        assert!(!has_duplicate(&[
+            Key::AppTitle,
+            Key::NavAbout,
+            Key::ListEmpty
+        ]));
         // Adjacent — caught by the old version too.
         assert!(has_duplicate(&[Key::AppTitle, Key::AppTitle]));
         // Separated, which is the one that used to get through.

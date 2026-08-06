@@ -241,7 +241,12 @@ fn to_date(value: &toml::value::Datetime, field: &'static str) -> Result<Date, D
 
 /// Parser messages span several lines; a list row only has space for the first.
 fn first_line(message: &str) -> String {
-    message.lines().next().unwrap_or_default().trim().to_string()
+    message
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 /// Render a date the way Parachron shows dates: `DD-MM-YYYY` (CORE §3).
@@ -299,8 +304,7 @@ pub fn parse_date(text: &str) -> Option<Date> {
         .collect();
 
     let padded = time::macros::format_description!("[day]-[month]-[year]");
-    let loose =
-        time::macros::format_description!("[day padding:none]-[month padding:none]-[year]");
+    let loose = time::macros::format_description!("[day padding:none]-[month padding:none]-[year]");
 
     let parsed = Date::parse(&normalised, &padded)
         .or_else(|_| Date::parse(&normalised, &loose))
@@ -558,7 +562,10 @@ mod tests {
 
         let purchase = to_date(&raw.purchase_date, "purchase_date").unwrap();
         assert_eq!(fmt_date(purchase), "14-03-2026");
-        assert_eq!(fmt_date(to_date(&raw.added, "added").unwrap()), "05-08-2026");
+        assert_eq!(
+            fmt_date(to_date(&raw.added, "added").unwrap()),
+            "05-08-2026"
+        );
     }
 
     #[test]
@@ -723,7 +730,9 @@ mod tests {
     #[test]
     fn a_date_that_is_not_a_date_is_refused_rather_than_guessed_at() {
         for text in [
-            "", "tomorrow", "2026-03-14", // ISO is the storage format, not the input one
+            "",
+            "tomorrow",
+            "2026-03-14", // ISO is the storage format, not the input one
             "31-02-2026", // no such day
             "14-13-2026", // no such month
             "14-03",
@@ -764,7 +773,11 @@ notes = "extended warranty claim ref #4471"
 last_checked = 2026-07-01
 "#;
         let mut manifest: Manifest = toml::from_str(original).unwrap();
-        assert_eq!(manifest.extra.len(), 2, "unknown keys are kept, not dropped");
+        assert_eq!(
+            manifest.extra.len(),
+            2,
+            "unknown keys are kept, not dropped"
+        );
 
         // Edit something the app does own, then write it back.
         manifest.pdfs.push("warranty.pdf".to_string());
@@ -778,14 +791,20 @@ last_checked = 2026-07-01
         );
         // A date among the unknown keys is still a date, not a stringified one.
         assert!(
-            reloaded.extra.get("last_checked").is_some_and(|v| v.is_datetime()),
+            reloaded
+                .extra
+                .get("last_checked")
+                .is_some_and(|v| v.is_datetime()),
             "an unknown date key must stay a TOML date: {:?}",
             reloaded.extra.get("last_checked")
         );
         // Known keys keep their documented order ahead of the extras.
         let name_at = rewritten.find("name =").unwrap();
         let notes_at = rewritten.find("notes =").unwrap();
-        assert!(name_at < notes_at, "extras must not shuffle above the schema");
+        assert!(
+            name_at < notes_at,
+            "extras must not shuffle above the schema"
+        );
     }
 
     #[test]
@@ -805,7 +824,10 @@ last_checked = 2026-07-01
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|name| name != "product.toml")
             .collect();
-        assert!(leftovers.is_empty(), "temporary files left behind: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "temporary files left behind: {leftovers:?}"
+        );
     }
 
     #[test]

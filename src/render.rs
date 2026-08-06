@@ -504,7 +504,10 @@ mod tests {
 
         // A4 is taller than it is wide, so height is the binding constraint.
         assert_eq!(raster.height, 800);
-        assert_eq!(raster.rgba.len(), raster.width as usize * raster.height as usize * 4);
+        assert_eq!(
+            raster.rgba.len(),
+            raster.width as usize * raster.height as usize * 4
+        );
     }
 
     #[test]
@@ -519,7 +522,10 @@ mod tests {
 
         let white = raster.rgba.chunks_exact(4).filter(|px| px[0] > 200).count();
         let total = raster.rgba.len() / 4;
-        assert!(white * 2 > total, "a mostly blank invoice should be mostly white");
+        assert!(
+            white * 2 > total,
+            "a mostly blank invoice should be mostly white"
+        );
 
         // The drawn rule and text have to leave *some* dark pixels behind,
         // otherwise we are rendering an empty page and would not know.
@@ -629,10 +635,16 @@ mod tests {
 
         cache.insert(key(0), big());
         cache.insert(key(1), big());
-        assert!(cache.get(&key(0)).is_some(), "touch page 0 so page 1 is oldest");
+        assert!(
+            cache.get(&key(0)).is_some(),
+            "touch page 0 so page 1 is oldest"
+        );
         cache.insert(key(2), big());
 
-        assert!(cache.get(&key(1)).is_none(), "page 1 was least recently used");
+        assert!(
+            cache.get(&key(1)).is_none(),
+            "page 1 was least recently used"
+        );
         assert!(cache.get(&key(0)).is_some());
         assert!(cache.get(&key(2)).is_some());
     }

@@ -12,10 +12,10 @@ use std::time::Duration;
 use slint::{ComponentHandle, Timer, TimerMode};
 use time::Date;
 
+use crate::AppWindow;
 use crate::data::{self, Entry, Product};
 use crate::strings::{self, Key, Lang};
 use crate::vault::{self, Vault};
-use crate::AppWindow;
 
 /// How long the "copied" confirmation stays up. The same 1.5 seconds the serial
 /// strip uses — sharing the number is what stops the two drifting apart.
@@ -77,7 +77,11 @@ pub fn countdown(days: i64, lang: Lang) -> String {
     if days == 0 {
         return strings::get(lang, Key::WarrantyExpired).to_string();
     }
-    let unit = if days == 1 { Key::DayUnit } else { Key::DaysUnit };
+    let unit = if days == 1 {
+        Key::DayUnit
+    } else {
+        Key::DaysUnit
+    };
     format!("{days} {}", strings::get(lang, unit))
 }
 
@@ -213,7 +217,10 @@ mod tests {
         let snapshot = Snapshot::of(Some(&entry), Lang::En, day(2026, Month::August, 5));
 
         assert!(snapshot.expired);
-        assert_eq!(snapshot.days_left, strings::get(Lang::En, Key::WarrantyExpired));
+        assert_eq!(
+            snapshot.days_left,
+            strings::get(Lang::En, Key::WarrantyExpired)
+        );
         assert!(!snapshot.days_left.contains('-'), "never a negative count");
     }
 
@@ -227,7 +234,10 @@ mod tests {
 
     #[test]
     fn nothing_selected_and_a_broken_folder_both_show_an_empty_column() {
-        assert_eq!(Snapshot::of(None, Lang::En, day(2026, Month::August, 5)), Snapshot::empty());
+        assert_eq!(
+            Snapshot::of(None, Lang::En, day(2026, Month::August, 5)),
+            Snapshot::empty()
+        );
 
         let broken = Entry::Broken {
             folder: "test-broken".to_string(),
@@ -243,9 +253,7 @@ mod tests {
         let entry = product(day(2026, Month::August, 10));
         let counts: Vec<String> = [3, 5, 9, 10]
             .into_iter()
-            .map(|d| {
-                Snapshot::of(Some(&entry), Lang::En, day(2026, Month::August, d)).days_left
-            })
+            .map(|d| Snapshot::of(Some(&entry), Lang::En, day(2026, Month::August, d)).days_left)
             .collect();
         assert_eq!(counts, ["7 days", "5 days", "1 day", "Expired"]);
     }

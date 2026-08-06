@@ -594,7 +594,10 @@ mod tests {
     #[test]
     fn a_date_that_is_not_a_date_stops_the_save_and_says_which_one() {
         let report = editor().check(&typed("Monitor", "31-02-2026", "14-03-2026", "14-03-2029"));
-        assert!(!report.purchase.is_empty(), "the 30th of February is not a day");
+        assert!(
+            !report.purchase.is_empty(),
+            "the 30th of February is not a day"
+        );
         assert!(report.start.is_empty(), "the other dates are fine");
         assert!(report.end.is_empty());
         assert!(report.draft.is_none());
@@ -644,7 +647,11 @@ mod tests {
             draft.extra.get("notes").and_then(|v| v.as_str()),
             Some("keep me"),
         );
-        assert_eq!(draft.pdfs, ["invoice.pdf"], "existing documents stay listed");
+        assert_eq!(
+            draft.pdfs,
+            ["invoice.pdf"],
+            "existing documents stay listed"
+        );
     }
 
     #[test]

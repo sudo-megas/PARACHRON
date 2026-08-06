@@ -12,9 +12,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::AppWindow;
 use crate::data::{self, DataError, Draft};
 use crate::render::{self, ViewError};
-use crate::AppWindow;
 
 /// File name for a picked file whose own name is unusable.
 const FILE_FALLBACK: &str = "document";
@@ -28,7 +28,10 @@ pub enum Outcome {
         invalidate: Vec<PathBuf>,
     },
     /// A picked file was not a PDF Parachron can show. Nothing was written.
-    Refused { file: String, reason: ViewError },
+    Refused {
+        file: String,
+        reason: ViewError,
+    },
     Failed(DataError),
 }
 
@@ -331,7 +334,10 @@ mod tests {
         assert!(matches!(outcome, Outcome::Done { .. }), "{outcome:?}");
 
         let home = products.join("monitor");
-        assert!(home.join("invoice.pdf").is_file(), "the first file survives");
+        assert!(
+            home.join("invoice.pdf").is_file(),
+            "the first file survives"
+        );
         assert!(home.join("warranty.pdf").is_file());
 
         let entries = data::scan(&products);

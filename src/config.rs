@@ -134,7 +134,10 @@ mod tests {
     #[test]
     fn the_written_config_holds_no_search_query() {
         let text = toml::to_string_pretty(&Config::default()).unwrap();
-        assert!(!text.contains("query"), "config.toml grew a query field:\n{text}");
+        assert!(
+            !text.contains("query"),
+            "config.toml grew a query field:\n{text}"
+        );
         // The five that are settings, so this test fails if one goes missing
         // rather than only if one is added.
         for key in ["lang", "theme", "sort", "window_width", "window_height"] {

@@ -856,8 +856,15 @@ mod tests {
         assert_eq!(vault.query, "iron");
 
         // And a rescan, which is what a save comes back through.
-        assert_eq!(vault.plan_rescan(None).rows.len(), 0, "the scratch root is empty");
-        assert_eq!(vault.query, "iron", "a rescan is not a reason to clear it either");
+        assert_eq!(
+            vault.plan_rescan(None).rows.len(),
+            0,
+            "the scratch root is empty"
+        );
+        assert_eq!(
+            vault.query, "iron",
+            "a rescan is not a reason to clear it either"
+        );
     }
 
     /// A query nothing matches empties the list rather than falling back to
@@ -893,21 +900,30 @@ mod tests {
     fn insertion_order_is_the_default_and_reads_the_added_date() {
         let mut entries = vault();
         sort_entries(&mut entries, SortMode::Added);
-        assert_eq!(folders(&entries), ["keyboard", "monitor", "drive", "test-broken"]);
+        assert_eq!(
+            folders(&entries),
+            ["keyboard", "monitor", "drive", "test-broken"]
+        );
     }
 
     #[test]
     fn alphabetical_order_ignores_case() {
         let mut entries = vault();
         sort_entries(&mut entries, SortMode::Name);
-        assert_eq!(folders(&entries), ["keyboard", "drive", "monitor", "test-broken"]);
+        assert_eq!(
+            folders(&entries),
+            ["keyboard", "drive", "monitor", "test-broken"]
+        );
     }
 
     #[test]
     fn purchase_order_puts_the_oldest_first() {
         let mut entries = vault();
         sort_entries(&mut entries, SortMode::Purchase);
-        assert_eq!(folders(&entries), ["drive", "monitor", "keyboard", "test-broken"]);
+        assert_eq!(
+            folders(&entries),
+            ["drive", "monitor", "keyboard", "test-broken"]
+        );
     }
 
     #[test]
@@ -970,7 +986,10 @@ mod tests {
         let item = row(&broken("test-broken"), Lang::En);
         assert!(item.broken);
         assert!(item.label.contains("test-broken"));
-        assert!(!item.detail.is_empty(), "the reason is what makes it fixable");
+        assert!(
+            !item.detail.is_empty(),
+            "the reason is what makes it fixable"
+        );
     }
 
     #[test]
