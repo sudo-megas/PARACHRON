@@ -69,8 +69,13 @@ jobs:
       - name: Q3 — does mupdf-sys build under MSVC
         shell: pwsh
         run: |
+          # Not `--verbose`. The first run of this spike used it, and the log
+          # became one `Running rustc …` line per crate at roughly a kilobyte
+          # each — which buried the two compiler errors that were the actual
+          # answer under forty kilobytes of successful invocations. A spike's
+          # output has to be readable or it has not answered anything.
           $start = Get-Date
-          cargo build --release --verbose
+          cargo build --release
           $elapsed = (Get-Date) - $start
           echo "SPIKE ANSWER Q3: mupdf-sys built under MSVC in $($elapsed.TotalSeconds) seconds."
 

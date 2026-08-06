@@ -277,13 +277,52 @@ fn ensure_open(open: &mut Option<OpenDocument>, path: &Path) -> Result<usize, Vi
     Ok(pages)
 }
 
+/// Hand a path to MuPDF, which spells "path" differently on each platform.
+///
+/// Found by Chron11's Windows spike, which is the only thing that could have
+/// found it: **this crate did not compile for Windows at all**, and every test,
+/// clippy run and Linux build was green throughout. `mupdf`'s `FilePath` is
+/// `[u8]` on Unix and `str` on Windows, and its `impl AsRef<FilePath> for Path`
+/// carries `#[cfg(any(unix, target_os = "wasi"))]`. So `Document::open(path)`
+/// with a `&Path` resolves on Linux and has no applicable impl on Windows —
+/// two errors, both here, on a target with no local machine to catch them.
+///
+/// The split is deliberate rather than a lowest common denominator, because the
+/// two platforms genuinely disagree about what a path *is*:
+///
+/// On Unix a path is bytes and need not be UTF-8. CORE §3 takes that seriously
+/// enough to refuse a non-UTF-8 vault path when it is *chosen* rather than
+/// lossily convert it, and the vault is full of file names that came off a disk
+/// rather than out of a text box. Routing Linux through `to_str()` would make a
+/// document with an undecodable name unopenable when it opens today — a
+/// regression bought to satisfy a compiler on another platform.
+///
+/// On Windows MuPDF's own API requires UTF-8, so a path that will not convert
+/// cannot be passed at all. It is reported as unreadable, which is what it is
+/// from this program's side. In practice this needs an unpaired surrogate in a
+/// filename; the point is that it fails with a sentence rather than silently.
+#[cfg(not(windows))]
+fn for_mupdf(path: &Path) -> Result<&Path, ViewError> {
+    Ok(path)
+}
+
+#[cfg(windows)]
+fn for_mupdf(path: &Path) -> Result<&str, ViewError> {
+    path.to_str().ok_or_else(|| {
+        ViewError::Unreadable(format!(
+            "this file's name cannot be read as UTF-8, which MuPDF requires on Windows: {}",
+            path.display()
+        ))
+    })
+}
+
 /// Open a document, mapping every way it can fail onto [`ViewError`].
 pub fn open_document(path: &Path) -> Result<Document, ViewError> {
     if !path.is_file() {
         return Err(ViewError::Missing);
     }
 
-    let document = Document::open(path).map_err(|e| match e {
+    let document = Document::open(for_mupdf(path)?).map_err(|e| match e {
         mupdf::Error::Io(io) => ViewError::Unreadable(io.to_string()),
         other => ViewError::NotAPdf(other.to_string()),
     })?;
@@ -325,7 +364,7 @@ pub fn open_pdf(path: &Path) -> Result<PdfDocument, ViewError> {
         return Err(ViewError::Missing);
     }
 
-    let document = PdfDocument::open(path).map_err(|e| match e {
+    let document = PdfDocument::open(for_mupdf(path)?).map_err(|e| match e {
         mupdf::Error::Io(io) => ViewError::Unreadable(io.to_string()),
         other => ViewError::NotAPdf(other.to_string()),
     })?;

@@ -22,6 +22,8 @@ Parachron keeps every product's invoices, warranty PDFs, serial number and purch
 
 Everything lives in plain folders on your own disk — one folder per product, human-readable, easy to back up. No account, no cloud, no telemetry.
 
+![The Parachron window: the product list on the left, an invoice open in the middle, and the warranty countdown on the right](docs/screenshots/main.png)
+
 ---
 
 ## Dependencies
@@ -142,6 +144,8 @@ The right column holds the purchase link, the purchase date, the warranty start 
 ### Themes
 
 **THEME** offers eleven built-in colour schemes, light and dark, including Catppuccin, Rosé Pine and a paper-like light theme. The choice applies instantly and is remembered.
+
+![The theme picker, listing all eleven colour schemes with Default Dark selected](docs/screenshots/theme.png)
 
 ### About
 

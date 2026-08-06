@@ -92,35 +92,103 @@ depends=(
 
 makedepends=('cargo' 'clang')
 
+# **`!lto`, and without it this package does not link at all.**
+#
+# Found by running this file rather than by reading it. Arch's stock
+# `/etc/makepkg.conf` ships `OPTIONS=(… lto)` with `LTOFLAGS="-flto=auto"`, so
+# makepkg appends GCC's link-time-optimisation flag to `CFLAGS`, `CXXFLAGS` and
+# `LDFLAGS` for every package built on the machine. `mupdf-sys` vendors MuPDF's
+# C source and compiles it with `cc`, which picks those flags up — so the static
+# archive it produces holds **GCC LTO bytecode instead of native objects**.
+#
+# Rust then links with `rust-lld`, which cannot read GCC's LTO intermediate
+# representation. It does not say so. It reports every single MuPDF symbol as
+# undefined:
+#
+#     rust-lld: error: undefined symbol: fz_clone_context
+#     rust-lld: error: undefined symbol: pdf_default_write_options
+#     rust-lld: error: undefined symbol: mupdf_pdf_write_document
+#
+# which reads like a missing library and is actually an unreadable one. The
+# build succeeds outside makepkg and fails inside it, on the same machine, from
+# the same source — the only difference being the flags makepkg exports.
+#
+# This is Arch's default rather than this machine's preference, so it would have
+# broken the `makepkg -si` route the README documents, *and* the `.pkg.tar.zst`
+# release asset built in the archlinux container, on their first real run.
+#
+# `!lto` turns off LTO for the *C* half only. `[profile.release]` in
+# `Cargo.toml` still applies Rust's own LTO across the Rust half, which is where
+# Slint's generated code lives and where it was worth having.
+#
+# `!debug` because `[profile.release]` already sets `strip = true`: there are no
+# debug symbols left for makepkg to split out, and asking it to build a
+# `parachron-debug` package from a stripped binary produces an empty package and
+# a `-g` flag nothing reads.
+options=(!lto !debug)
+
 # Nothing is downloaded. The build reads the checkout this file lives in; see
 # the header for why.
 source=()
 sha256sums=()
 
-_srcdir() {
-  # `$startdir` is `packaging/`; the crate root is its parent. Resolved through
-  # a function so the path appears once rather than in three build stages.
-  printf '%s' "$(realpath "$startdir/..")"
+prepare() {
+  # Copy the checkout into makepkg's own `$srcdir` instead of building where it
+  # sits. The first draft of this file built in place, and that is a bug rather
+  # than a shortcut — it was found by running this file, which is the only way
+  # it could have been found:
+  #
+  #   makepkg creates `pkg/` and `src/` inside `$startdir`, which here is
+  #   `packaging/`, and it creates `pkg/` with mode 0111 — traversable but not
+  #   readable. Cargo's build-script fingerprint step walks the entire crate
+  #   directory looking for the most recently modified file, reaches
+  #   `packaging/pkg`, and stops with a bare
+  #
+  #       Caused by: Permission denied (os error 13)
+  #
+  #   naming a directory the packager never created and cannot read. The build
+  #   fails before a single crate is compiled, and nothing in the message
+  #   suggests that the packaging directory is inside the thing being packaged.
+  #
+  # Copying out also means a `makepkg` run does not leave a release profile in
+  # the user's own `target/`, which is ordinary hygiene rather than a fix.
+  #
+  # The exclusions are what makes this cheap: `target/` is the build output and
+  # `.git` is the history, and copying either would move gigabytes to build
+  # megabytes.
+  rm -rf "${srcdir:?}/${pkgname}"
+  mkdir -p "$srcdir/$pkgname"
+  tar -c -C "$startdir/.." \
+      --exclude=./target \
+      --exclude=./.git \
+      --exclude=./packaging/pkg \
+      --exclude=./packaging/src \
+      . | tar -x -C "$srcdir/$pkgname"
 }
 
 build() {
-  cd "$(_srcdir)"
+  cd "$srcdir/$pkgname"
 
-  # Arch packaging convention: pin the toolchain and keep Cargo's output inside
-  # the checkout rather than wherever a user's environment points it.
+  # Arch packaging convention: pin the toolchain rather than inheriting whatever
+  # a user's environment points at.
   export RUSTUP_TOOLCHAIN=stable
-  export CARGO_TARGET_DIR="$(_srcdir)/target"
+  export CARGO_TARGET_DIR="$srcdir/$pkgname/target"
 
   # `--locked` builds exactly what `Cargo.lock` records. A package built from a
   # silently-updated dependency graph is not the package that was tested.
+  #
+  # This compiles the vendored MuPDF from C source every time, because `$srcdir`
+  # starts empty. That is the cost of building from a pristine tree rather than
+  # from whatever happens to be cached, and for a package it is the right way
+  # round.
   cargo build --release --locked
 }
 
 check() {
-  cd "$(_srcdir)"
+  cd "$srcdir/$pkgname"
 
   export RUSTUP_TOOLCHAIN=stable
-  export CARGO_TARGET_DIR="$(_srcdir)/target"
+  export CARGO_TARGET_DIR="$srcdir/$pkgname/target"
 
   # Dev profile, deliberately, and `--release` here would be a mistake rather
   # than an optimisation. `build.rs` emits Slint's debug info only when Cargo
@@ -132,7 +200,7 @@ check() {
 }
 
 package() {
-  cd "$(_srcdir)"
+  cd "$srcdir/$pkgname"
 
   install -Dm755 "target/release/${pkgname}" "${pkgdir}/usr/bin/${pkgname}"
 
