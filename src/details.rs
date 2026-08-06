@@ -22,7 +22,7 @@ use crate::AppWindow;
 const COPIED_LINGER: Duration = Duration::from_millis(1500);
 
 /// Everything column 3 shows, already formatted.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Snapshot {
     pub filled: bool,
     pub link: String,
@@ -31,6 +31,7 @@ pub struct Snapshot {
     pub warranty_end: String,
     pub days_left: String,
     pub expired: bool,
+    pub progress: f32,
 }
 
 impl Snapshot {
@@ -52,6 +53,14 @@ impl Snapshot {
         let remaining = data::days_left(product.warranty_end, today);
         let expired = remaining == 0;
 
+        // Same subtraction-then-`.whole_days()` pattern `data::days_left` already
+        // uses; `.max(1)` keeps a same-day warranty from dividing by zero, and the
+        // `.clamp` keeps `today` outside `[start, end]` from producing a fraction
+        // outside `[0.0, 1.0]`.
+        let total = (product.warranty_end - product.warranty_start).whole_days().max(1);
+        let gone = (today - product.warranty_start).whole_days().clamp(0, total);
+        let progress = gone as f32 / total as f32;
+
         Self {
             filled: true,
             link: product.link.clone(),
@@ -60,6 +69,7 @@ impl Snapshot {
             warranty_end: data::fmt_date(product.warranty_end),
             days_left: countdown(remaining, lang),
             expired,
+            progress,
         }
     }
 }
@@ -98,6 +108,7 @@ pub fn show(app: &AppWindow, snapshot: &Snapshot) {
     app.set_details_warranty_end(snapshot.warranty_end.as_str().into());
     app.set_details_days_left(snapshot.days_left.as_str().into());
     app.set_details_expired(snapshot.expired);
+    app.set_details_progress(snapshot.progress);
 }
 
 /// Kept alive for the life of the window.
@@ -159,13 +170,17 @@ mod tests {
     }
 
     fn product(warranty_end: Date) -> Entry {
+        product_with_start(day(2026, Month::March, 14), warranty_end)
+    }
+
+    fn product_with_start(warranty_start: Date, warranty_end: Date) -> Entry {
         Entry::Ok(Product {
             folder: "monitor".to_string(),
             name: "QD-OLED Monitor".to_string(),
             serial: "ABC123XYZ".to_string(),
             link: "https://store.example/p".to_string(),
-            purchase_date: day(2026, Month::March, 14),
-            warranty_start: day(2026, Month::March, 14),
+            purchase_date: warranty_start,
+            warranty_start,
             warranty_end,
             pdfs: Vec::new(),
             added: day(2026, Month::August, 5),
@@ -236,6 +251,43 @@ mod tests {
         let snapshot = Snapshot::of(Some(&broken), Lang::En, day(2026, Month::August, 5));
         assert!(!snapshot.filled, "column 2 already explains what is wrong");
         assert!(snapshot.days_left.is_empty());
+    }
+
+    #[test]
+    fn a_warranty_that_just_started_has_a_progress_near_zero() {
+        let start = day(2026, Month::August, 5);
+        let entry = product_with_start(start, day(2029, Month::August, 5));
+        let snapshot = Snapshot::of(Some(&entry), Lang::En, start);
+        assert!(snapshot.progress.abs() < 0.01, "expected ~0.0, got {}", snapshot.progress);
+    }
+
+    #[test]
+    fn a_warranty_at_its_midpoint_has_a_progress_near_half() {
+        let start = day(2026, Month::January, 1);
+        let end = day(2026, Month::December, 31);
+        let entry = product_with_start(start, end);
+        let today = day(2026, Month::July, 2); // roughly halfway through the year
+        let snapshot = Snapshot::of(Some(&entry), Lang::En, today);
+        assert!(
+            (snapshot.progress - 0.5).abs() < 0.02,
+            "expected ~0.5, got {}",
+            snapshot.progress
+        );
+    }
+
+    #[test]
+    fn an_expired_warranty_has_a_progress_clamped_to_one() {
+        // A sane start-before-end span, so this exercises the clamp on `gone`
+        // (today far past `warranty_end`) rather than the `total.max(1)` guard
+        // that a start-after-end fixture would hit instead.
+        let entry = product_with_start(day(2024, Month::January, 1), day(2025, Month::January, 1));
+        let snapshot = Snapshot::of(Some(&entry), Lang::En, day(2026, Month::August, 5));
+        assert!(snapshot.expired);
+        assert!(
+            (snapshot.progress - 1.0).abs() < 0.001,
+            "expected 1.0, got {}",
+            snapshot.progress
+        );
     }
 
     #[test]

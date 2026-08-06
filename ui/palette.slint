@@ -21,9 +21,12 @@
 export global Palette {
     // The canvas: the window behind everything, and the pane a page sits in.
     in property <color> bg: #1b1b1d;
-    // Panels that sit above the canvas — the title bar, the list, column 3.
-    // Lighter than `bg` in every theme, light ones included: it is what makes
-    // the three-column structure legible without borders doing all the work.
+    // Panels that sit above the canvas — the title bar, and now every
+    // column's masthead band (the sort row and search bar in column 1, the
+    // tab strip in column 2, the action row in column 3). Lighter than `bg`
+    // in every theme, light ones included: a masthead reads as raised
+    // because it's a step up this ladder from the canvas its column's body
+    // sits on, not because a border says so.
     in property <color> panel: #232326;
     // Hovered. One step further from the panel than at rest, which on a dark
     // theme means lighter and on a light theme means darker — "more contrast",

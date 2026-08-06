@@ -77,32 +77,36 @@ Window: resizable, minimum **1000×700**. Three fixed columns — **25 / 50 / 25
 │ [icon] Document ▾ | Add Document        PARACHRON          – □ ✕  │
 ├───────────────┬───────────────────────────────┬───────────────────┤
 │ Column 1(25%) │ Column 2 (50%)                │ Column 3 (25%)    │
-│ [A–Z] [Date]  │  [Invoice] [Garanti] [.pdf]   │  [THEME] [EXPORT] │
+│ [A–Z] [Date]  │  [Invoice] [Garanti] [.pdf]   │  [THEME] [EXPORT] │  ← masthead (panel)
 │ ┌───────────┐ │  ┌─────────────────────────┐  │                   │
 │ │ Search… ✕ │ │  │                         │  │  Link:            │
 │ └───────────┘ │  │                         │  │  store.example/p  │
-│ Product list  │  │   PDF preview (MuPDF)   │  │                   │
-│ (insertion    │  │                         │  │                   │
-│  order,       │  │                         │  │                   │
-│  sortable)    │  │                         │  │                   │
-│               │  │   full height,          │  │  Purchase date    │
-│               │  │   portrait-friendly     │  │  14-03-2026       │
-│               │  │                         │  │                   │
-│               │  │                         │  │  Warranty start   │
+├ ─ ─ ─ ─ ─ ─ ─ ┤  │   PDF preview (MuPDF)   │  ├ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┤  ← canvas body (bg)
+│ Product list  │  │                         │  │  Purchase date    │
+│ (hover, sel.  │  │                         │  │  14-03-2026       │
+│  accent bar,  │  │   full height,          │  │                   │
+│  ⚠/! swatch)  │  │   portrait-friendly     │  │  Warranty start   │
 │               │  └─────────────────────────┘  │  14-03-2026       │
-│               │  ‹ ›  2 / 12      Zoom ──●──   │                   │
-│───────────────│  Serial number: ABC123XYZ  ⧉  │                   │
-│ [ⓘ About]     │                               │  **658 days**     │
+│               │  ‹ ›  2 / 12      Zoom ──●──   │  Warranty end     │
+│               │  Serial number: ABC123XYZ  ⧉  │  14-03-2026       │
+│               │                               │ ┌─────────────────┐
+│               │                               │ │ Warranty left   │
+│               │                               │ │ 658 days        │
+│               │                               │ │ ▬▬▬▬▬▬▬▬░░░░░░  │
+│───────────────│                               │ └─────────────────┘
+│ [ⓘ About]     │                               │                   │
 └───────────────┴───────────────────────────────┴───────────────────┘
 ```
 
-Column 1 — product list. Default order: as added (`added` field). Two sort toggles: alphabetical (by `name`) and purchase date (oldest first, newest at bottom). Under the toggles and directly above the entries, a **search bar**: full column width, fixed height, matching product **name and serial number** as you type and narrowing the list to what matches. Bottom strip: a fixed **About** entry (JADEITE-style sidebar footer) that opens the About view.
+Every column follows the same two-tone structure column 2 established first (Chron2's tab strip): a `Palette.panel` masthead band at the top — the sort/search row in column 1, the tab strip in column 2, the THEME/EXPORT row in column 3 — over a `Palette.bg` canvas body underneath. The seam between columns is a 1px hairline plus a content gutter (8px for column 2, 4px for column 3 — narrower there by width arithmetic against the 1000×700 floor, not by eye), so a column reads as its own domain rather than being separated from its neighbor by the hairline alone (Chron10).
+
+Column 1 — product list. Default order: as added (`added` field). Two sort toggles: alphabetical (by `name`) and purchase date (oldest first, newest at bottom). Under the toggles and directly above the entries, a **search bar**: full column width, fixed height, matching product **name and serial number** as you type and narrowing the list to what matches. Bottom strip: a fixed **About** entry (JADEITE-style sidebar footer) that opens the About view. Each row shows a hover state, a left accent bar on the selected row, and — for a broken folder or a product missing a listed file — a small fixed-position colour swatch beside its name, in addition to the row's existing `⚠`/`!` text prefix (Chron10; the prefix is unchanged, the swatch is a second, non-textual landmark bound to the same underlying state).
 
 The search bar was added to this layout in Chron8; the original wireframe had column 1 as a list and nothing else, and the sort toggles were never drawn into it either. Both are in the sketch above now. Three rules it follows, so that later work does not have to rediscover them. Matching is **folded** — accent- and case-insensitive in both directions, so `sarj` finds `Şarj Cihazı` and Turkish's dotless `ı` cannot make a product unfindable by its own name. A broken folder is matched on its **folder name**, because that is the only text it has and hiding the entry somebody is looking for is the one thing the list has never done (§3: never crash, never hide). And the query is **session state, not settings** — it is never written to `config.toml`, because a sort order that survives a restart reorders and a filter that survives one *hides*, and an app that opens showing three of your eleven products has lost them as far as you can tell.
 
 Column 2 — document viewer. Workspace-style tabs switch between the selected product's PDFs (`pdfs` order); each tab is labelled with the file-name stem, so `invoice.pdf` reads `Invoice`. The preview takes the full remaining height and shows **one page at a time, fitted whole** inside the pane. Under it a control row carries `‹` / `›`, a `2 / 12` page counter, and a **zoom slider** — zoom is a multiplier of the fit scale (`1×`–`4×`), so `1×` always means the whole page is visible whatever the window size; above `1×` the page pans. Page and zoom reset whenever the tab or product changes. Below that, a fixed **44px** serial-number strip: click it to copy the serial to the clipboard with a brief "copied" confirmation, the same gesture the purchase link uses in column 3.
 
-Column 3 — details + actions. Top: THEME and EXPORT buttons. Then purchase link (click = **copy to clipboard** with a brief "copied" confirmation — never opens a browser), purchase date, warranty start, warranty end, and the warranty-left counter in days — bold, largest text in the column, its visual anchor. A warranty that has run out reads as expired rather than as a negative number, in the error colour.
+Column 3 — details + actions. Top: THEME and EXPORT buttons, in the masthead band — EXPORT is the affirmative action of the pair and is styled as this app's one `primary` button (THEME merely opens a picker). Then purchase link (click = **copy to clipboard** with a brief "copied" confirmation — never opens a browser; wraps to two lines before eliding, like the three date rows below it), purchase date, warranty start, warranty end, and — anchored in its own card at the foot of the column — the warranty-left counter in days, bold, largest text in the column, with a thin proportional gauge underneath showing how much of the warranty span has elapsed (Chron10). A warranty that has run out reads as expired rather than as a negative number, in the error colour, and the gauge fills fully in the same colour.
 
 Warranty end was added to this list in Chron4; the original wireframe above omitted it. Hiding the date the countdown is counting toward leaves anyone checking the number with nothing to check it against.
 
@@ -220,11 +224,13 @@ One line of planned scope per milestone. Each Chron file is written in detail on
 | Chron7 | Export: summary page generation + PDF merge |
 | Chron8 | About view + column-1 search bar + polish: error states, min-size behavior, edge cases. The search bar was asked for after Chron7 closed and folded in here rather than becoming a milestone of its own — it lands in column 1, which is where this milestone's other layout work already is. It does mean Chron7's line about being the last milestone to add a feature stopped being true one milestone later; §9 is the map, and the map changed |
 | Chron9 | Packaging & CI: PKGBUILD, .deb, Windows .exe, GitHub Actions, AUR. `README.md` was written per `usereadme.md` (§8 rule 3) *before* this milestone rather than after it — the page is what a visitor lands on, and having it ready means Chron9 only has to cut a tag rather than write a page as well. The cost is stated on the page itself: the download links point at a Releases page that is empty until the first tag, and build-from-source is what works until then |
+| Chron10 | Visual polish, added after the original roadmap: a masthead-over-canvas structure for columns 1 and 3 (matching column 2's existing tab strip) with a real seam gutter, hover/selection/status landmarks for column-1 rows, a column-3 anchor card with a warranty-elapsed gauge replacing two dead flex spacers, and pressed-state plus a real `primary` treatment across all five hand-rolled button recipes. Also the icon-identity fix: the app-id/desktop-entry/generate.sh infrastructure a prior worktree had built but never merged, ported onto master alongside corrected artwork |
 
 ## 10. Open items
 
 - ~~About subtitle and footer motto: wording to be chosen~~ — settled in Chron8. Subtitle: **"Paper Vault"** / **"Belge Kasası"**. Footer motto: **"Built with Reason and Passion"** / **"Akıl ve Tutkuyla"** — JADEITE's own motto, carried across as a maker's signature rather than a second description of the app. Both are keys in the string table like everything else, and both are on screen.
 - ~~Serial-number strip exact size ratio~~ — settled in Chron2: a fixed **44px**, not a proportion. It holds one line of text, and a proportional strip would grow absurd on a tall window.
 - ~~Theme palettes: exact hex sets per theme~~ — pinned in Chron5; see §5 for where they live and which are upstream. The prediction that this would be a contained change was *nearly* right: every colour did live behind the `Palette` global except the sheet backdrop, which Chron3 had added as a literal, and two colours that were in the global but never reached the screen — the page's edge, drawn as a border the page image painted over, and the zoom slider, which came from `std-widgets` and so read the Slint style rather than the palette.
-- Remaining unthemed: the `std-widgets` `ListView` scrollbar in column 1, which appears only when the product list overflows (about seventeen products). Replacing it means replacing a virtualizing list, which is a different job from replacing a slider. Chron8 leaves this open on purpose rather than closing it by silence: replacing the list means betting that no vault is large enough for virtualization to matter, which is a bet about somebody else's data. See Chron8's technical notes for what each answer costs.
+- Remaining unthemed: the `std-widgets` `ListView` scrollbar in column 1, which appears only when the product list overflows (about seventeen products). Replacing it means replacing a virtualizing list, which is a different job from replacing a slider. Chron8 leaves this open on purpose rather than closing it by silence: replacing the list means betting that no vault is large enough for virtualization to matter, which is a bet about somebody else's data. See Chron8's technical notes for what each answer costs. Chron10 made this more visible without changing it: the scrollbar now sits against column 1's `bg` canvas rather than a flush `panel`, which surfaces the same unthemed element more than before.
+- A derived/mixed tone for column 3's anchor card (`Palette.panel.mix(Palette.raised, ...)` or similar), considered in Chron10 and deliberately not shipped — a few-percent tone delta is likely invisible on at least four of the eleven palettes (their `panel`/`raised` values sit close together), and picking one by eye mid-implementation was judged the wrong way to decide it. Plain `Palette.panel` on the new `bg` canvas was verified sufficient across the four themes Chron10 screenshotted; if a future milestone finds a palette where the card doesn't read as separated, this is where that work starts.
 - ~~Release date in the About view (§4)~~ — settled in Chron8: `build.rs` emits `PARACHRON_BUILD_DATE` as ISO at compile time and the pane renders it through the same `fmt_date` every other date uses, so a source build honestly reports the day it was built. An existing `PARACHRON_BUILD_DATE` in the environment wins, which is the seam Chron9 uses to stamp a tagged release with its tag's date instead of a runner's clock.

@@ -21,6 +21,7 @@ import { Strings } from "strings.slint";
 export component DetailRow inherits VerticalLayout {
     in property <string> label;
     in property <string> value;
+    in property <bool> wrap: false;
 
     spacing: 4px;
 
@@ -35,7 +36,8 @@ export component DetailRow inherits VerticalLayout {
         text: root.value;
         color: Palette.text;
         font-size: 14px;
-        overflow: elide;
+        wrap: root.wrap ? word-wrap : no-wrap;
+        overflow: root.wrap ? clip : elide;
     }
 }
 
@@ -168,10 +170,14 @@ export component Btn inherits Rectangle {
     height: 28px;
     border-radius: 5px;
     border-width: 1px;
-    border-color: root.enabled && touch.has-hover
+    border-color: touch.pressed || (root.enabled && touch.has-hover)
         ? Palette.accent
-        : root.primary ? Palette.accent : Palette.border;
-    background: root.enabled && touch.has-hover ? Palette.raised : Palette.panel;
+        : (root.enabled && root.primary ? Palette.accent : Palette.border);
+    background: touch.pressed
+        ? Palette.selection
+        : (root.enabled && touch.has-hover
+            ? Palette.raised
+            : (root.enabled && root.primary ? Palette.selection : Palette.panel));
 
     accessible-role: button;
     accessible-label: root.label;
@@ -210,8 +216,8 @@ export component GlyphBtn inherits Rectangle {
     height: 28px;
     border-radius: 5px;
     border-width: 1px;
-    border-color: root.enabled && touch.has-hover ? Palette.accent : Palette.border;
-    background: root.enabled && touch.has-hover ? Palette.raised : Palette.panel;
+    border-color: touch.pressed || (root.enabled && touch.has-hover) ? Palette.accent : Palette.border;
+    background: touch.pressed ? Palette.selection : (root.enabled && touch.has-hover ? Palette.raised : Palette.panel);
 
     // The glyph carries no meaning to a screen reader; callers supply the
     // label, which needs a role to attach to.

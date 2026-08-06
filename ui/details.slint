@@ -25,6 +25,10 @@ export component Details inherits Rectangle {
     /// Already formatted: "658 days", "1 day", or the expired message.
     in property <string> days-left;
     in property <bool> expired;
+    /// Fraction of the warranty elapsed, `0.0` at purchase to `1.0` at expiry —
+    /// a separate numeric field alongside the pre-formatted `days-left` string,
+    /// since the gauge needs a fraction and the label needs finished text.
+    in property <float> progress;
     in property <bool> link-copied;
 
     /// Empty when there is nothing to say. Already composed in Rust — running,
@@ -36,162 +40,220 @@ export component Details inherits Rectangle {
     callback open-theme();
     callback export();
 
-    background: Palette.panel;
+    background: Palette.bg;
 
     VerticalLayout {
-        padding: 16px;
-        spacing: 16px;
+        spacing: 0px;
+        padding: 0px;
 
-        // Both live as of Chron7.
-        VerticalLayout {
-            spacing: 6px;
+        masthead := Rectangle {
+            background: Palette.panel;
 
-            HorizontalLayout {
-                spacing: 8px;
-                theme-button := Btn {
-                    label: Strings.action-theme;
-                    clicked => {
-                        root.open-theme();
-                    }
-                }
-                export-button := Btn {
-                    label: Strings.action-export;
-                    // `filled` already means "a product is selected and its
-                    // manifest parsed", which is exactly when there is something
-                    // to export — so this needs no flag of its own. A folder that
-                    // will not parse has no product, and neither does an empty
-                    // selection.
-                    enabled: root.filled;
-                    clicked => {
-                        root.export();
-                    }
-                }
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
-            }
-
-            // Fixed height whether or not there is anything to say, so the column
-            // below it never reflows when an export starts or finishes. Column 3
-            // has no room to spare and no scroll container (Chron4).
-            Rectangle {
-                height: 15px;
-                Text {
-                    text: root.export-status;
-                    color: root.export-failed ? Palette.danger : Palette.muted;
-                    font-size: 11px;
-                    vertical-alignment: center;
-                    width: parent.width;
-                    height: parent.height;
-                    overflow: elide;
-                }
-            }
-        }
-
-        if !root.filled: Text {
-            text: Strings.details-placeholder;
-            color: Palette.muted;
-            font-size: 13px;
-            wrap: word-wrap;
-        }
-
-        if root.filled: VerticalLayout {
-            spacing: 16px;
-
-            // ── Purchase link ────────────────────────────────────────────
-            //
-            // CORE §4: Parachron never opens an external address. The link is
-            // text you copy, with the same confirmation the serial strip uses.
             VerticalLayout {
-                spacing: 4px;
+                padding: 16px;
+                spacing: 6px;
 
-                Text {
-                    text: Strings.field-link;
-                    color: Palette.muted;
-                    font-size: 12px;
-                    letter-spacing: 1px;
+                // Both live as of Chron7.
+                HorizontalLayout {
+                    spacing: 8px;
+                    theme-button := Btn {
+                        label: Strings.action-theme;
+                        clicked => {
+                            root.open-theme();
+                        }
+                    }
+                    export-button := Btn {
+                        label: Strings.action-export;
+                        primary: true;
+                        // `filled` already means "a product is selected and its
+                        // manifest parsed", which is exactly when there is something
+                        // to export — so this needs no flag of its own. A folder that
+                        // will not parse has no product, and neither does an empty
+                        // selection.
+                        enabled: root.filled;
+                        clicked => {
+                            root.export();
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
                 }
 
-                link-row := Rectangle {
-                    height: 26px;
+                // Fixed height whether or not there is anything to say, so the column
+                // below it never reflows when an export starts or finishes. Column 3
+                // has no room to spare and no scroll container (Chron4).
+                Rectangle {
+                    height: 15px;
+                    Text {
+                        text: root.export-status;
+                        color: root.export-failed ? Palette.danger : Palette.muted;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        width: parent.width;
+                        height: parent.height;
+                        overflow: elide;
+                    }
+                }
+            }
 
-                    HorizontalLayout {
+            // Bottom hairline, same device used at every other seam in this app.
+            Rectangle {
+                x: 0;
+                y: parent.height - 1px;
+                width: parent.width;
+                height: 1px;
+                background: Palette.border;
+            }
+        }
+
+        body := VerticalLayout {
+            padding: 16px;
+            spacing: 16px;
+            vertical-stretch: 1;
+
+            if !root.filled: VerticalLayout {
+                Text {
+                    text: Strings.details-placeholder;
+                    color: Palette.muted;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+            }
+
+            if root.filled: VerticalLayout {
+                spacing: 16px;
+
+                // ── Purchase link ────────────────────────────────────────
+                //
+                // CORE §4: Parachron never opens an external address. The link
+                // is text you copy, with the same confirmation the serial
+                // strip uses.
+                VerticalLayout {
+                    spacing: 4px;
+
+                    Text {
+                        text: Strings.field-link;
+                        color: Palette.muted;
+                        font-size: 12px;
+                        letter-spacing: 1px;
+                    }
+
+                    link-row := Rectangle {
+                        height: 40px;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            Text {
+                                text: root.link;
+                                color: Palette.text;
+                                font-size: 13px;
+                                vertical-alignment: top;
+                                wrap: word-wrap;
+                                overflow: elide;
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+
+                            // The confirmation replaces the affordance in
+                            // place, so nothing reflows when it appears.
+                            Text {
+                                text: root.link-copied ? Strings.copied : Strings.copy-glyph;
+                                color: root.link-copied ? Palette.accent : Palette.muted;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        link-touch := TouchArea {
+                            enabled: root.link != "";
+                            mouse-cursor: root.link != "" ? MouseCursor.pointer : MouseCursor.default;
+                            clicked => {
+                                root.copy-link();
+                            }
+                        }
+                    }
+                }
+
+                DetailRow {
+                    label: Strings.field-purchase-date;
+                    value: root.purchase-date;
+                    wrap: true;
+                }
+
+                DetailRow {
+                    label: Strings.field-warranty-start;
+                    value: root.warranty-start;
+                    wrap: true;
+                }
+
+                DetailRow {
+                    label: Strings.field-warranty-end;
+                    value: root.warranty-end;
+                    wrap: true;
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                // ── The counter this app exists for (CORE §4) ────────────
+                //
+                // A bare Rectangle has no max-height, so left alone it shares
+                // the spacer's stretch instead of the spacer absorbing the
+                // tall-window slack on its own — confirmed by screenshot at
+                // 1000×1400, where the card grew to fill most of the column
+                // instead of staying compact. `vertical-stretch: 0` pins it to
+                // its content's preferred height, the way `masthead` already
+                // sits outside any stretchy context.
+                anchor := Rectangle {
+                    vertical-stretch: 0;
+                    background: Palette.panel;
+                    border-radius: 5px;
+
+                    VerticalLayout {
+                        padding: 16px;
                         spacing: 8px;
 
                         Text {
-                            text: root.link;
-                            color: Palette.text;
-                            font-size: 13px;
-                            vertical-alignment: center;
+                            text: Strings.warranty-left;
+                            color: Palette.muted;
+                            font-size: 12px;
+                            letter-spacing: 1px;
+                        }
+
+                        Text {
+                            text: root.days-left;
+                            color: root.expired ? Palette.danger : Palette.text;
+                            font-size: 30px;
+                            font-weight: 700;
                             overflow: elide;
                         }
 
-                        Rectangle {
-                            horizontal-stretch: 1;
-                        }
+                        gauge := Rectangle {
+                            height: 6px;
+                            border-radius: 3px;
+                            background: Palette.border;
 
-                        // The confirmation replaces the affordance in place, so
-                        // nothing reflows when it appears.
-                        Text {
-                            text: root.link-copied ? Strings.copied : Strings.copy-glyph;
-                            color: root.link-copied ? Palette.accent : Palette.muted;
-                            font-size: 13px;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    link-touch := TouchArea {
-                        enabled: root.link != "";
-                        mouse-cursor: root.link != "" ? MouseCursor.pointer : MouseCursor.default;
-                        clicked => {
-                            root.copy-link();
+                            Rectangle {
+                                x: 0;
+                                y: 0;
+                                width: parent.width * clamp(root.progress, 0.0, 1.0);
+                                height: parent.height;
+                                border-radius: 3px;
+                                background: root.expired ? Palette.danger : Palette.accent;
+                            }
                         }
                     }
                 }
             }
-
-            DetailRow {
-                label: Strings.field-purchase-date;
-                value: root.purchase-date;
-            }
-
-            DetailRow {
-                label: Strings.field-warranty-start;
-                value: root.warranty-start;
-            }
-
-            DetailRow {
-                label: Strings.field-warranty-end;
-                value: root.warranty-end;
-            }
-
-            Rectangle {
-                vertical-stretch: 1;
-            }
-
-            // ── The counter this app exists for (CORE §4) ────────────────
-            VerticalLayout {
-                spacing: 4px;
-
-                Text {
-                    text: Strings.warranty-left;
-                    color: Palette.muted;
-                    font-size: 12px;
-                    letter-spacing: 1px;
-                }
-
-                Text {
-                    text: root.days-left;
-                    color: root.expired ? Palette.danger : Palette.text;
-                    font-size: 26px;
-                    font-weight: 700;
-                    overflow: elide;
-                }
-            }
-        }
-
-        Rectangle {
-            vertical-stretch: 1;
         }
     }
 }

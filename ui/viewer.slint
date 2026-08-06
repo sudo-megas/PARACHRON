@@ -27,8 +27,8 @@ component NavButton inherits Rectangle {
     height: 28px;
     border-radius: 5px;
     border-width: 1px;
-    border-color: root.active && touch.has-hover ? Palette.accent : Palette.border;
-    background: root.active && touch.has-hover ? Palette.raised : Palette.panel;
+    border-color: touch.pressed || (root.active && touch.has-hover) ? Palette.accent : Palette.border;
+    background: touch.pressed ? Palette.selection : (root.active && touch.has-hover ? Palette.raised : Palette.panel);
 
     // The glyph carries no meaning to a screen reader; callers supply the
     // label, which needs a role to attach to.
