@@ -59,8 +59,14 @@ export component SearchBar inherits Rectangle {
     callback edited(string);
     callback cleared();
 
+    /// The masthead tone this bar sits in. The bar is the lower half of column
+    /// 1's masthead band, and the band carries that column's hue — so the
+    /// colour is the caller's to decide, not this widget's. Defaults to the
+    /// untinted surface for any future caller that is not in a masthead.
+    in property <brush> band: Palette.panel;
+
     height: 40px;
-    background: Palette.panel;
+    background: root.band;
 
     Rectangle {
         x: 12px;

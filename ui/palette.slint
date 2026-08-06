@@ -40,6 +40,26 @@ export global Palette {
     // large-text contrast floor rather than the body-text one (see theme.rs).
     in property <color> muted: #9a9aa2;
     in property <color> accent: #6fb2d2;
+    // The second and third hues, and the reason a theme reads as a palette
+    // rather than as one colour.
+    //
+    // Every source palette here has more than one hue in it — Catppuccin
+    // publishes fourteen accents per flavour, Rosé Pine six, Noctalia five,
+    // Canonical a whole brand sheet. Until these two existed the table took
+    // exactly one of them and spent the rest of its budget on five greys, so
+    // eleven themes arrived on screen as eleven shades of a single colour and
+    // the app looked the same in all of them. `accent` still carries the
+    // interactive states — focus, selection, the active chip. These two carry
+    // *identity*: column 1 is `accent`, column 2 is `accent2`, column 3 is
+    // `accent3`, each column wearing its own hue at the top of its card and
+    // tinted into its masthead, so the three sections read as three places.
+    //
+    // They are held to the 3:1 non-text floor against `panel` and `bg` — the
+    // two surfaces a column rule ever touches — and not against `selection`,
+    // which they are never drawn on. See theme.rs for where each theme's two
+    // extra hues come from, and which ones had to move to clear the floor.
+    in property <color> accent2: #d8a76b;
+    in property <color> accent3: #a892e0;
     // Broken folders, expired warranties, refused files. Red in ten of the
     // eleven themes; see theme.rs for the one where it cannot be.
     in property <color> danger: #e0736d;

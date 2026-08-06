@@ -918,10 +918,17 @@ fn colour_argb(value: u32) -> slint::Color {
     )
 }
 
-/// Assert all twelve roles reached the `Palette` global.
+/// Assert all fourteen roles reached the `Palette` global.
 ///
 /// Reads the window back rather than the table, so it fails if `theme::apply`
 /// forgets a setter or pairs two of them the wrong way round.
+///
+/// `accent2` and `accent3` are here for a reason worth stating: `palette.slint`
+/// initializes them to Default Dark's own two hues, so a dropped setter would
+/// not blank anything or crash — every one of the other ten themes would just
+/// quietly wear Default Dark's amber and violet on its column rules, in an app
+/// whose whole point is that the theme you picked is the theme you get. That is
+/// exactly the class of failure a screenshot of one theme cannot catch.
 fn assert_palette_pushed(app: &AppWindow, theme: Theme) {
     let p = theme.palette();
     let table = app.global::<Palette>();
@@ -935,6 +942,8 @@ fn assert_palette_pushed(app: &AppWindow, theme: Theme) {
         (table.get_text(), colour(p.text), "text"),
         (table.get_muted(), colour(p.muted), "muted"),
         (table.get_accent(), colour(p.accent), "accent"),
+        (table.get_accent2(), colour(p.accent2), "accent2"),
+        (table.get_accent3(), colour(p.accent3), "accent3"),
         (table.get_danger(), colour(p.danger), "danger"),
         (table.get_selection(), colour(p.selection), "selection"),
         (table.get_paper(), colour(p.paper), "paper"),

@@ -1,8 +1,8 @@
 //! The eleven palettes (CORE §5), and the picker that chooses between them.
 //!
 //! The palettes are Rust data pushed into the `Palette` global, not conditionals
-//! inside it. The Slint answer would be an eleven-way branch on each of twelve
-//! colours — a hundred and thirty-two arms the compiler cannot check for
+//! inside it. The Slint answer would be an eleven-way branch on each of fourteen
+//! colours — a hundred and fifty-four arms the compiler cannot check for
 //! completeness and no test can reach. This way the global is a slot, adding a
 //! theme is one `const` plus one line in [`Theme::ALL`], and the palettes are
 //! testable. That last one is not tidiness: the alternative to a contrast test
@@ -23,12 +23,21 @@ use slint::{Color, ComponentHandle, ModelRc, SharedString, VecModel};
 use crate::strings::{self, Key, Lang};
 use crate::{AppWindow, Palette as PaletteGlobal, ThemeItem};
 
-/// One theme's twelve colours, as `0xRRGGBB` — except [`Palette::backdrop`],
+/// One theme's fourteen colours, as `0xRRGGBB` — except [`Palette::backdrop`],
 /// which is `0xAARRGGBB` because it carries its own alpha.
 ///
 /// Hex integers rather than a colour type so the table reads like the palettes
 /// it was copied from, and a value can be checked against an upstream swatch by
 /// eye.
+///
+/// Three of the fourteen are accent hues, and they do two different jobs
+/// between them. `accent` carries interactive *state* — focus, selection, the
+/// active chip — and so it moves around the window as the user does. `accent2`
+/// and `accent3` carry *section identity* and never move: column 1 wears
+/// `accent`, column 2 `accent2`, column 3 `accent3`, each as a solid rule across
+/// the top of its card and tinted into its masthead. One hue for the whole
+/// window is what these two answer — a source palette of five colours arriving
+/// on screen as one of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palette {
     pub bg: u32,
@@ -38,6 +47,8 @@ pub struct Palette {
     pub text: u32,
     pub muted: u32,
     pub accent: u32,
+    pub accent2: u32,
+    pub accent3: u32,
     pub danger: u32,
     pub selection: u32,
     pub paper: u32,
@@ -54,17 +65,25 @@ const SCRIM_LIGHT: u32 = 0x73000000;
 
 // ── The eleven ───────────────────────────────────────────────────────────────
 //
-// Five of these are their projects' published palettes and can be checked
-// against them by eye: the four Catppuccin flavours and Rosé Pine Dawn, which is
-// what CORE §5's "light/dawn" means. Ubuntu Canonical Aubergine uses Canonical's
-// published brand colours. The other four are interpretations pinned here, which
-// is what CORE §10 asked this milestone to do — Default Dark was only ever this
-// project's own, and Noctalia, Ruby and Paperlike have no single published hex
-// set to copy. Saying which is which matters: somebody comparing Mocha against
-// the upstream swatch should find it identical, and somebody who thinks Ruby
-// should be redder is disagreeing with a choice rather than reporting a bug.
+// Six of these are their projects' published palettes and can be checked
+// against them by eye: the four Catppuccin flavours, Rosé Pine Dawn — which is
+// what CORE §5's "light/dawn" means — and now Noctalia, which was an
+// interpretation until its five real colours turned up and made one
+// unnecessary. Ubuntu Canonical Aubergine uses Canonical's published brand
+// colours. The other three are interpretations pinned here, which is what CORE
+// §10 asked this milestone to do — Default Dark was only ever this project's
+// own, and Ruby and Paperlike have no single published hex set to copy. Saying
+// which is which matters: somebody comparing Mocha against the upstream swatch
+// should find it identical, and somebody who thinks Ruby should be redder is
+// disagreeing with a choice rather than reporting a bug.
 
 /// Chron1's palette, unchanged — and the initializers in `palette.slint`.
+///
+/// The two identity hues are new, and this project's own: a warm amber and a
+/// violet, chosen to sit at three different temperatures from the existing
+/// cyan-blue `accent` rather than three tints of it. A neutral grey theme has no
+/// upstream ramp to take them from, so this is a choice somebody can disagree
+/// with rather than a mapping somebody can check.
 const DEFAULT_DARK: Palette = Palette {
     bg: 0x1b1b1d,
     panel: 0x232326,
@@ -74,6 +93,8 @@ const DEFAULT_DARK: Palette = Palette {
     text: 0xe6e6e8,
     muted: 0x9a9aa2,
     accent: 0x6fb2d2,
+    accent2: 0xd8a76b,
+    accent3: 0xa892e0,
     danger: 0xe0736d,
     paper: PAPER,
     paper_edge: 0x101012,
@@ -82,6 +103,12 @@ const DEFAULT_DARK: Palette = Palette {
 
 /// The same neutral grey read the other way up, with the accents darkened —
 /// which is the step a light theme converted from a dark one always skips.
+///
+/// The identity hues are Dark's amber and violet put through that same step:
+/// the same two hues, darkened until they hold against a near-white card. The
+/// point of naming it twice is that it is the same omission both times — a
+/// light theme inherits its hues from the dark one it was inverted from and
+/// keeps their values, and every one of them is then too pale to see.
 const DEFAULT_LIGHT: Palette = Palette {
     bg: 0xe9e9ec,
     panel: 0xf7f7f9,
@@ -91,30 +118,76 @@ const DEFAULT_LIGHT: Palette = Palette {
     text: 0x1c1c20,
     muted: 0x5c5c66,
     accent: 0x1f6b8f,
+    accent2: 0x8a5a12,
+    accent3: 0x6b4a9e,
     danger: 0xa52a22,
     paper: PAPER,
     paper_edge: 0xa8a8b2,
     backdrop: SCRIM_LIGHT,
 };
 
-/// Interpretation: near-black blue with a lavender accent.
+/// Noctalia, and no longer an interpretation: a mapping of the five colours the
+/// palette actually publishes — `#012e4d`, `#014777`, `#bcbcbc`, `#ffaa00`,
+/// `#f1c232` — onto the ladder, rather than a theme built around the first of
+/// them.
+///
+/// That is the whole of the change. The previous version took the deep navy,
+/// decided it meant "near-black blue", and put a lavender accent on it, so a
+/// five-colour source reached the screen as one colour and none of the other
+/// four appeared anywhere. Now the navy is the panel and the canvas is a step
+/// below it, the source's lighter blue is `selection`, its grey is where the
+/// text pair comes from, and its orange and yellow are the two identity hues.
+///
+/// Two values are still this file's own, and both for a reason worth stating.
+/// `accent3` is the source's blue lightened, because the published `#014777` on
+/// the navy panel is 1.45:1 — technically a blue, visibly nothing, and a
+/// palette whose blue cannot be seen is the failure this rewrite is fixing.
+/// `danger` stays a red because the source set has none; an error colour is
+/// functional rather than decorative, and a theme is not entitled to decide
+/// that a broken folder should look like a warm yellow. `text` and `muted` are
+/// the grey lifted and cooled toward the navy rather than `#bcbcbc` twice —
+/// one value in two roles is the repeated step the ladder rule exists to catch.
 const NOCTALIA: Palette = Palette {
-    bg: 0x0d0e14,
-    panel: 0x151721,
-    raised: 0x1f2230,
-    selection: 0x2a2e40,
-    border: 0x363b52,
-    text: 0xd8dbe8,
-    muted: 0x8b90a6,
-    accent: 0xa78bfa,
+    // A step below the source's navy, so `panel` can be the published colour and
+    // still sit above its canvas.
+    bg: 0x011c30,
+    panel: 0x012e4d,
+    // The source has two blues and the ladder needs five steps, so the hover
+    // between them and the hairline beyond them are interpolated — the same gap
+    // Ubuntu's aubergines leave, and filled the same way.
+    raised: 0x013a60,
+    selection: 0x014777,
+    border: 0x1d5c88,
+    text: 0xd7dbde,
+    muted: 0x9fb0bd,
+    accent: 0xffaa00,
+    accent2: 0xf1c232,
+    accent3: 0x7fb8de,
     danger: 0xf0717a,
     paper: PAPER,
-    paper_edge: 0x05060a,
+    paper_edge: 0x000d18,
     backdrop: SCRIM_DARK,
 };
 
 /// Catppuccin Latte. `bg` is mantle and `panel` is base, so panels stay lighter
-/// than the canvas the way they do in the dark flavours.
+/// than the canvas the way they do in the dark flavours. The identity hues are
+/// upstream Mauve and Teal.
+///
+/// Peach is what the three dark flavours use for `accent3`, and it was the
+/// obvious third here too. Latte's own Peach `#fe640b` does not clear the floor:
+/// 2.64:1 on Latte's `panel` and 2.45:1 on its `bg`, against a 3:1 minimum for
+/// something that is not text. Orange on near-white is the light-theme trap in
+/// its purest form — it looks vivid on the swatch sheet and disappears on the
+/// card — and it is exactly what the contrast test exists to catch.
+///
+/// Five of Latte's fourteen accents clear the floor on both surfaces: Mauve,
+/// Red, Maroon, Teal and Blue. Blue is already `accent` and Red is already
+/// `danger`; Mauve takes `accent2`; and Maroon `#e64553` is a red sitting one
+/// column away from a red error colour, which is the second-red problem Ruby's
+/// comment describes. That leaves Teal, at 3.31:1 on `panel` and 3.08:1 on
+/// `bg`. The 3.08 is the narrowest margin either identity hue has anywhere in
+/// the table, and it is against `bg` rather than `panel` — which is the reason
+/// the accent2/accent3 check measures both surfaces.
 const CATPPUCCIN_LATTE: Palette = Palette {
     bg: 0xe6e9ef,
     panel: 0xeff1f5,
@@ -124,6 +197,8 @@ const CATPPUCCIN_LATTE: Palette = Palette {
     text: 0x4c4f69,
     muted: 0x6c6f85,
     accent: 0x1e66f5,
+    accent2: 0x8839ef,
+    accent3: 0x179299,
     danger: 0xd20f39,
     paper: PAPER,
     paper_edge: 0xacb0be,
@@ -139,6 +214,10 @@ const CATPPUCCIN_LATTE: Palette = Palette {
 /// between base and surface0 is interpolated because Catppuccin has no token
 /// there. Macchiato and Mocha clear the same floor on surface1 at 3.37 and 3.93,
 /// so they are unchanged; this is Frappé's own problem, not the mapping's.
+///
+/// The identity hues are upstream Mauve and Peach, unchanged, and all three dark
+/// flavours take that same pair — which is what makes Latte's substitution of
+/// Teal for Peach a documented exception rather than four independent choices.
 const CATPPUCCIN_FRAPPE: Palette = Palette {
     bg: 0x292c3c,
     panel: 0x303446,
@@ -148,6 +227,8 @@ const CATPPUCCIN_FRAPPE: Palette = Palette {
     text: 0xc6d0f5,
     muted: 0xa5adce,
     accent: 0x8caaee,
+    accent2: 0xca9ee6,
+    accent3: 0xef9f76,
     danger: 0xe78284,
     paper: PAPER,
     paper_edge: 0x232634,
@@ -163,6 +244,8 @@ const CATPPUCCIN_MACCHIATO: Palette = Palette {
     text: 0xcad3f5,
     muted: 0xa5adcb,
     accent: 0x8aadf4,
+    accent2: 0xc6a0f6,
+    accent3: 0xf5a97f,
     danger: 0xed8796,
     paper: PAPER,
     paper_edge: 0x181926,
@@ -178,13 +261,16 @@ const CATPPUCCIN_MOCHA: Palette = Palette {
     text: 0xcdd6f4,
     muted: 0xa6adc8,
     accent: 0x89b4fa,
+    accent2: 0xcba6f7,
+    accent3: 0xfab387,
     danger: 0xf38ba8,
     paper: PAPER,
     paper_edge: 0x11111b,
     backdrop: SCRIM_DARK,
 };
 
-/// Rosé Pine Dawn. `accent` is pine and `danger` is love.
+/// Rosé Pine Dawn. `accent` is pine, `danger` is love, and `accent3` is iris
+/// `#907aa9` unchanged.
 ///
 /// The surfaces walk base, surface, overlay, highlight-med and highlight-high.
 /// The page's edge is `muted`, one step beyond the ladder, and it has to be:
@@ -193,6 +279,18 @@ const CATPPUCCIN_MOCHA: Palette = Palette {
 /// first version reused highlight-high for both `border` and `paper_edge`, which
 /// made the page's frame the same colour as every hairline in the window and the
 /// faintest of the four light themes' edges.
+///
+/// `accent2` is gold, and it is deliberately *not* upstream's `#ea9d34`. Dawn is
+/// a light theme and its own gold lands at 2.16:1 against its near-white panel,
+/// well under the 3:1 floor, so the hue is kept and the value darkened to
+/// `#a9701a` — 4.03:1 — the same kind of documented deviation this file already
+/// makes for Frappé's ladder. Latte had the same problem with Peach and took the
+/// other answer, a different upstream colour, and the difference is worth being
+/// explicit about: Dawn's only remaining colour that clears the floor is foam at
+/// 3.30:1, which is a second teal beside a pine `accent`, and rose fails at
+/// 2.74:1 while love is already `danger`. Swapping would have cost the palette
+/// its only warm identity hue. Darkening keeps the theme's three columns at
+/// three temperatures, which is the point of having three.
 const ROSE_PINE: Palette = Palette {
     bg: 0xfaf4ed,
     panel: 0xfffaf3,
@@ -202,6 +300,8 @@ const ROSE_PINE: Palette = Palette {
     text: 0x575279,
     muted: 0x797593,
     accent: 0x286983,
+    accent2: 0xa9701a,
+    accent3: 0x907aa9,
     danger: 0xb4637a,
     paper: PAPER,
     paper_edge: 0x9893a5,
@@ -216,6 +316,12 @@ const ROSE_PINE: Palette = Palette {
 /// rose and the error colour is amber — a deliberate departure from "danger is
 /// red", and the only palette here where the two roles are different hues on
 /// purpose.
+///
+/// The identity hues continue the same interpretation: a violet and a teal.
+/// With the ruby rose and the amber that is four hues no two of which can be
+/// mistaken for each other, which a red-forward theme needs more than the others
+/// do — a second red anywhere in this window would read as the theme rather than
+/// as a colour meaning something.
 const RUBY: Palette = Palette {
     bg: 0x170a0e,
     panel: 0x1f0f14,
@@ -225,6 +331,8 @@ const RUBY: Palette = Palette {
     text: 0xf4e3e7,
     muted: 0xbd979e,
     accent: 0xff6188,
+    accent2: 0xab9df2,
+    accent3: 0x78dce8,
     danger: 0xffa657,
     paper: PAPER,
     // Black, because there is nothing below this canvas. Ruby's `bg` is dark
@@ -246,6 +354,15 @@ const RUBY: Palette = Palette {
 /// background a selected row and the picker's tick are ever drawn on. Mid
 /// Aubergine takes that slot instead and Canonical Aubergine moves out to the
 /// hairlines, which clears the floor without changing a brand colour.
+///
+/// The identity hues are the blue and the yellow from Canonical's Vanilla
+/// framework, both lightened for this canvas — Vanilla publishes them against a
+/// white page, and a blue tuned for white is a dark blue on aubergine. The
+/// colours that would have been the obvious brand pick were not available: this
+/// palette has already spent Canonical and Mid Aubergine on the surface ladder
+/// and Warm Grey on `muted`, so a third and fourth aubergine would be two more
+/// steps of the same ramp rather than two hues. Reaching outside the aubergine
+/// family is the only way the three columns come out as three colours.
 const UBUNTU_AUBERGINE: Palette = Palette {
     bg: 0x2c001e,
     // No Canonical colour sits between Dark and Mid Aubergine, so the two middle
@@ -257,6 +374,8 @@ const UBUNTU_AUBERGINE: Palette = Palette {
     text: 0xf7f2f4,
     muted: 0xaea79f,
     accent: 0xe95420,
+    accent2: 0x4a9de8,
+    accent3: 0xf9bc4f,
     danger: 0xff6b6b,
     paper: PAPER,
     paper_edge: 0x1a0011,
@@ -272,6 +391,12 @@ const UBUNTU_AUBERGINE: Palette = Palette {
 /// near-white ladder that gradient implies, with slate-blue ink and an
 /// iron-gall red. A real gradient is a later change to the palette's *type*,
 /// not to its values.
+///
+/// The identity hues are interpretation like the rest of it: a sepia and a
+/// green, which with the slate-blue accent and the iron-gall red make four inks
+/// on paper. That is the theme's whole idea, and it is the one palette here
+/// where having three column hues rather than one is not a compromise — a desk
+/// with four pens on it is more paper-like than a desk with one.
 const PAPERLIKE: Palette = Palette {
     bg: 0xece6dc,
     panel: 0xf7f3ea,
@@ -281,6 +406,8 @@ const PAPERLIKE: Palette = Palette {
     text: 0x2b2721,
     muted: 0x6a6257,
     accent: 0x46687f,
+    accent2: 0x8a6420,
+    accent3: 0x46705a,
     danger: 0x9c3a34,
     paper: PAPER,
     paper_edge: 0xb5aa98,
@@ -416,6 +543,8 @@ pub fn apply(app: &AppWindow, theme: Theme) {
     table.set_text(rgb(p.text));
     table.set_muted(rgb(p.muted));
     table.set_accent(rgb(p.accent));
+    table.set_accent2(rgb(p.accent2));
+    table.set_accent3(rgb(p.accent3));
     table.set_danger(rgb(p.danger));
     table.set_selection(rgb(p.selection));
     table.set_paper(rgb(p.paper));
@@ -602,6 +731,35 @@ mod tests {
 
             for (colour, name) in [(p.muted, "muted"), (p.accent, "accent"), (p.danger, "danger")] {
                 for (surface, where_) in [(p.panel, "panel"), (p.selection, "selection")] {
+                    let ratio = contrast(colour, surface);
+                    assert!(
+                        ratio >= QUIET_FLOOR,
+                        "{code}: {name} on {where_} is {ratio:.2}:1, below the \
+                         {QUIET_FLOOR}:1 floor"
+                    );
+                }
+            }
+
+            // The identity hues get the same floor and a different pair of
+            // surfaces: `panel` and `bg`, deliberately not `selection`.
+            //
+            // They are never drawn on a selected row. Unlike `accent`, which
+            // follows the user around and therefore has to hold on whatever is
+            // under the cursor, these two are structural — a 4px solid rule
+            // across the top of a column's card and a tint mixed into that
+            // column's masthead — so the only two surfaces either of them ever
+            // touches are the card itself and the channel of canvas between the
+            // cards. Measuring them on `selection` would hold them to a
+            // background they never meet; leaving out `bg` would skip one they
+            // always do. That is the same mistake in both directions, and it is
+            // the mistake the `accent` loop above was rewritten to fix.
+            //
+            // `bg` is not the slack surface here. Catppuccin Latte's Teal is
+            // 3.31:1 on `panel` and 3.08:1 on `bg` — the narrowest margin either
+            // identity hue has anywhere in the table, and on `bg`. Dropping that
+            // surface would be dropping the check that binds.
+            for (colour, name) in [(p.accent2, "accent2"), (p.accent3, "accent3")] {
+                for (surface, where_) in [(p.panel, "panel"), (p.bg, "bg")] {
                     let ratio = contrast(colour, surface);
                     assert!(
                         ratio >= QUIET_FLOOR,

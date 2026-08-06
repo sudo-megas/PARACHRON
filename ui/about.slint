@@ -107,7 +107,13 @@ export component About inherits Rectangle {
     /// `Sheet`'s key handling and needs its own scope.
     callback dismissed();
 
-    background: Palette.bg;
+    // A card, like the two columns it covers — same surface, same corners, same
+    // outline, so opening About swaps two cards for one rather than dropping a
+    // slab over the window.
+    background: Palette.panel;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Palette.border;
     clip: true;
 
     // Escape closes, the same gesture the form and the picker answer to. Taking
@@ -146,11 +152,22 @@ export component About inherits Rectangle {
             spacing: 14px;
             alignment: start;
 
-            Image {
-                source: @image-url("../build/icons/parachron-256.png");
-                width: 72px;
-                height: 72px;
-                horizontal-alignment: center;
+            // `horizontal-alignment` on an `Image` aligns the bitmap inside the
+            // element's own box — it does not centre the box inside the layout.
+            // With an explicit 72px width that left the icon pinned to the
+            // pane's left edge while every line under it was centred, which is
+            // what it looked like: an app icon in the corner of its own About
+            // pane. Centring is the layout's job, so a `HorizontalLayout` with
+            // `alignment: center` does it, and the icon gets a size worth
+            // looking at now that it is where the eye lands first.
+            HorizontalLayout {
+                alignment: center;
+
+                Image {
+                    source: @image-url("../build/icons/parachron-512.png");
+                    width: 144px;
+                    height: 144px;
+                }
             }
 
             Text {

@@ -40,14 +40,21 @@ export component Details inherits Rectangle {
     callback open-theme();
     callback export();
 
-    background: Palette.bg;
+    // Fills column 3's card, so it wears the card's surface and its foot has to
+    // carry the card's corners. The top corners belong to the hue rule drawn
+    // above this component.
+    background: Palette.panel;
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+    clip: true;
 
     VerticalLayout {
         spacing: 0px;
         padding: 0px;
 
+        // Column 3's masthead, in column 3's hue.
         masthead := Rectangle {
-            background: Palette.panel;
+            background: Palette.raised.mix(Palette.accent3, 0.86);
 
             VerticalLayout {
                 padding: 16px;
@@ -97,13 +104,13 @@ export component Details inherits Rectangle {
                 }
             }
 
-            // Bottom hairline, same device used at every other seam in this app.
+            // The band's edge in column 3's hue, matching columns 1 and 2.
             Rectangle {
                 x: 0;
-                y: parent.height - 1px;
+                y: parent.height - 2px;
                 width: parent.width;
-                height: 1px;
-                background: Palette.border;
+                height: 2px;
+                background: Palette.accent3;
             }
         }
 

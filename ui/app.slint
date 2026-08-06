@@ -169,6 +169,27 @@ export component AppWindow inherits Window {
     // themselves cannot drift apart.
     property <length> row-height: 38px;
 
+    // The column cards, and the channels between them.
+    //
+    // Each column's outer rectangle is geometry only — it holds the exact
+    // 25/50/25 the ratio asks for and `assert_columns` measures, and draws
+    // nothing at all. The card inside it is what you see, inset so the
+    // window's own canvas shows through between columns. That channel is the
+    // transition: a 1px hairline between two panels of identical colour is a
+    // seam you can find if you look for it, not a boundary you can feel, and
+    // that was the honest complaint against what Chron10 first shipped.
+    //
+    // `seam-gap` is per side, so the channel between two cards is twice it.
+    property <length> edge-gap: 8px;
+    property <length> seam-gap: 5px;
+    // The band of the column's own hue across the top of its card.
+    property <length> rule-height: 4px;
+    // How much of a column's hue is mixed into its masthead. `mix` keeps the
+    // proportion of the colour it is called on, so this is a tint, not a wash:
+    // enough that the three mastheads are visibly three colours, little enough
+    // that the text on them is still text on a surface.
+    property <float> tint: 0.86;
+
     // Bring a row into view after the list has been rebuilt.
     //
     // Imperative, never a `viewport-y:` binding: the repeater *assigns*
@@ -427,10 +448,40 @@ export component AppWindow inherits Window {
                 y: 0;
                 width: body.width / 4;
                 height: body.height;
-                background: Palette.bg;
+                background: transparent;
                 clip: true;
 
+                card1 := Rectangle {
+                    x: root.edge-gap;
+                    y: root.edge-gap;
+                    width: parent.width - root.edge-gap - root.seam-gap;
+                    height: parent.height - root.edge-gap * 2;
+                    background: Palette.panel;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Palette.border;
+                }
+
+                // The column's own hue, and what `accent2`/`accent3` were added
+                // for: three columns wearing three colours, so a section reads
+                // as its own place rather than as more of the same panel.
+                Rectangle {
+                    x: card1.x;
+                    y: card1.y;
+                    width: card1.width;
+                    height: root.rule-height;
+                    background: Palette.accent;
+                    border-top-left-radius: 8px;
+                    border-top-right-radius: 8px;
+                }
+
+                // Laid over the card rather than inside it, so the card stays a
+                // surface and this stays the same layout it has always been.
                 VerticalLayout {
+                    x: card1.x;
+                    y: card1.y + root.rule-height;
+                    width: card1.width;
+                    height: card1.height - root.rule-height;
                     spacing: 0px;
                     padding: 0px;
 
@@ -441,7 +492,7 @@ export component AppWindow inherits Window {
                     // again clears it rather than needing a third chip.
                     Rectangle {
                         height: 34px;
-                        background: Palette.panel;
+                        background: Palette.raised.mix(Palette.accent, root.tint);
 
                         HorizontalLayout {
                             padding-left: 14px;
@@ -471,14 +522,9 @@ export component AppWindow inherits Window {
                             Rectangle { horizontal-stretch: 1; }
                         }
 
-                        // Bottom hairline.
-                        Rectangle {
-                            x: 0;
-                            y: parent.height - 1px;
-                            width: parent.width;
-                            height: 1px;
-                            background: Palette.border;
-                        }
+                        // No hairline under the chips any more: the chip row and
+                        // the search bar are one masthead band now, and a rule
+                        // through its middle cut it in half.
                     }
 
                     // ── Search (CORE §4) ─────────────────────────────
@@ -488,10 +534,21 @@ export component AppWindow inherits Window {
                     // filters and rebuilds the rows without telling the viewer,
                     // so typing never disturbs the open document.
                     search := SearchBar {
+                        band: Palette.raised.mix(Palette.accent, root.tint);
                         text <=> root.search-query;
                         edited(query) => {
                             root.search-changed(query);
                         }
+                    }
+
+                    // The masthead's own edge, in the column's hue. A tint mixed
+                    // into a dark surface goes muddy long before it goes
+                    // colourful — 14% of orange in a navy panel reads as grey —
+                    // so the hue is stated cleanly on the band's two edges and
+                    // only suggested in its fill.
+                    Rectangle {
+                        height: 2px;
+                        background: Palette.accent;
                     }
 
                     Rectangle {
@@ -597,9 +654,15 @@ export component AppWindow inherits Window {
                     // there is never a pane on screen with no visible way back.
                     about-strip := Rectangle {
                         height: 42px;
+                        // Transparent at rest so the card's own surface and its
+                        // rounded foot show through; the two lit states carry
+                        // the same corners, or a hover would square off the
+                        // bottom of the card it sits in.
                         background: root.about-open
                             ? Palette.selection
-                            : (about-touch.has-hover ? Palette.raised : Palette.bg);
+                            : (about-touch.has-hover ? Palette.raised : transparent);
+                        border-bottom-left-radius: 8px;
+                        border-bottom-right-radius: 8px;
 
                         Rectangle {
                             x: 0;
@@ -657,20 +720,37 @@ export component AppWindow inherits Window {
                 y: 0;
                 width: body.width / 2;
                 height: body.height;
-                background: Palette.bg;
+                background: transparent;
                 clip: true;
 
+                card2 := Rectangle {
+                    x: root.seam-gap;
+                    y: root.edge-gap;
+                    width: parent.width - root.seam-gap * 2;
+                    height: parent.height - root.edge-gap * 2;
+                    background: Palette.panel;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Palette.border;
+                }
+
                 Rectangle {
-                    x: 0;
-                    y: 0;
-                    width: 1px;
-                    height: parent.height;
-                    background: Palette.border;
+                    x: card2.x;
+                    y: card2.y;
+                    width: card2.width;
+                    height: root.rule-height;
+                    background: Palette.accent2;
+                    border-top-left-radius: 8px;
+                    border-top-right-radius: 8px;
                 }
 
                 // Nothing selected, or a folder that would not parse — the
                 // viewer has nothing to open, so Chron1's reason display stays.
                 if !root.selected-open || root.selected-broken: VerticalLayout {
+                    x: card2.x;
+                    y: card2.y + root.rule-height;
+                    width: card2.width;
+                    height: card2.height - root.rule-height;
                     padding: 20px;
                     spacing: 12px;
 
@@ -692,9 +772,10 @@ export component AppWindow inherits Window {
                 }
 
                 if root.selected-open && !root.selected-broken: viewer := Viewer {
-                    x: 8px;
-                    width: parent.width - 8px;
-                    height: parent.height;
+                    x: card2.x;
+                    y: card2.y + root.rule-height;
+                    width: card2.width;
+                    height: card2.height - root.rule-height;
 
                     tabs: root.doc-tabs;
                     active-tab: root.active-tab;
@@ -735,21 +816,35 @@ export component AppWindow inherits Window {
                 y: 0;
                 width: body.width - col1.width - col2.width;
                 height: body.height;
-                background: Palette.panel;
+                background: transparent;
                 clip: true;
 
+                card3 := Rectangle {
+                    x: root.seam-gap;
+                    y: root.edge-gap;
+                    width: parent.width - root.seam-gap - root.edge-gap;
+                    height: parent.height - root.edge-gap * 2;
+                    background: Palette.panel;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Palette.border;
+                }
+
                 Rectangle {
-                    x: 0;
-                    y: 0;
-                    width: 1px;
-                    height: parent.height;
-                    background: Palette.border;
+                    x: card3.x;
+                    y: card3.y;
+                    width: card3.width;
+                    height: root.rule-height;
+                    background: Palette.accent3;
+                    border-top-left-radius: 8px;
+                    border-top-right-radius: 8px;
                 }
 
                 details := Details {
-                    x: 4px;
-                    width: parent.width - 4px;
-                    height: parent.height;
+                    x: card3.x;
+                    y: card3.y + root.rule-height;
+                    width: card3.width;
+                    height: card3.height - root.rule-height;
 
                     filled: root.details-filled;
                     link: root.details-link;
@@ -796,11 +891,13 @@ export component AppWindow inherits Window {
             // coming back is instant rather than paying the resize debounce to
             // rebuild a document that was already open — the same cost Chron3
             // recorded for a `selected-index` that passes through -1.
+            // Inset like the cards it covers, so opening About does not make the
+            // window's channels vanish under one edge-to-edge slab.
             if root.about-open: About {
-                x: col1.width;
-                y: 0;
-                width: body.width - col1.width;
-                height: body.height;
+                x: col1.width + root.seam-gap;
+                y: root.edge-gap;
+                width: body.width - col1.width - root.seam-gap - root.edge-gap;
+                height: body.height - root.edge-gap * 2;
 
                 version: root.app-version;
                 released: root.app-released;

@@ -90,23 +90,35 @@ export component Viewer inherits Rectangle {
     callback copy-serial();
     callback viewport-resized(length, length);
 
-    background: Palette.bg;
+    // The viewer fills column 2's card, so its surface is the card's and its
+    // foot has to carry the card's corners — otherwise the serial strip squares
+    // off the bottom of the rounded card it is sitting in. The top corners are
+    // the column's hue rule's problem, not this component's: the rule is drawn
+    // above the viewer and already rounds them.
+    background: Palette.panel;
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+    clip: true;
 
     VerticalLayout {
         spacing: 0px;
         padding: 0px;
 
         // ── Tab row ──────────────────────────────────────────────────────
+        //
+        // Column 2's masthead, tinted with column 2's hue the way column 1's
+        // sort row and column 3's action row carry theirs.
         Rectangle {
             height: 40px;
-            background: Palette.panel;
+            background: Palette.raised.mix(Palette.accent2, 0.86);
 
+            // The band's edge in column 2's hue, matching columns 1 and 3.
             Rectangle {
                 x: 0;
-                y: parent.height - 1px;
+                y: parent.height - 2px;
                 width: parent.width;
-                height: 1px;
-                background: Palette.border;
+                height: 2px;
+                background: Palette.accent2;
             }
 
             Flickable {
