@@ -11,11 +11,16 @@
 
 [![Latest version](https://img.shields.io/github/v/release/sudo-megas/PARACHRON?label=latest&color=6c8cd5)](https://github.com/sudo-megas/PARACHRON/releases/latest)
 [![Release date](https://img.shields.io/github/release-date/sudo-megas/PARACHRON?label=released&color=6c8cd5)](https://github.com/sudo-megas/PARACHRON/releases/latest)
-[![Arch Linux](https://img.shields.io/badge/Arch-.pkg.tar.zst-1793d1?logo=archlinux&logoColor=white)](#arch-linux--cachyos)
-[![Debian](https://img.shields.io/badge/Debian-.deb-a80030?logo=debian&logoColor=white)](#debian--ubuntu)
-[![Windows](https://img.shields.io/badge/Windows-.exe-0078d4?logo=windows&logoColor=white)](#windows)
 [![CI](https://github.com/sudo-megas/PARACHRON/actions/workflows/ci.yml/badge.svg)](https://github.com/sudo-megas/PARACHRON/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green)](LICENSE)
+
+</p>
+
+<p>
+  <img alt="Arch Linux package" src="https://img.shields.io/badge/Arch%20Linux-13.2%20MB-1793D1?style=for-the-badge&logo=archlinux&logoColor=white">
+  <img alt="Debian package"     src="https://img.shields.io/badge/Debian-9.95%20MB-A81D33?style=for-the-badge&logo=debian&logoColor=white">
+  <img alt="Windows installer"  src="https://img.shields.io/badge/Windows-23.9%20MB-0078D6?style=for-the-badge&logo=windows&logoColor=white">
+</p>
 
 ---
 
