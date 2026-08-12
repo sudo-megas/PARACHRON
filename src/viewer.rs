@@ -149,7 +149,17 @@ impl State {
     /// tab or of product, so CORE §4's reset rule does not apply to them. A
     /// fresh click passes `false` and starts at page one, fitted.
     fn show(&mut self, doc: Option<DocSet>, keep_view: bool) {
-        let showing = if keep_view {
+        // `keep_view` only means "stay on the same file" when it is also the
+        // same product — matching on the file name alone let a save or a
+        // re-sort that actually switched to a *different* product carry over
+        // its page and zoom whenever the two happened to share a file name,
+        // which `invoice.pdf` and `garanti.pdf` (this app's own wireframe and
+        // test data) make the common case rather than the exotic one.
+        let same_product = keep_view
+            && doc
+                .as_ref()
+                .is_some_and(|doc| self.folder.as_deref() == Some(doc.folder.as_str()));
+        let showing = if same_product {
             self.tabs.get(self.active_tab).map(|tab| tab.file.clone())
         } else {
             None
@@ -882,6 +892,30 @@ mod tests {
         assert_eq!(state.active_tab, 1, "still on Garanti");
         assert_eq!(state.page, 4, "still on the same page");
         assert_eq!(state.zoom, 2.5, "still at the same zoom");
+    }
+
+    /// `monitor()` and `drive()` both open on a file named "invoice.pdf" —
+    /// matching this app's own wireframe and test data, where that collision
+    /// is the common case rather than the exotic one. `keep_view` is what an
+    /// add or a save asks for after selecting the just-written product, and it
+    /// must mean "same product, same file", not "a tab anywhere happens to be
+    /// named the same thing".
+    #[test]
+    fn keeping_the_view_resets_when_a_different_product_happens_to_share_a_file_name() {
+        let mut state = state();
+        state.show(Some(monitor()), false);
+        state.page = 4;
+        state.pages = 9;
+        state.zoom = 2.5;
+
+        state.show(Some(drive()), true);
+
+        assert_eq!(state.active_tab, 0);
+        assert_eq!(state.page, 0, "a different product must not inherit the last page");
+        assert_eq!(
+            state.zoom, ZOOM_MIN,
+            "a different product must not inherit the last zoom"
+        );
     }
 
     #[test]
