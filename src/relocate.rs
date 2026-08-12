@@ -303,7 +303,8 @@ fn walk(
         // the copy step produces; and it is also what turns a symlink into
         // `/dev/zero` or a FIFO that would otherwise hang or fill the disk
         // into a refusal before a single byte moves.
-        let real = fs::metadata(&path).map_err(|e| Failure::Read(format!("{}: {e}", path.display())))?;
+        let real =
+            fs::metadata(&path).map_err(|e| Failure::Read(format!("{}: {e}", path.display())))?;
         if !real.is_file() {
             return Err(Failure::Read(format!(
                 "{}: not a plain file or a symlink to one — move it out of the vault by hand first",
@@ -312,7 +313,10 @@ fn walk(
         }
         let len = real.len();
         *bytes += len;
-        out.push(Item { relative, bytes: len });
+        out.push(Item {
+            relative,
+            bytes: len,
+        });
     }
     Ok(())
 }
@@ -354,7 +358,13 @@ pub fn commit(
 ///
 /// `report` is called once per file. In a test it collects; in the app it fills
 /// the shared slot and rings the window.
-pub fn run(job: Job, survey: Survey, config_path: &Path, data_dir: &Path, report: &dyn Fn(Progress)) -> Outcome {
+pub fn run(
+    job: Job,
+    survey: Survey,
+    config_path: &Path,
+    data_dir: &Path,
+    report: &dyn Fn(Progress),
+) -> Outcome {
     let Job { from, to } = job;
     let files = survey.files;
 

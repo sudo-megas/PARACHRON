@@ -682,7 +682,10 @@ mod tests {
     #[test]
     fn a_warranty_may_start_the_same_day_the_item_was_purchased() {
         let report = editor().check(&typed("Monitor", "14-03-2026", "14-03-2026", "14-03-2027"));
-        assert!(report.clean(), "buying and activating on the same day is ordinary");
+        assert!(
+            report.clean(),
+            "buying and activating on the same day is ordinary"
+        );
     }
 
     #[test]

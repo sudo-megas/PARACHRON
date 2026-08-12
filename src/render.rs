@@ -557,7 +557,9 @@ fn to_rgba(pixmap: &mupdf::Pixmap) -> Result<Raster, ViewError> {
     let row_bytes = (width as usize)
         .checked_mul(components)
         .ok_or_else(malformed)?;
-    let needed = (height as usize).checked_mul(stride).ok_or_else(malformed)?;
+    let needed = (height as usize)
+        .checked_mul(stride)
+        .ok_or_else(malformed)?;
     if components == 0 || row_bytes > stride || samples.len() < needed {
         return Err(malformed());
     }
@@ -817,7 +819,10 @@ mod tests {
         };
 
         let first = serve(&mut open, &mut cache, job(1));
-        assert!(matches!(first, Response::Ready { pages: 1, .. }), "{first:?}");
+        assert!(
+            matches!(first, Response::Ready { pages: 1, .. }),
+            "{first:?}"
+        );
 
         // Replaced from outside the app — the same path, different bytes, no
         // `Invalidate` sent. A sync client does exactly this.
