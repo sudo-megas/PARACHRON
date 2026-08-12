@@ -142,6 +142,13 @@ struct Item {
 /// the total is known rather than discovered.
 pub struct Survey {
     items: Vec<Item>,
+    /// Every directory seen while walking, relative to `products/` — recorded
+    /// on its own because `items` alone would never mention one holding no
+    /// files. An empty directory is not nothing: `scan()` deliberately
+    /// surfaces one with no `product.toml` as `Entry::Broken` so an
+    /// interrupted add can be found and repaired, and that row has to survive
+    /// a move as much as a finished product does.
+    dirs: Vec<PathBuf>,
     pub files: usize,
     pub bytes: u64,
 }
@@ -176,30 +183,81 @@ pub fn vet(from: &Path, to: &Path) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// Strip `.` components and redundant separators without touching the disk.
+/// Resolve `.` and `..` components lexically, without touching the disk.
+///
+/// Used only to decide `Same`/`Inside` before anything is copied, so this
+/// stays lexical on purpose — `canonicalize` resolves symlinks and requires
+/// the path to exist, which `vet`'s own comment already rules out for the
+/// reason given there. Dropping `..` used to leave it in place instead of
+/// resolving it: `/other/../vault/inner` did not lexically `start_with`
+/// `/vault`, so a destination genuinely inside the source slipped past the
+/// `Inside` refusal, and `/vault/x/../y` did `start_with` `/vault` even when
+/// `y` was not really under it, risking a false refusal the other way.
+/// Popping the previous component on a `ParentDir` is what a real filesystem
+/// would do too, provided nothing in between is a symlink — which is exactly
+/// what this function cannot see and does not claim to.
 fn normalise(path: &Path) -> PathBuf {
-    path.components()
-        .filter(|c| !matches!(c, Component::CurDir))
-        .collect()
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Measure what a move would copy, without copying any of it.
 pub fn survey(from: &Path) -> Result<Survey, Failure> {
     let mut items = Vec::new();
+    let mut dirs = Vec::new();
     let mut bytes = 0;
     let products = from.join("products");
     if products.is_dir() {
-        walk(&products, &products, &mut items, &mut bytes)?;
+        walk(&products, &products, &mut items, &mut dirs, &mut bytes, 0)?;
     }
     Ok(Survey {
         files: items.len(),
         bytes,
         items,
+        dirs,
     })
 }
 
+/// How deep `walk` recurses before refusing rather than continuing.
+///
+/// A real product folder is two levels deep (`products/<folder>/<file>`), so
+/// this is generous for anything a person or this app would ever create —
+/// it exists to turn a pathologically nested tree (a hostile or simply
+/// corrupted vault, or one built by a script) into a refusal instead of a
+/// stack overflow, which aborts the whole process rather than just this move.
+const MAX_WALK_DEPTH: u32 = 64;
+
 /// Collect every file under `dir`, recording each path relative to `root`.
-fn walk(root: &Path, dir: &Path, out: &mut Vec<Item>, bytes: &mut u64) -> Result<(), Failure> {
+///
+/// Every directory entered is also recorded in `dirs`, parent before child —
+/// `paths.sort()` guarantees the parent is always visited, and so pushed,
+/// before any child's own `walk` call — even one holding no files, so a
+/// destination can be given the same shape the source had rather than only
+/// the parts of it a file happened to need created.
+fn walk(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<Item>,
+    dirs: &mut Vec<PathBuf>,
+    bytes: &mut u64,
+    depth: u32,
+) -> Result<(), Failure> {
+    if depth > MAX_WALK_DEPTH {
+        return Err(Failure::Read(format!(
+            "{}: nested more than {MAX_WALK_DEPTH} directories deep",
+            dir.display()
+        )));
+    }
+
     let entries = fs::read_dir(dir).map_err(|e| Failure::Read(e.to_string()))?;
     // Sorted, so a move is reproducible and its progress reads in a stable
     // order rather than in whatever order the filesystem hands things back.
@@ -217,7 +275,9 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<Item>, bytes: &mut u64) -> Result
         // recursed into forever.
         let link_meta = fs::symlink_metadata(&path).map_err(|e| Failure::Read(e.to_string()))?;
         if link_meta.is_dir() {
-            walk(root, &path, out, bytes)?;
+            let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            dirs.push(relative);
+            walk(root, &path, out, dirs, bytes, depth + 1)?;
             continue;
         }
 
@@ -415,6 +475,22 @@ fn copy_all(
         detail: e.to_string(),
     })?;
 
+    // Every directory the survey saw, created up front — not just the ones a
+    // file's own parent would imply. `survey.dirs` is parent-before-child
+    // (see `walk`'s own comment), so each of these always has its parent
+    // already in place by the time it is reached, including one that holds
+    // no files: a product folder can be entirely empty (an add interrupted
+    // before its manifest was written, which `scan()` deliberately keeps
+    // visible as `Entry::Broken` rather than hiding, so the user can find and
+    // finish it) and that folder is a real, reportable thing the move must
+    // not silently drop.
+    for relative in &survey.dirs {
+        create_dir_without_following_symlinks(target, relative).map_err(|e| Failure::Write {
+            file: relative.display().to_string(),
+            detail: e.to_string(),
+        })?;
+    }
+
     let mut bytes_done = 0;
     for (index, item) in survey.items.iter().enumerate() {
         let from = source.join(&item.relative);
@@ -579,8 +655,9 @@ fn resurvey(dir: &Path) -> Result<Vec<Item>, Failure> {
         return Ok(Vec::new());
     }
     let mut items = Vec::new();
+    let mut dirs = Vec::new();
     let mut bytes = 0;
-    walk(dir, dir, &mut items, &mut bytes)?;
+    walk(dir, dir, &mut items, &mut dirs, &mut bytes, 0)?;
     Ok(items)
 }
 
@@ -599,11 +676,19 @@ struct State {
     chosen: Option<PathBuf>,
     files: usize,
     bytes: u64,
-    /// A move is in flight. Claimed *before* the picker opens, which is the
-    /// correction `0445eb3` paid for on the export: a flag claimed afterwards
-    /// leaves the action dead for the rest of the session if the dialog is
-    /// cancelled.
+    /// A copy is actually in flight — set only once the user has confirmed,
+    /// never while the picker is merely open. `Relocations::set_lang` reads
+    /// this to decide whether to redraw the in-progress bar or the summary,
+    /// so it must not go true before there is a real move to describe.
     running: bool,
+    /// The native folder picker is open. Claimed *before* the dialog opens
+    /// and released the moment it closes (cancelled or not) — the correction
+    /// `0445eb3` paid for on the export: a flag claimed afterwards leaves the
+    /// action dead for the rest of the session if the dialog is cancelled.
+    /// Kept apart from `running` rather than folded into it, because the
+    /// picker closing is not the same event as a move finishing, and
+    /// `set_lang` above needs to tell those two apart.
+    picking: bool,
     shared: Arc<Mutex<Shared>>,
 }
 
@@ -779,6 +864,7 @@ pub fn install(
         files: 0,
         bytes: 0,
         running: false,
+        picking: false,
         shared: Arc::new(Mutex::new(Shared::default())),
     }));
     let owners = Rc::new(Owners {
@@ -795,8 +881,19 @@ pub fn install(
         let weak = app.as_weak();
         move || {
             let Some(app) = weak.upgrade() else { return };
-            if state.borrow().running {
-                return;
+            {
+                // Claimed here, before the dialog opens rather than once it
+                // returns something — see `picking`'s own doc for why a flag
+                // claimed on the way out leaves this dead until the app
+                // restarts if the dialog gets cancelled. The event loop keeps
+                // running while a native picker is up, so without this a
+                // second click opens a second dialog; whichever one's answer
+                // is handled second would silently win.
+                let mut state = state.borrow_mut();
+                if state.running || state.picking {
+                    return;
+                }
+                state.picking = true;
             }
             let from = state.borrow().paths.vault.clone();
             let title = strings::get(state.borrow().lang, Key::RelocateTitle).to_string();
@@ -806,6 +903,9 @@ pub fn install(
                 let weak = weak.clone();
                 move |chosen| {
                     let Some(app) = weak.upgrade() else { return };
+                    // The dialog has closed either way — give the flag back
+                    // before anything below can return early and strand it.
+                    state.borrow_mut().picking = false;
                     let Some(chosen) = chosen else { return };
 
                     let lang = state.borrow().lang;
@@ -852,7 +952,11 @@ pub fn install(
         move || {
             let Some(app) = weak.upgrade() else { return };
             let mut borrowed = state.borrow_mut();
-            if borrowed.running {
+            // `picking` too: a picker dialog left open in the background (the
+            // OS does not always make it modal to this window) could
+            // otherwise resolve mid-move and overwrite `chosen` out from
+            // under a copy that is already running.
+            if borrowed.running || borrowed.picking {
                 return;
             }
             let Some(to) = borrowed.chosen.clone() else {
@@ -1134,6 +1238,34 @@ mod tests {
         assert_eq!(vet(&from, &to), Ok(()));
     }
 
+    /// `normalise` used to strip `.` but leave `..` in place, so a lexical
+    /// `starts_with` disagreed with what the path actually resolves to. This
+    /// is the direction that missed a real `Inside`: the path never mentions
+    /// the vault by name until the `..` folds back into it.
+    #[test]
+    fn a_dot_dot_path_that_folds_back_inside_the_vault_is_refused() {
+        let base = tempfile::tempdir().unwrap();
+        let from = base.path().join("vault");
+        fs::create_dir_all(&from).unwrap();
+
+        let to = base.path().join("other/../vault/inner");
+        assert_eq!(vet(&from, &to), Err(Refusal::Inside));
+    }
+
+    /// The other direction: a path that lexically *starts with* the vault's
+    /// name only because a `..` had not yet been resolved away, even though
+    /// it does not end up inside the vault at all.
+    #[test]
+    fn a_dot_dot_path_that_folds_back_outside_the_vault_is_not_refused_as_inside() {
+        let base = tempfile::tempdir().unwrap();
+        let from = base.path().join("vault");
+        fs::create_dir_all(&from).unwrap();
+        fs::create_dir_all(base.path().join("elsewhere")).unwrap();
+
+        let to = base.path().join("vault/../elsewhere");
+        assert_eq!(vet(&from, &to), Ok(()));
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_destination_that_is_not_utf8_is_refused_rather_than_mangled() {
@@ -1249,6 +1381,55 @@ mod tests {
                 .join("products/sarj-cihazi/invoice.pdf")
                 .is_file()
         );
+    }
+
+    /// An empty product folder — left by an interrupted add, which `scan()`
+    /// deliberately keeps visible as `Entry::Broken` rather than hiding, so
+    /// the user can find and finish it — has to survive a move as much as a
+    /// finished product does, even though it holds no file for the per-file
+    /// loop to ever create a parent directory for.
+    #[test]
+    fn an_empty_product_folder_survives_the_copy_path() {
+        let from = tempfile::tempdir().unwrap();
+        let to = tempfile::tempdir().unwrap();
+        seed(from.path());
+        fs::create_dir_all(from.path().join("products/interrupted-add")).unwrap();
+
+        let survey = survey(from.path()).unwrap();
+        let (_seen, report) = collector();
+        copy_all(
+            &from.path().join("products"),
+            &to.path().join("products"),
+            &survey,
+            &report,
+        )
+        .expect("the copy must succeed and verify");
+
+        assert!(
+            to.path().join("products/interrupted-add").is_dir(),
+            "an empty product folder must not be silently dropped by the copy path"
+        );
+    }
+
+    /// A pathologically nested tree — a hostile or simply corrupted vault, or
+    /// one built by a script — must be refused rather than overflow the
+    /// worker thread's stack, which would abort the whole process instead of
+    /// just this one move.
+    #[test]
+    fn a_vault_nested_far_deeper_than_any_real_product_folder_is_refused_not_overflowed() {
+        let from = tempfile::tempdir().unwrap();
+        let mut dir = from.path().join("products");
+        fs::create_dir_all(&dir).unwrap();
+        for _ in 0..=MAX_WALK_DEPTH + 1 {
+            dir = dir.join("nested");
+            fs::create_dir(&dir).unwrap();
+        }
+        fs::write(dir.join("invoice.pdf"), b"x").unwrap();
+
+        let Err(failure) = survey(from.path()) else {
+            panic!("a tree this deep must be refused, not walked");
+        };
+        assert!(matches!(failure, Failure::Read(_)), "{failure:?}");
     }
 
     #[test]

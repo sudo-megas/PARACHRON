@@ -7,10 +7,30 @@
 //!
 //! Nothing here may panic on a bad file. Every failure becomes a [`ViewError`]
 //! that `main.rs` renders through the string table.
+//!
+//! What is deliberately *not* here: a memory limit, a render timeout, or
+//! process isolation around MuPDF for a hostile PDF — say, a page whose only
+//! content is a declared 60000×60000 image, which some codec paths decode at
+//! full resolution before anything here gets to downsample it, regardless of
+//! how small the requested output actually is. Checked rather than assumed:
+//! neither the `mupdf` crate nor `mupdf-sys` 0.8.0 binds `fz_new_context`'s
+//! store-size argument, `fz_store`, or any per-image subsampled-decode
+//! control, so the one real lever — capping MuPDF's own allocator — is not
+//! reachable without hand-writing new FFI bindings and the `unsafe` this
+//! codebase has zero of everywhere else. The other real mitigation, running
+//! MuPDF in a separate low-privilege process, is a correctly-sized answer for
+//! a service that opens strangers' files; it is not proportionate for a
+//! single-user offline app whose one attacker-controlled input is a file its
+//! own user chose to import. `rasterize`'s own scale-to-fit matrix already
+//! bounds the *output* pixmap to the caller's requested box regardless of the
+//! source page's declared size — confirmed by reading it, not assumed — so
+//! the residual risk here is a transient memory spike during decode, not an
+//! unbounded stored allocation.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
+use std::time::SystemTime;
 
 use mupdf::pdf::PdfDocument;
 use mupdf::{Colorspace, Document, Matrix};
@@ -164,10 +184,12 @@ impl Renderer {
 
     /// Tell the worker the file at `path` is not what it used to be.
     ///
-    /// Nothing here notices a file changing by itself: the cache is keyed by
-    /// path and size with no modification time, and `ensure_open` reuses the
-    /// open document whenever the path matches. Chron3 writes files into paths
-    /// the viewer may already have seen, so it says so.
+    /// `ensure_open` now notices most of this on its own — every request
+    /// re-stats the file it is about to serve and drops what it had if the
+    /// modification time or length moved — but a write and the next request
+    /// for it are not otherwise ordered, so a caller that knows it just wrote
+    /// through a path the worker may have cached still says so explicitly
+    /// rather than trusting the next stat to land after the write.
     pub fn invalidate(&self, path: &Path) {
         let _ = self.tx.send(Message::Invalidate(path.to_path_buf()));
     }
@@ -214,13 +236,50 @@ struct OpenDocument {
     path: PathBuf,
     document: Document,
     pages: usize,
+    /// What the file looked like from the outside when this was opened, so a
+    /// later request can tell it apart from a file replaced since — see
+    /// [`Stamp`].
+    stamp: Stamp,
+}
+
+/// A cheap, external description of a file's content: not the bytes
+/// themselves, but enough of them changing to prove the bytes did.
+///
+/// A vault folder can be synced by Dropbox/OneDrive/rsync or sit on a network
+/// share (the threat model this module already writes to), and none of those
+/// write through this app — a document already open or cached here can be
+/// replaced by another machine or another program without anything on this
+/// side ever calling [`Renderer::invalidate`]. Comparing this on every
+/// request is what catches that: two stats, no reading, and it costs nothing
+/// on the far more common case where nothing changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+impl Stamp {
+    /// `Missing` on any error, including one that is really "permission
+    /// denied" rather than "gone" — [`open_document`]'s own `path.is_file()`
+    /// check collapses that same distinction, so a request that reaches here
+    /// already has to cope with `Missing` meaning either.
+    fn of(path: &Path) -> Result<Self, ViewError> {
+        let meta = std::fs::metadata(path).map_err(|_| ViewError::Missing)?;
+        Ok(Self {
+            // `None` rather than defaulting to an epoch: a platform that
+            // cannot report a modification time must not make every file
+            // compare equal to every other file it once was.
+            modified: meta.modified().ok(),
+            len: meta.len(),
+        })
+    }
 }
 
 /// Serve one job, from cache when possible.
 fn serve(open: &mut Option<OpenDocument>, cache: &mut Cache, job: Job) -> Response {
     // The page count comes first, because it decides which page is even
     // askable for.
-    let pages = match ensure_open(open, &job.path) {
+    let pages = match ensure_open(open, cache, &job.path) {
         Ok(pages) => pages,
         Err(error) => {
             return Response::Failed {
@@ -286,14 +345,27 @@ fn forget(open: &mut Option<OpenDocument>, cache: &mut Cache, path: &Path) {
     cache.forget(path);
 }
 
-/// Make `open` hold `path`, reusing it when it already does. Returns the page
-/// count.
-fn ensure_open(open: &mut Option<OpenDocument>, path: &Path) -> Result<usize, ViewError> {
+/// Make `open` hold `path`, reusing it when it already does *and* the file on
+/// disk still looks like what was opened. Returns the page count.
+fn ensure_open(
+    open: &mut Option<OpenDocument>,
+    cache: &mut Cache,
+    path: &Path,
+) -> Result<usize, ViewError> {
+    let stamp = Stamp::of(path)?;
+
     if let Some(current) = open.as_ref()
         && current.path == path
+        && current.stamp == stamp
     {
         return Ok(current.pages);
     }
+
+    // Either a different path, or the same path with different bytes behind
+    // it than what is open — treated exactly like an explicit `Invalidate`,
+    // because for a change nobody here made, this stat is the first and only
+    // place that would ever learn of it.
+    forget(open, cache, path);
 
     let document = open_document(path)?;
     let pages = page_count(&document)?;
@@ -301,6 +373,7 @@ fn ensure_open(open: &mut Option<OpenDocument>, path: &Path) -> Result<usize, Vi
         path: path.to_path_buf(),
         document,
         pages,
+        stamp,
     });
     Ok(pages)
 }
@@ -717,6 +790,44 @@ mod tests {
             }
             other => panic!("expected Ready, got {other:?}"),
         }
+    }
+
+    /// The cache and the open document are both keyed off what was read from
+    /// disk when they were populated. Nothing about writing through this
+    /// exact path reaches this module unless the file arrived by an import
+    /// this app performed itself — the stated threat model includes a vault
+    /// synced by Dropbox/OneDrive/rsync, where it does not. This pins that a
+    /// file replaced out from under an already-open document is picked up on
+    /// the very next request, with no explicit `invalidate` call — the same
+    /// stat that decides whether to reuse the open document is what notices.
+    #[test]
+    fn a_file_replaced_on_disk_without_an_explicit_invalidate_is_still_picked_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("watched.pdf");
+        std::fs::copy(fixture("sample.pdf"), &path).unwrap();
+
+        let mut open: Option<OpenDocument> = None;
+        let mut cache = Cache::default();
+        let job = |token| Job {
+            token,
+            path: path.clone(),
+            page: 0,
+            target_width: 100,
+            target_height: 100,
+        };
+
+        let first = serve(&mut open, &mut cache, job(1));
+        assert!(matches!(first, Response::Ready { pages: 1, .. }), "{first:?}");
+
+        // Replaced from outside the app — the same path, different bytes, no
+        // `Invalidate` sent. A sync client does exactly this.
+        std::fs::copy(fixture("multipage.pdf"), &path).unwrap();
+
+        let second = serve(&mut open, &mut cache, job(2));
+        assert!(
+            matches!(second, Response::Ready { pages: 3, .. }),
+            "must reopen the replaced file rather than serve the old page count: {second:?}"
+        );
     }
 
     #[test]

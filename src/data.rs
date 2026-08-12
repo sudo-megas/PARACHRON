@@ -157,10 +157,35 @@ impl Paths {
     /// default is created because its parent is the platform's own data
     /// directory, which exists on any machine that has a home at all, and
     /// creating it on first run is what Parachron has always done.
+    ///
+    /// For a configured vault, only `products` itself is ever created, and
+    /// only with `create_dir` rather than `create_dir_all`. The check above
+    /// and this call are not one atomic step — a drive can still unmount in
+    /// between, a window as narrow as it is real on a machine that was just
+    /// started — and `create_dir_all` cannot tell "the vault is still there
+    /// and just needs its `products/` folder" apart from "the vault just
+    /// vanished", in which case it would happily rebuild the whole chain,
+    /// vault included, on whatever filesystem is under the mount point: the
+    /// exact hazard this function exists to refuse, reintroduced one call
+    /// later. `create_dir` cannot rebuild an ancestor that is not there.
     pub fn ensure(&self) -> Result<(), DataError> {
-        if self.configured && !self.vault.is_dir() {
-            return Err(DataError::VaultMissing(self.vault.display().to_string()));
+        if self.configured {
+            if !self.vault.is_dir() {
+                return Err(DataError::VaultMissing(self.vault.display().to_string()));
+            }
+            return match fs::create_dir(&self.products) {
+                Ok(()) => Ok(()),
+                // The ordinary case after a first run: `products` is already
+                // there, which `create_dir_all` would also treat as success.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists
+                    && self.products.is_dir() =>
+                {
+                    Ok(())
+                }
+                Err(e) => Err(DataError::Unreadable(e.to_string())),
+            };
         }
+
         fs::create_dir_all(&self.products).map_err(|e| DataError::Unreadable(e.to_string()))
     }
 }
@@ -471,7 +496,18 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<(), DataError> {
 
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let tmp = dir.join(format!(".{name}.tmp"));
+    // Unique per call, not just per target file: two writers racing on the
+    // same fixed `.{name}.tmp` — two Parachron instances open on the same
+    // synced vault, nothing here prevents that — could have one's
+    // `File::create` truncate the other's still-being-written temporary out
+    // from under it, and the rename that followed would publish whichever
+    // writer finished last as if it were whole. Process id plus a
+    // never-repeating counter is enough to keep concurrent writers apart
+    // without reaching for a dependency for something this small; the file
+    // being replaced is still only ever touched by the final `rename`.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.{}.{unique}.tmp", std::process::id()));
 
     // Leaving a temporary behind would be litter in somebody's product folder,
     // so every failure below clears up after itself.
@@ -720,6 +756,49 @@ mod tests {
 
         paths.ensure().expect("the default vault is created");
         assert!(paths.products.is_dir());
+    }
+
+    /// The ordinary case for a configured vault: `vault` exists but has never
+    /// held a `products/` folder before (a fresh drive, or one just pointed
+    /// at for the first time). `ensure()` must still create it — the guard
+    /// above only refuses a vault that is *missing*, not one that has simply
+    /// not been used yet — and now does so with `create_dir` rather than
+    /// `create_dir_all`, which this pins by name as much as by behaviour.
+    #[test]
+    fn a_configured_vault_gets_its_products_folder_created_on_first_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().join("mnt/ironwolf/parachron");
+        fs::create_dir_all(&vault).unwrap();
+
+        let paths =
+            Paths::for_test(dir.path().join("data")).with_vault(Some(vault.to_str().unwrap()));
+
+        paths
+            .ensure()
+            .expect("a vault that exists must get its products folder");
+        assert!(paths.products.is_dir());
+    }
+
+    /// A second launch against the same configured vault: `products/` is
+    /// already there. `create_dir` alone fails with `AlreadyExists` on
+    /// this — the case `ensure()` has to go on treating as success, the same
+    /// as `create_dir_all` always did, or every ordinary relaunch would
+    /// report the ready vault it just found as an error.
+    #[test]
+    fn a_configured_vault_whose_products_folder_already_exists_is_still_a_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().join("mnt/ironwolf/parachron");
+        fs::create_dir_all(vault.join("products")).unwrap();
+
+        let paths =
+            Paths::for_test(dir.path().join("data")).with_vault(Some(vault.to_str().unwrap()));
+
+        paths
+            .ensure()
+            .expect("an already-existing products folder is not an error");
+        paths
+            .ensure()
+            .expect("ensure must be idempotent across repeated launches");
     }
 
     /// **The test this milestone turns on.**
@@ -1086,6 +1165,51 @@ last_checked = 2026-07-01
             "the good copy",
             "an unrelated failure must not touch what was already written"
         );
+        let strays: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(strays.is_empty(), "temporary left behind: {strays:?}");
+    }
+
+    /// Two writers racing on the same target file used to race on the same
+    /// fixed temporary too — see `write_atomic`'s own comment. With that
+    /// shared path, one writer's `File::create` can truncate the other's
+    /// still-being-written temporary, and the rename that follows publishes
+    /// whichever half-written bytes were left. With a temp name unique per
+    /// call, the two can never collide: whichever writer's rename lands
+    /// last, what is on disk afterward is always one writer's *complete*
+    /// content, never a mix of the two and never a partial write.
+    #[test]
+    fn two_writers_racing_on_the_same_file_never_produce_a_mixed_or_partial_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("product.toml");
+
+        // Large enough, and different enough, that a byte-level splice
+        // between the two would be visible rather than coincidentally still
+        // looking like one of them.
+        let a = "A".repeat(200_000);
+        let b = "B".repeat(200_000);
+
+        let path_a = path.clone();
+        let content_a = a.clone();
+        let handle = std::thread::spawn(move || write_atomic(&path_a, &content_a));
+
+        let result_b = write_atomic(&path, &b);
+        let result_a = handle.join().unwrap();
+        assert!(
+            result_a.is_ok() && result_b.is_ok(),
+            "{result_a:?} / {result_b:?}"
+        );
+
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk == a || on_disk == b,
+            "the file must hold exactly one writer's complete content, never a mix of the two"
+        );
+
         let strays: Vec<_> = fs::read_dir(dir.path())
             .unwrap()
             .flatten()
