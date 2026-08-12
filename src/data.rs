@@ -48,6 +48,18 @@ pub enum DataError {
     /// on "`/mnt/ironwolf/parachron` is not there" and cannot act on "no
     /// products found".
     VaultMissing(String),
+    /// `config.toml` names a vault by a relative path.
+    ///
+    /// Every `vault` key this app has ever written came from a folder picker,
+    /// which always hands back an absolute path — so a relative one is always
+    /// a hand-edited (or otherwise foreign) file. Resolving it would mean
+    /// resolving against the process's current directory, which depends on
+    /// how Parachron happened to be launched (a terminal, a desktop entry, an
+    /// autostart entry all differ) and can silently land on a real, unrelated
+    /// directory instead of failing loudly. So this is refused rather than
+    /// guessed at, the same way a missing vault is refused rather than
+    /// defaulted.
+    VaultNotAbsolute(String),
     /// `config.toml` itself could not be parsed, so the vault it names is
     /// unknown (Chron9).
     ///
@@ -181,6 +193,11 @@ impl Paths {
     /// later. `create_dir` cannot rebuild an ancestor that is not there.
     pub fn ensure(&self) -> Result<(), DataError> {
         if self.configured {
+            if !self.vault.is_absolute() {
+                return Err(DataError::VaultNotAbsolute(
+                    self.vault.display().to_string(),
+                ));
+            }
             if !self.vault.is_dir() {
                 return Err(DataError::VaultMissing(self.vault.display().to_string()));
             }
@@ -826,6 +843,32 @@ mod tests {
             .ensure()
             .expect("a vault that exists must get its products folder");
         assert!(paths.products.is_dir());
+    }
+
+    /// A hand-edited `config.toml` naming a relative vault path. Every path
+    /// this app has ever written came from a folder picker and is absolute,
+    /// so a relative one only reaches here by hand-editing — and resolving it
+    /// against the process's current directory would land on whatever
+    /// happens to sit at that relative location under wherever Parachron was
+    /// launched from, silently, which is exactly the kind of wrong-directory
+    /// hazard [`Paths::ensure`] already refuses for a missing configured
+    /// vault. It must be refused the same way, not resolved.
+    #[test]
+    fn a_relative_configured_vault_is_refused_not_resolved_against_the_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::for_test(dir.path().join("data")).with_vault(Some("relative/vault"));
+
+        let failure = paths
+            .ensure()
+            .expect_err("a relative vault path must be refused");
+        assert!(
+            matches!(&failure, DataError::VaultNotAbsolute(named) if named == "relative/vault"),
+            "the message must name the path so a user can act on it: {failure:?}"
+        );
+        assert!(
+            !paths.products.exists(),
+            "nothing must be created against a refused relative path"
+        );
     }
 
     /// A second launch against the same configured vault: `products/` is
