@@ -17,6 +17,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::data;
+
 /// Window geometry the app opens at before the user has resized anything.
 /// Comfortably above the 1000×700 floor CORE §4 sets.
 const DEFAULT_WIDTH: u32 = 1280;
@@ -142,15 +144,55 @@ impl Config {
 
     /// Write `config.toml`. Returns the OS message on failure so the caller can
     /// report it — a config that will not save must not take the app down.
+    ///
+    /// Routed through [`data::write_atomic`] rather than a plain `fs::write`,
+    /// which is what every product manifest already goes through and for the
+    /// same reason: `fs::write` truncates the existing file before it writes a
+    /// single byte of the new one, so an interruption between the two — and
+    /// `save` runs during shutdown, exactly when a machine is likeliest to be
+    /// powered off or a session killed — used to leave `config.toml` empty or
+    /// half-written. That file holds the `vault` key: the only pointer to
+    /// where the user's documents are, not just a theme.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let text = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(path, text).map_err(|e| e.to_string())
+        data::write_atomic(path, &text).map_err(|e| match e {
+            data::DataError::Unreadable(detail) => detail,
+            other => format!("{other:?}"),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `save` is now the same atomic write every product manifest already uses:
+    /// this pins that the round trip still works, and that it leaves no
+    /// `.config.toml.tmp` litter behind — the temp file `write_atomic` cleans up
+    /// on success, unlike the old `fs::write` which never created one at all
+    /// but also never protected the file it wrote either.
+    #[test]
+    fn save_round_trips_through_load_and_leaves_no_temporary_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let config = Config {
+            lang: "tr".to_string(),
+            vault: Some("/mnt/ironwolf/parachron".to_string()),
+            ..Config::default()
+        };
+        config.save(&path).expect("a fresh config.toml must save");
+
+        assert_eq!(Config::load(&path).unwrap(), config);
+
+        let strays: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .filter(|name| name != "config.toml")
+            .collect();
+        assert!(strays.is_empty(), "temporary left behind: {strays:?}");
+    }
 
     #[test]
     fn defaults_match_core() {
