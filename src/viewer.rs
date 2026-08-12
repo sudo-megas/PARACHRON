@@ -13,7 +13,7 @@ use slint::{
 };
 
 use crate::data::Product;
-use crate::render::{Renderer, Response, ViewError};
+use crate::render::{self, Renderer, Response, ViewError};
 use crate::strings::{self, Key, Lang};
 use crate::{AppWindow, DocTab};
 
@@ -342,6 +342,15 @@ impl Viewer {
         self.renderer.invalidate(path);
     }
 
+    /// A cloneable handle for invalidating a path from another thread — see
+    /// [`render::Renderer::invalidator`]. `import::run` uses this to release
+    /// the worker's open handle on a file *before* deleting it, rather than
+    /// after, which on Windows is the difference between an ordinary delete
+    /// and a sharing violation.
+    pub fn invalidator(&self) -> render::Invalidator {
+        self.renderer.invalidator()
+    }
+
     /// Chron6. Nothing is re-pushed here: the error text on screen was composed
     /// from a `ViewError` this module no longer holds — only the window property
     /// does — so re-translating it means re-planning, which the vault's own
@@ -607,10 +616,17 @@ fn receive(app: &AppWindow, state: &Arc<Mutex<State>>, response: Response) {
             if token != current {
                 return;
             }
+            // Defensive, not load-bearing: `render::serve` already reports the
+            // page it actually rasterized rather than the one requested, but
+            // the window must never be told an index the state has rejected —
+            // clamped once here and used for every property below, so the two
+            // cannot drift apart the way they did when this only clamped
+            // `state.page` and pushed the unclamped `page` to the UI.
+            let page = page.min(pages.saturating_sub(1));
             {
                 let mut state = state.lock().unwrap();
                 state.pages = pages;
-                state.page = page.min(pages.saturating_sub(1));
+                state.page = page;
             }
 
             let scale = app.window().scale_factor().max(0.1);

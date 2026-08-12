@@ -171,11 +171,39 @@ impl Renderer {
     pub fn invalidate(&self, path: &Path) {
         let _ = self.tx.send(Message::Invalidate(path.to_path_buf()));
     }
+
+    /// A cheap, cloneable handle that can invalidate a path without the
+    /// ownership `Renderer` itself carries.
+    ///
+    /// Deliberately not `#[derive(Clone)]` on `Renderer`: its `Drop` sends
+    /// `Shutdown`, so a second owner able to drop independently would stop the
+    /// worker out from under the first the moment it went out of scope. This
+    /// wraps the same channel without that ownership, for callers — like a
+    /// background commit thread that wants to invalidate a path *before*
+    /// deleting it — that have no business starting or stopping the worker.
+    pub fn invalidator(&self) -> Invalidator {
+        Invalidator {
+            tx: self.tx.clone(),
+        }
+    }
 }
 
 impl Drop for Renderer {
     fn drop(&mut self) {
         let _ = self.tx.send(Message::Shutdown);
+    }
+}
+
+/// See [`Renderer::invalidator`].
+#[derive(Debug, Clone)]
+pub struct Invalidator {
+    tx: Sender<Message>,
+}
+
+impl Invalidator {
+    /// Same message, same worker, as [`Renderer::invalidate`].
+    pub fn invalidate(&self, path: &Path) {
+        let _ = self.tx.send(Message::Invalidate(path.to_path_buf()));
     }
 }
 
@@ -234,7 +262,7 @@ fn serve(open: &mut Option<OpenDocument>, cache: &mut Cache, job: Job) -> Respon
             cache.insert(key, raster.clone());
             Response::Ready {
                 token: job.token,
-                page: job.page,
+                page,
                 pages,
                 raster,
             }
@@ -427,32 +455,55 @@ pub fn rasterize(
         .to_pixmap(&matrix, &Colorspace::device_rgb(), false, true)
         .map_err(|e| ViewError::RenderFailed(e.to_string()))?;
 
-    Ok(to_rgba(&pixmap))
+    to_rgba(&pixmap)
 }
 
 /// Copy a pixmap into tightly packed RGBA, honouring its row stride.
-fn to_rgba(pixmap: &mupdf::Pixmap) -> Raster {
+///
+/// MuPDF is trusted to hand back a `samples()` buffer that actually holds
+/// `height * stride` bytes for the `width`/`height`/`stride`/`n` it also
+/// reports — but that trust is exactly what a crafted or corrupt PDF gets to
+/// test, several layers of C parsing away from this. Indexing on the
+/// strength of the reported numbers alone, without checking them against the
+/// buffer that came with them, turns any mismatch into a panic — and this
+/// runs on the one render worker thread every open document shares, so a
+/// single bad page takes all of them down with it, not just itself.
+fn to_rgba(pixmap: &mupdf::Pixmap) -> Result<Raster, ViewError> {
+    let malformed = || {
+        ViewError::RenderFailed(
+            "the page came back with a size that does not match its data".to_string(),
+        )
+    };
+
     let width = pixmap.width();
     let height = pixmap.height();
     let components = pixmap.n() as usize;
     let stride = pixmap.stride().unsigned_abs();
     let samples = pixmap.samples();
 
+    let row_bytes = (width as usize)
+        .checked_mul(components)
+        .ok_or_else(malformed)?;
+    let needed = (height as usize).checked_mul(stride).ok_or_else(malformed)?;
+    if components == 0 || row_bytes > stride || samples.len() < needed {
+        return Err(malformed());
+    }
+
     let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
     for y in 0..height as usize {
         let row_start = y * stride;
-        let row = &samples[row_start..row_start + width as usize * components];
+        let row = &samples[row_start..row_start + row_bytes];
         for pixel in row.chunks_exact(components) {
             let alpha = if components >= 4 { pixel[3] } else { 255 };
             rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], alpha]);
         }
     }
 
-    Raster {
+    Ok(Raster {
         width,
         height,
         rgba,
-    }
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -629,6 +680,43 @@ mod tests {
     fn a_zero_page_file_never_reaches_a_page_index() {
         let doc = open_document(&fixture("zero-page.pdf")).expect("it is a valid pdf");
         assert_eq!(page_count(&doc), Err(ViewError::NoPages));
+    }
+
+    /// `serve()` clamps the page it rasterizes when the request is past the
+    /// end of the document, and the response must report *that* page — not
+    /// the one that was asked for — on both the freshly-rasterized path and
+    /// the cache-hit path, or the UI's counter and its clamped state disagree.
+    #[test]
+    fn serve_reports_the_page_it_actually_rendered_not_the_one_requested() {
+        let mut open: Option<OpenDocument> = None;
+        let mut cache = Cache::default();
+        let job = Job {
+            token: 1,
+            path: fixture("sample.pdf"),
+            page: 7,
+            target_width: 100,
+            target_height: 100,
+        };
+
+        let first = serve(&mut open, &mut cache, job.clone());
+        match first {
+            Response::Ready { page, pages, .. } => {
+                assert_eq!(pages, 1);
+                assert_eq!(page, 0, "a 1-page document must clamp page 7 to page 0");
+            }
+            other => panic!("expected Ready, got {other:?}"),
+        }
+
+        // Repeat the identical request: this hits the cache-key-under-the-
+        // clamped-page branch, which must agree with the miss branch above.
+        let second = serve(&mut open, &mut cache, job);
+        match second {
+            Response::Ready { page, pages, .. } => {
+                assert_eq!(pages, 1);
+                assert_eq!(page, 0);
+            }
+            other => panic!("expected Ready, got {other:?}"),
+        }
     }
 
     #[test]

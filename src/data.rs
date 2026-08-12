@@ -11,7 +11,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -280,6 +280,34 @@ pub fn scan(products: &Path) -> Vec<Entry> {
     entries
 }
 
+/// Whether a manifest-supplied `pdfs` entry is safe to join onto a product's
+/// directory.
+///
+/// `import::run` only ever writes a bare file name (`destination_name`), so a
+/// legitimate entry is exactly one `Normal` path component. A vault is a plain
+/// folder that outlives the app (CORE §3), so `product.toml` is not a trusted
+/// input: a hand-edited or foreign-written manifest can carry `..` or an
+/// absolute path in `pdfs`. Every consumer of [`Product::pdfs`] — the viewer's
+/// tab paths, the exporter's source list, the editor's removal list — joins
+/// these names straight onto a directory with [`Path::join`], which does not
+/// confine a `..` and is *replaced entirely* by an absolute path. Filtering
+/// once here is what keeps every one of those joins inside the product folder
+/// instead of repeating the check at each call site.
+///
+/// Checked structurally (component count) rather than only by character, since
+/// `Path::components()` already knows what counts as a separator or a prefix
+/// on the platform Parachron is actually running on; the explicit `/`/`\`
+/// check on top of it is what stops a `\`-separated Windows traversal string
+/// written into a manifest on Linux (where `\` is not a separator) from
+/// surviving unmolested into a vault that later opens on Windows, where it is.
+fn is_safe_pdf_name(name: &str) -> bool {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
+        return false;
+    }
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
 /// Parse and validate one product folder.
 fn load(dir: &Path, folder: &str) -> Result<Product, DataError> {
     let manifest = dir.join("product.toml");
@@ -291,12 +319,19 @@ fn load(dir: &Path, folder: &str) -> Result<Product, DataError> {
     let raw: Manifest =
         toml::from_str(&text).map_err(|e| DataError::Malformed(first_line(&e.to_string())))?;
 
+    // A `pdfs` entry that is not a bare file name is never something the app
+    // wrote and must never be joined onto `dir`. It is folded into
+    // `missing_pdfs` rather than dropped outright, so it is still reported —
+    // CORE §3's "broken is shown, never hidden" — just never opened.
+    let (pdfs, unsafe_pdfs): (Vec<String>, Vec<String>) =
+        raw.pdfs.into_iter().partition(|name| is_safe_pdf_name(name));
+
     // Files the manifest promises but the folder does not hold.
-    let missing_pdfs: Vec<String> = raw
-        .pdfs
+    let missing_pdfs: Vec<String> = pdfs
         .iter()
         .filter(|name| !dir.join(name).is_file())
         .cloned()
+        .chain(unsafe_pdfs)
         .collect();
 
     Ok(Product {
@@ -308,7 +343,7 @@ fn load(dir: &Path, folder: &str) -> Result<Product, DataError> {
         warranty_start: to_date(&raw.warranty_start, "warranty_start")?,
         warranty_end: to_date(&raw.warranty_end, "warranty_end")?,
         added: to_date(&raw.added, "added")?,
-        pdfs: raw.pdfs,
+        pdfs,
         missing_pdfs,
         extra: raw.extra,
     })
@@ -495,9 +530,14 @@ fn fold(ch: char) -> Option<char> {
 }
 
 /// Windows reserves these as device names and refuses to create a directory
-/// using one. CORE §7 ships a Windows binary, so a vault that syncs onto one
-/// must not contain a folder it cannot open.
-fn is_reserved(slug: &str) -> bool {
+/// or a file using one, regardless of extension. CORE §7 ships a Windows
+/// binary, so a vault that syncs onto one must not contain a folder — or,
+/// per `import::destination_name`, a file — it cannot open. `slug` must
+/// already be lowercase; callers with mixed-case input fold it themselves,
+/// so a folder name (already lowercase by construction) and a file stem
+/// (folded only for this check, so its displayed case is untouched) can
+/// share one comparison.
+pub(crate) fn is_reserved(slug: &str) -> bool {
     const RESERVED: [&str; 24] = [
         "con", "prn", "aux", "nul", "com0", "com1", "com2", "com3", "com4", "com5", "com6", "com7",
         "com8", "com9", "lpt0", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8",
@@ -1086,6 +1126,54 @@ last_checked = 2026-07-01
             product.missing_pdfs.is_empty(),
             "the file is on disk, so nothing is missing"
         );
+    }
+
+    /// A manifest this app did not write can name anything it likes in `pdfs`
+    /// — `..` traversal, an absolute path, a Windows drive or UNC form. None of
+    /// that may ever reach a [`Path::join`] in the viewer, the exporter or the
+    /// editor's removal list; it must come back folded into `missing_pdfs`
+    /// instead, exactly like a name that is simply not on disk.
+    #[test]
+    fn manifest_pdfs_entries_that_are_not_bare_file_names_are_treated_as_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let products = dir.path().join("products");
+        let home = products.join("monitor");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("invoice.pdf"), b"%PDF-1.4\n").unwrap();
+
+        // A file that genuinely sits outside the product folder, so a
+        // traversal that "worked" would be observable in the test.
+        fs::write(dir.path().join("secret.pdf"), b"%PDF-1.4\n").unwrap();
+
+        let manifest = r#"
+name = "Monitor"
+serial = ""
+link = ""
+purchase_date = 2026-01-01
+warranty_start = 2026-01-01
+warranty_end = 2027-01-01
+added = 2026-01-01
+pdfs = ["invoice.pdf", "../../secret.pdf", "/etc/passwd", "..", "."]
+"#;
+        fs::write(home.join("product.toml"), manifest).unwrap();
+
+        let entries = scan(&products);
+        assert_eq!(entries.len(), 1);
+        let Entry::Ok(product) = &entries[0] else {
+            panic!("a manifest with a bad pdfs entry must still parse: {:?}", entries[0]);
+        };
+
+        assert_eq!(
+            product.pdfs,
+            vec!["invoice.pdf".to_string()],
+            "only the bare, on-disk file name may survive into Product::pdfs"
+        );
+        for bad in ["../../secret.pdf", "/etc/passwd", "..", "."] {
+            assert!(
+                product.missing_pdfs.iter().any(|m| m == bad),
+                "{bad:?} must be reported as missing rather than silently dropped"
+            );
+        }
     }
 
     /// A crash between copying the PDFs and writing the manifest has to leave
