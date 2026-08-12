@@ -248,6 +248,12 @@ export component AppWindow inherits Window {
     // reads them back when Save is pressed. Everything else is pushed from
     // Rust, already composed — the `.slint` side works out no messages of its
     // own.
+    /// False when the vault could not be resolved at startup at all — no home
+    /// directory, an unreadable `config.toml`, or a configured vault that is
+    /// not there. There is no `products/` for an add to write into, and
+    /// without this the button stayed live and let a save land relative to
+    /// wherever the process happened to be launched from instead.
+    in property <bool> vault-ready: true;
     in property <bool> form-open;
     in property <string> form-heading;
     in-out property <string> form-name;
@@ -462,6 +468,7 @@ export component AppWindow inherits Window {
                 add-button := Btn {
                     label: Strings.action-add-document;
                     y: (parent.height - self.height) / 2;
+                    enabled: root.vault-ready;
                     clicked => {
                         root.menu-open = false;
                         root.add-document();
@@ -1008,6 +1015,7 @@ export component AppWindow inherits Window {
 
                 menu-add := MenuRow {
                     label: Strings.action-add-document;
+                    enabled: root.vault-ready;
                     clicked => {
                         root.menu-open = false;
                         root.add-document();

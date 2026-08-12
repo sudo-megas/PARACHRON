@@ -85,6 +85,11 @@ fn main() -> Result<(), slint::PlatformError> {
         .as_ref()
         .map(|paths| paths.products.clone())
         .unwrap_or_default();
+    // `import::run` refuses on its own when `products_root` is not absolute,
+    // which is what actually stops a save from landing in the process's
+    // working directory. This is the other half: disabling Add Document so
+    // nobody reaches that refusal by clicking the ordinary button.
+    app.set_vault_ready(paths.is_some());
 
     // Column 2. Kept alive for the life of the window — dropping it stops the
     // render thread.

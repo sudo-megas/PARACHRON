@@ -11,13 +11,24 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::AppWindow;
 use crate::data::{self, DataError, Draft};
-use crate::render::{self, ViewError};
+use crate::render::{self, Invalidator, ViewError};
 
 /// File name for a picked file whose own name is unusable.
 const FILE_FALLBACK: &str = "document";
+
+/// Conservative upper bound on a file stem, in bytes, so `stem + "-9999" +
+/// extension` stays well under Windows' 260-character `MAX_PATH` (even after
+/// the vault's own path prefix) and ext4's 255-byte `NAME_MAX`.
+const STEM_MAX: usize = 100;
+
+/// How many times an add retries claiming a fresh product folder, or a copy
+/// retries a fresh file name, when the one it picked turns out to already
+/// exist. Bounded so a pathological vault fails loudly rather than looping.
+const MAX_COLLISION_ATTEMPTS: u32 = 20;
 
 /// What a commit did, or why it did not.
 #[derive(Debug)]
@@ -46,6 +57,13 @@ pub struct Job {
     pub imports: Vec<(PathBuf, String)>,
     /// Copies to delete, by file name.
     pub removals: Vec<String>,
+    /// Lets a removal ask the render worker to drop its open handle on a file
+    /// before it is deleted, rather than after. `None` in tests that have no
+    /// render worker running; every production caller has a real [`Viewer`]
+    /// and always provides one.
+    ///
+    /// [`Viewer`]: crate::viewer::Viewer
+    pub invalidator: Option<Invalidator>,
 }
 
 /// Ask for PDFs. `done` runs on the UI thread with whatever was chosen, which
@@ -98,8 +116,29 @@ pub fn commit(job: Job, slot: Arc<Mutex<Option<Outcome>>>, weak: slint::Weak<App
 /// shows up in the list, and can be finished by hand. Editing writes the
 /// manifest before deleting anything, so an interrupted edit leaves an unlisted
 /// orphan file rather than a manifest pointing at something that is gone.
+///
+/// An add additionally undoes the folder it created on any later failure
+/// (copy, manifest write): a folder this call created and could not finish is
+/// nobody's data yet, and leaving it behind is exactly the permanent broken
+/// row — multiplied on every retry — that "scans as broken... and can be
+/// finished by hand" above used to require of a user for an ordinary failure
+/// like a full disk, not just a crash.
 pub fn run(job: Job) -> Outcome {
     let unreadable = |e: std::io::Error| DataError::Unreadable(e.to_string());
+
+    // `main` hands out an empty `products_root` when the vault could not be
+    // opened at all (no home directory, a `config.toml` that will not parse,
+    // a configured vault that is not mounted) — see `main::open_vault`. An
+    // empty path is relative, and joining a folder name onto it does not
+    // fail, it just points *into the process's current working directory*,
+    // wherever a desktop entry or shell happened to launch this from. This is
+    // the one check that holds regardless of whether the UI remembered to
+    // disable Add Document for that state.
+    if !job.products_root.is_absolute() {
+        return Outcome::Failed(DataError::Unreadable(
+            "no vault is open".to_string(),
+        ));
+    }
 
     for (source, name) in &job.imports {
         if let Err(reason) = inspect(source) {
@@ -111,34 +150,95 @@ pub fn run(job: Job) -> Outcome {
     }
 
     let adding = job.folder.is_none();
-    let folder = match &job.folder {
+    let mut folder = match &job.folder {
         Some(folder) => folder.clone(),
         None => data::unique_folder(&job.products_root, &data::folder_slug(&job.draft.name)),
     };
-    let home = job.products_root.join(&folder);
+    let mut home = job.products_root.join(&folder);
 
-    if adding && let Err(e) = fs::create_dir_all(&home) {
-        return Outcome::Failed(unreadable(e));
+    // Whether *this* call created `home`, so a failure below can clean up
+    // after itself and so a caller can tell a fresh add from an edit.
+    let mut created = false;
+
+    if adding {
+        // `unique_folder`'s answer is a snapshot of the directory, not a lock
+        // on a name — a second Parachron instance, or a sync client
+        // materialising another machine's folder, can create the same name in
+        // the window between that check and this one. `fs::create_dir` (not
+        // `create_dir_all`) is what makes the race detectable: it fails with
+        // `AlreadyExists` instead of silently succeeding against — and about
+        // to write into — a folder this call does not own. `home` must
+        // already have an existing parent (the vault's `products/`), so
+        // `create_dir` is also what refuses to resurrect a vanished vault
+        // directory the way `create_dir_all` would.
+        for attempt in 0..MAX_COLLISION_ATTEMPTS {
+            match fs::create_dir(&home) {
+                Ok(()) => {
+                    created = true;
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if attempt + 1 == MAX_COLLISION_ATTEMPTS {
+                        return Outcome::Failed(unreadable(e));
+                    }
+                    folder =
+                        data::unique_folder(&job.products_root, &data::folder_slug(&job.draft.name));
+                    home = job.products_root.join(&folder);
+                }
+                Err(e) => return Outcome::Failed(unreadable(e)),
+            }
+        }
     }
 
     let mut invalidate = Vec::new();
     for (source, name) in &job.imports {
-        let destination = home.join(name);
-        if let Err(e) = fs::copy(source, &destination) {
-            return Outcome::Failed(unreadable(e));
+        match copy_into(source, &home, name) {
+            Ok(destination) => invalidate.push(destination),
+            Err(e) => {
+                if created {
+                    let _ = fs::remove_dir_all(&home);
+                }
+                return Outcome::Failed(unreadable(e));
+            }
         }
-        invalidate.push(destination);
     }
 
     if let Err(reason) = data::write_manifest(&home, &job.draft.manifest()) {
+        if created {
+            let _ = fs::remove_dir_all(&home);
+        }
         return Outcome::Failed(reason);
     }
 
     for name in &job.removals {
         let path = home.join(name);
-        // A copy that will not delete is an orphan, not a failure worth
-        // undoing a good save for. The manifest no longer lists it either way.
-        let _ = fs::remove_file(&path);
+        // The render worker may still hold this exact file open from the
+        // viewer's last render of it. Invalidating first asks it to drop that
+        // handle before the delete is attempted rather than after — after is
+        // what the outcome used to do, once this had already crossed back to
+        // the UI thread and further still to the render worker's own queue,
+        // a much longer window than sending it from right here.
+        if let Some(invalidator) = &job.invalidator {
+            invalidator.invalidate(&path);
+        }
+        if fs::remove_file(&path).is_err() {
+            // The worker processes its queue on its own thread, so there is
+            // no guarantee it has already released the handle. One short
+            // retry covers the ordinary race without turning a delete that
+            // will never succeed into a hang.
+            std::thread::sleep(Duration::from_millis(30));
+            if let Err(e) = fs::remove_file(&path) {
+                // A copy that will not delete is an orphan, not a failure
+                // worth undoing a good save for — the manifest no longer
+                // lists it either way — but it is not nothing either: this is
+                // the one place that outcome is worth a word, since the
+                // sheet's own UI already told the user the document was gone.
+                eprintln!(
+                    "parachron: could not delete {} ({e}); the copy remains in the vault folder",
+                    path.display()
+                );
+            }
+        }
         invalidate.push(path);
     }
 
@@ -157,6 +257,56 @@ fn inspect(path: &Path) -> Result<(), ViewError> {
     Ok(())
 }
 
+/// Copy `source` into `home` under `name`, never overwriting a file that is
+/// already there.
+///
+/// `destination_name` already avoided every name the editor knew about at the
+/// moment the file was picked, but that list is a snapshot: it does not see a
+/// name the disk gains afterward — the same name arriving on a case- or
+/// normalisation-insensitive filesystem, a second Parachron instance, a sync
+/// client, or simply the time the sheet sat open between the pick and this
+/// Save. An exclusive create is what actually enforces "never overwrite" —
+/// `fs::copy` would truncate a same-named file that already exists — and
+/// numbering a fresh name on a collision, the same way `destination_name`
+/// does, turns a stale snapshot into a retry instead of a silent loss.
+fn copy_into(source: &Path, home: &Path, name: &str) -> std::io::Result<PathBuf> {
+    let (stem, extension) = split_stem(name);
+    let mut candidate = name.to_string();
+
+    for attempt in 2..2 + MAX_COLLISION_ATTEMPTS {
+        let destination = home.join(&candidate);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&destination)
+        {
+            Ok(mut file) => {
+                let mut input = fs::File::open(source)?;
+                std::io::copy(&mut input, &mut file)?;
+                return Ok(destination);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                candidate = format!("{stem}-{attempt}{extension}");
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("no free name for {name} after {MAX_COLLISION_ATTEMPTS} attempts"),
+    ))
+}
+
+/// Split "stem.ext" into ("stem", ".ext"), the same way a numbered collision
+/// is built both in [`destination_name`] and in [`copy_into`]'s retry.
+fn split_stem(name: &str) -> (String, String) {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
+        _ => (name.to_string(), String::new()),
+    }
+}
+
 /// A file name that is safe to write into a product folder and is not already
 /// taken by one of `taken`.
 ///
@@ -170,11 +320,13 @@ pub fn destination_name(source: &Path, taken: &[String]) -> String {
         .unwrap_or_default();
 
     // `file_name` has already dropped any directory part; this is about what a
-    // file name may contain, not about where it came from.
-    let cleaned: String = raw
-        .chars()
-        .filter(|c| !c.is_control() && !matches!(c, '/' | '\\'))
-        .collect();
+    // file name may contain, not about where it came from. The character set
+    // matches `data::folder_slug`'s Windows-safety pass — CORE §7 ships a
+    // Windows binary, and a vault that syncs onto one must not contain a file
+    // it cannot open any more than a folder it cannot open — rather than only
+    // the two characters that would otherwise break a path.
+    const ILLEGAL: [char; 9] = ['/', '\\', ':', '?', '*', '<', '>', '|', '"'];
+    let cleaned: String = raw.chars().filter(|c| !c.is_control() && !ILLEGAL.contains(c)).collect();
     let cleaned = cleaned.trim().trim_matches('.').trim().to_string();
     let cleaned = if cleaned.is_empty() {
         format!("{FILE_FALLBACK}.pdf")
@@ -182,18 +334,44 @@ pub fn destination_name(source: &Path, taken: &[String]) -> String {
         cleaned
     };
 
-    if !taken.iter().any(|name| name == &cleaned) {
+    let (stem, extension) = split_stem(&cleaned);
+
+    // Reserved regardless of extension or directory — the same check
+    // `folder_slug` applies to a directory name, reused rather than
+    // duplicated, folded to lowercase only for this comparison so the
+    // returned name otherwise keeps the case the source file had.
+    let stem = if data::is_reserved(&stem.to_ascii_lowercase()) {
+        format!("{stem}-{FILE_FALLBACK}")
+    } else {
+        stem
+    };
+
+    // Truncated on a character boundary so a multi-byte name (this app is
+    // used in Turkish, CORE §4) never splits mid-character.
+    let mut stem = stem;
+    if stem.len() > STEM_MAX {
+        stem.truncate(STEM_MAX);
+        while !stem.is_char_boundary(stem.len()) {
+            stem.pop();
+        }
+    }
+    let cleaned = format!("{stem}{extension}");
+
+    // Case-insensitive (ASCII only — ASCII case-folding, not `to_lowercase`,
+    // because `data::fold`'s own comment records `to_lowercase` mangling the
+    // Turkish `İ` into a combining mark, which would make two visibly
+    // different names compare equal): Windows, exFAT/FAT32 (a vault on a
+    // removable drive is very often one of these even from Linux) and macOS's
+    // default filesystems all treat "Invoice.pdf" and "invoice.pdf" as one
+    // file, and `fs::copy`/the exclusive create in `copy_into` would not
+    // otherwise know that "free" name is the same file as one already listed.
+    if !taken.iter().any(|name| name.eq_ignore_ascii_case(&cleaned)) {
         return cleaned;
     }
 
-    // Number the copy, keeping the extension where the eye expects it.
-    let (stem, extension) = match cleaned.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
-        _ => (cleaned.clone(), String::new()),
-    };
     for n in 2..=9999 {
         let candidate = format!("{stem}-{n}{extension}");
-        if !taken.iter().any(|name| name == &candidate) {
+        if !taken.iter().any(|name| name.eq_ignore_ascii_case(&candidate)) {
             return candidate;
         }
     }
@@ -253,6 +431,54 @@ mod tests {
         }
     }
 
+    /// On Windows, exFAT/FAT32 (very often what a vault on a removable drive
+    /// is formatted as, even from Linux) and macOS's default filesystems,
+    /// "Invoice.pdf" and "invoice.pdf" are the same file. The byte-exact
+    /// comparison this pins against would hand back "invoice.pdf" as free —
+    /// a name `fs::copy` (or `copy_into`'s exclusive create) would then either
+    /// truncate the original through, or (with the create_new fix) refuse and
+    /// number a new one, which is correct but still worth pinning at the
+    /// `taken`-comparison layer so the common case never needs the fallback.
+    #[test]
+    fn destination_name_treats_names_as_taken_regardless_of_ascii_case() {
+        let name = destination_name(
+            Path::new("/tmp/invoice.pdf"),
+            &["Invoice.pdf".to_string()],
+        );
+        assert_eq!(name, "invoice-2.pdf");
+    }
+
+    #[test]
+    fn destination_name_avoids_windows_reserved_device_names() {
+        for raw in ["/tmp/nul.pdf", "/tmp/NUL.pdf", "/tmp/con.pdf", "/tmp/COM1.pdf"] {
+            let name = destination_name(Path::new(raw), &[]);
+            let stem = name.split('.').next().unwrap().to_ascii_lowercase();
+            assert!(
+                !matches!(stem.as_str(), "nul" | "con" | "com1"),
+                "{raw} produced the reserved name {name}, which Windows resolves to a device"
+            );
+        }
+    }
+
+    #[test]
+    fn destination_name_strips_characters_windows_cannot_use_in_a_file_name() {
+        let name = destination_name(Path::new("/tmp/Scan 2026-08-12 14:37:02.pdf"), &[]);
+        for illegal in [':', '?', '*', '<', '>', '|', '"'] {
+            assert!(!name.contains(illegal), "{name} still contains {illegal:?}");
+        }
+    }
+
+    #[test]
+    fn destination_name_bounds_the_stem_length() {
+        let long = "a".repeat(500);
+        let name = destination_name(Path::new(&format!("/tmp/{long}.pdf")), &[]);
+        assert!(
+            name.len() < 150,
+            "produced a {}-byte name, which risks MAX_PATH on Windows once joined onto a vault path",
+            name.len()
+        );
+    }
+
     #[test]
     fn adding_a_product_writes_the_folder_the_pdf_and_the_manifest() {
         let dir = tempfile::tempdir().unwrap();
@@ -265,6 +491,7 @@ mod tests {
             draft: draft("QD-OLED Monitor", &["invoice.pdf"]),
             imports: vec![(fixture("sample.pdf"), "invoice.pdf".to_string())],
             removals: Vec::new(),
+            invalidator: None,
         });
 
         let Outcome::Done { folder, invalidate } = outcome else {
@@ -283,6 +510,31 @@ mod tests {
         assert!(matches!(&entries[0], data::Entry::Ok(p) if p.name == "QD-OLED Monitor"));
     }
 
+    /// `main` hands out an empty `products_root` when no vault could be opened
+    /// at all — see `main::open_vault`. Joining a folder name onto an empty
+    /// path does not fail, it silently resolves relative to wherever the
+    /// process's current directory happens to be, so this has to be refused
+    /// explicitly rather than left to a `fs::create_dir` that would often
+    /// succeed there too.
+    #[test]
+    fn a_relative_products_root_is_refused_rather_than_written_relative_to_the_working_directory()
+    {
+        let outcome = run(Job {
+            products_root: PathBuf::new(),
+            folder: None,
+            draft: draft("Should Never Land", &["invoice.pdf"]),
+            imports: vec![(fixture("sample.pdf"), "invoice.pdf".to_string())],
+            removals: Vec::new(),
+            invalidator: None,
+        });
+
+        assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+        assert!(
+            !Path::new("should-never-land").exists(),
+            "a folder was created relative to the test binary's working directory"
+        );
+    }
+
     #[test]
     fn a_file_that_is_not_a_pdf_is_refused_before_anything_is_written() {
         let dir = tempfile::tempdir().unwrap();
@@ -295,6 +547,7 @@ mod tests {
             draft: draft("Broken Import", &["nope.pdf"]),
             imports: vec![(fixture("corrupt.pdf"), "nope.pdf".to_string())],
             removals: Vec::new(),
+            invalidator: None,
         });
 
         assert!(
@@ -319,6 +572,7 @@ mod tests {
             draft: draft("Monitor", &["invoice.pdf"]),
             imports: vec![(fixture("sample.pdf"), "invoice.pdf".to_string())],
             removals: Vec::new(),
+            invalidator: None,
         });
 
         // The edit: same folder, one more file.
@@ -328,6 +582,7 @@ mod tests {
             draft: draft("Monitor", &["invoice.pdf", "warranty.pdf"]),
             imports: vec![(fixture("multipage.pdf"), "warranty.pdf".to_string())],
             removals: Vec::new(),
+            invalidator: None,
         });
         assert!(matches!(outcome, Outcome::Done { .. }), "{outcome:?}");
 
@@ -362,6 +617,7 @@ mod tests {
             draft: draft("Monitor", &["their-invoice.pdf"]),
             imports: vec![(source.clone(), "their-invoice.pdf".to_string())],
             removals: Vec::new(),
+            invalidator: None,
         });
 
         let outcome = run(Job {
@@ -370,6 +626,7 @@ mod tests {
             draft: draft("Monitor", &[]),
             imports: Vec::new(),
             removals: vec!["their-invoice.pdf".to_string()],
+            invalidator: None,
         });
         assert!(matches!(outcome, Outcome::Done { .. }), "{outcome:?}");
 
@@ -395,6 +652,7 @@ mod tests {
             draft: draft("Monitor", &["invoice.pdf"]),
             imports: vec![(fixture("sample.pdf"), "invoice.pdf".to_string())],
             removals: Vec::new(),
+            invalidator: None,
         });
         let Outcome::Done { invalidate, .. } = outcome else {
             panic!("must succeed");
@@ -403,5 +661,122 @@ mod tests {
         // The render worker caches by path with no modification time, so every
         // path written has to be named or it will serve the old pixels.
         assert_eq!(invalidate, vec![products.join("monitor/invoice.pdf")]);
+    }
+
+    /// `unique_folder`'s answer is a snapshot, not a lock. This simulates a
+    /// second Parachron instance (or a sync client materialising another
+    /// machine's folder) winning the race: the name it would have picked is
+    /// already there, with its own product in it, by the time this call
+    /// actually creates a directory.
+    #[test]
+    fn a_racing_folder_is_never_silently_adopted() {
+        let dir = tempfile::tempdir().unwrap();
+        let products = dir.path().join("products");
+        fs::create_dir_all(&products).unwrap();
+
+        let existing = products.join("monitor");
+        fs::create_dir_all(&existing).unwrap();
+        data::write_manifest(&existing, &draft("Existing Product", &[]).manifest()).unwrap();
+
+        let outcome = run(Job {
+            products_root: products.clone(),
+            folder: None,
+            draft: draft("Monitor", &["invoice.pdf"]),
+            imports: vec![(fixture("sample.pdf"), "invoice.pdf".to_string())],
+            removals: Vec::new(),
+            invalidator: None,
+        });
+
+        let Outcome::Done { folder, .. } = outcome else {
+            panic!("must still succeed, into a different folder: {outcome:?}");
+        };
+        assert_eq!(
+            folder, "monitor-2",
+            "the folder already claimed by somebody else must never be adopted"
+        );
+
+        let entries = data::scan(&products);
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries
+                .iter()
+                .any(|e| matches!(e, data::Entry::Ok(p) if p.name == "Existing Product")),
+            "the folder this call did not create must be completely untouched: {entries:?}"
+        );
+    }
+
+    /// A failure partway through an add — after the folder was created, before
+    /// the manifest is written — must not leave a permanent half-built folder
+    /// for `scan` to report as broken forever, and must not multiply on retry.
+    #[test]
+    fn a_failed_add_does_not_leave_a_broken_folder_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let products = dir.path().join("products");
+        fs::create_dir_all(&products).unwrap();
+
+        // A NUL byte is not something `destination_name` could ever produce
+        // (it filters control characters), but a manifest this app did not
+        // write is not a trusted input, and this stands in for any copy
+        // failure that occurs after the folder already exists — a full disk
+        // included.
+        let outcome = run(Job {
+            products_root: products.clone(),
+            folder: None,
+            draft: draft("Monitor", &["bad\0name.pdf"]),
+            imports: vec![(fixture("sample.pdf"), "bad\0name.pdf".to_string())],
+            removals: Vec::new(),
+            invalidator: None,
+        });
+
+        assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+        assert!(
+            data::scan(&products).is_empty(),
+            "a folder this call created and could not finish must not be left behind"
+        );
+    }
+
+    /// `destination_name`'s `taken` list is a snapshot the editor built when
+    /// the file was picked; it can go stale by the time the commit actually
+    /// runs. The copy itself has to be the real guarantee against overwriting
+    /// an existing document.
+    #[test]
+    fn a_copy_never_truncates_a_file_already_at_the_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let products = dir.path().join("products");
+        fs::create_dir_all(&products).unwrap();
+
+        run(Job {
+            products_root: products.clone(),
+            folder: None,
+            draft: draft("Monitor", &["invoice.pdf"]),
+            imports: vec![(fixture("sample.pdf"), "invoice.pdf".to_string())],
+            removals: Vec::new(),
+            invalidator: None,
+        });
+
+        let home = products.join("monitor");
+        let original = fs::read(home.join("invoice.pdf")).unwrap();
+
+        // Asks to write "invoice.pdf" again — exactly the name already there,
+        // as if the `taken` snapshot that chose this name had gone stale.
+        let outcome = run(Job {
+            products_root: products.clone(),
+            folder: Some("monitor".to_string()),
+            draft: draft("Monitor", &["invoice.pdf", "invoice-2.pdf"]),
+            imports: vec![(fixture("multipage.pdf"), "invoice.pdf".to_string())],
+            removals: Vec::new(),
+            invalidator: None,
+        });
+        assert!(matches!(outcome, Outcome::Done { .. }), "{outcome:?}");
+
+        assert_eq!(
+            fs::read(home.join("invoice.pdf")).unwrap(),
+            original,
+            "the original file's bytes must survive a same-name collision at copy time"
+        );
+        assert!(
+            home.join("invoice-2.pdf").is_file(),
+            "the colliding import must land under a renumbered name instead of being dropped"
+        );
     }
 }
