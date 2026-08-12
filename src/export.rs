@@ -26,8 +26,8 @@
 //! that if it was drawn before anybody tried to open them.
 
 use std::cell::RefCell;
-use std::fs::File;
-use std::path::PathBuf;
+use std::fs::{self, File};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -183,16 +183,48 @@ pub fn run(job: Job) -> Outcome {
     // destination that is not valid UTF-8 — and on Linux a path is bytes, so that
     // is a real file somebody could have picked rather than a hypothetical.
     //
-    // Both failures here are `Write`: the file could not be created, or the bytes
-    // could not be got into it. A full disk fails at the second, and MuPDF reports
-    // it as a MuPDF error, which is why the distinction is drawn by *where* the
-    // failure happened rather than by which library said so.
-    match File::create(&job.destination) {
-        Ok(mut file) => match out.write_to(&mut file) {
-            Ok(_) => Outcome::Done { skipped },
-            Err(e) => Outcome::Failed(Failure::Write(e.to_string())),
-        },
-        Err(e) => Outcome::Failed(Failure::Write(e.to_string())),
+    // Written to a temporary file beside the destination, synced, then renamed
+    // over it — the same shape `data::write_atomic` already gives every product
+    // manifest, and for the same reason: `File::create` on the destination
+    // directly truncates it before a single byte of the new file exists, so a
+    // write that fails partway (a full disk, the case the comment above already
+    // discusses) or a crash mid-write would destroy whatever was there rather
+    // than simply fail to replace it. The destination here is very often the
+    // same file as a previous export, under the deterministic `suggested_name`
+    // pattern CORE §6 gives it, so "was there" is routinely a good export the
+    // user still wants.
+    //
+    // Every failure here is `Write`, matching what this returned before: the
+    // temporary could not be created, the bytes could not be got into it, or
+    // the finished file could not be put where it was asked to go.
+    let dir = job.destination.parent().unwrap_or_else(|| Path::new("."));
+    let name = job
+        .destination
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let tmp = dir.join(format!(".{name}.tmp"));
+
+    let mut file = match File::create(&tmp) {
+        Ok(file) => file,
+        Err(e) => return Outcome::Failed(Failure::Write(e.to_string())),
+    };
+    if let Err(e) = out.write_to(&mut file) {
+        let _ = fs::remove_file(&tmp);
+        return Outcome::Failed(Failure::Write(e.to_string()));
+    }
+    if let Err(e) = file.sync_all() {
+        let _ = fs::remove_file(&tmp);
+        return Outcome::Failed(Failure::Write(e.to_string()));
+    }
+    drop(file);
+
+    match fs::rename(&tmp, &job.destination) {
+        Ok(()) => Outcome::Done { skipped },
+        Err(e) => {
+            let _ = fs::remove_file(&tmp);
+            Outcome::Failed(Failure::Write(e.to_string()))
+        }
     }
 }
 
@@ -876,6 +908,53 @@ mod tests {
         // 1 summary + 1 from sample + 3 from multipage.
         let doc = page_one(&out);
         assert_eq!(doc.page_count().unwrap(), 5);
+
+        // The write goes through a temporary beside the destination; a
+        // successful export must not leave it behind.
+        let strays: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .filter(|name| name != "sarj-cihazi" && name != "out.pdf")
+            .collect();
+        assert!(strays.is_empty(), "temporary left behind: {strays:?}");
+    }
+
+    /// `File::create` on the destination directly would truncate whatever was
+    /// there — including a good export from a previous run, under the same
+    /// deterministic `suggested_name` a periodic re-export reuses — before a
+    /// single byte of the new one existed. Writing to a temporary and renaming
+    /// over the destination only on success means a write that cannot finish
+    /// leaves the previous file exactly as it was. Forced here by pointing the
+    /// destination at a path that cannot be renamed onto — an existing
+    /// directory — rather than truncated: the failure at the final rename is
+    /// the same one a full disk hits earlier, and either way the guarantee
+    /// under test is "the thing that was already at `destination` survives".
+    #[test]
+    fn a_write_that_cannot_finish_leaves_whatever_was_at_the_destination_untouched() {
+        let (dir, folder) = vault(&[("invoice.pdf", "sample.pdf")]);
+        let out = dir.path().join("out.pdf");
+        fs::create_dir(&out).unwrap();
+        fs::write(out.join("marker"), b"the previous export's stand-in").unwrap();
+
+        let outcome = export(&folder, product(&["invoice.pdf"]), &out, Lang::En);
+        assert!(
+            matches!(outcome, Outcome::Failed(Failure::Write(_))),
+            "{outcome:?}"
+        );
+
+        assert!(
+            out.join("marker").is_file(),
+            "the destination was replaced instead of left alone on failure"
+        );
+
+        let strays: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .filter(|name| name != "sarj-cihazi" && name != "out.pdf")
+            .collect();
+        assert!(strays.is_empty(), "temporary left behind: {strays:?}");
     }
 
     /// CORE §6's list, in full.

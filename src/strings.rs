@@ -132,6 +132,7 @@ pub enum Key {
     ErrNameRequired,
     ErrDateInvalid,
     ErrWarrantyBackwards,
+    ErrPurchaseAfterWarranty,
     ErrSaveFailed,
 
     // Details column and sorting (Chron4)
@@ -244,6 +245,8 @@ pub enum Key {
     ErrVaultVerify,
     ErrVaultMissing,
     ErrConfigUnreadable,
+    ErrNameNotUtf8,
+    ErrVaultNotAbsolute,
 }
 
 impl Key {
@@ -295,6 +298,7 @@ impl Key {
         Key::ErrNameRequired,
         Key::ErrDateInvalid,
         Key::ErrWarrantyBackwards,
+        Key::ErrPurchaseAfterWarranty,
         Key::ErrSaveFailed,
         Key::WarrantyLeft,
         Key::DayUnit,
@@ -379,6 +383,8 @@ impl Key {
         Key::ErrVaultVerify,
         Key::ErrVaultMissing,
         Key::ErrConfigUnreadable,
+        Key::ErrNameNotUtf8,
+        Key::ErrVaultNotAbsolute,
     ];
 }
 
@@ -454,6 +460,10 @@ fn table(key: Key) -> (&'static str, &'static str) {
         ErrWarrantyBackwards => (
             "The warranty ends before it starts.",
             "Garanti, başlamadan bitiyor.",
+        ),
+        ErrPurchaseAfterWarranty => (
+            "The warranty starts before the purchase date.",
+            "Garanti, satın alma tarihinden önce başlıyor.",
         ),
         ErrSaveFailed => ("Could not save", "Kaydedilemedi"),
 
@@ -667,6 +677,14 @@ fn table(key: Key) -> (&'static str, &'static str) {
             "config.toml could not be read, so the vault it names is unknown",
             "config.toml okunamadı, bu yüzden gösterdiği kasa bilinmiyor",
         ),
+        ErrNameNotUtf8 => (
+            "this folder's name cannot be displayed correctly",
+            "bu klasörün adı doğru şekilde görüntülenemiyor",
+        ),
+        ErrVaultNotAbsolute => (
+            "The vault path in config.toml is not absolute, so it is refused rather than guessed at",
+            "config.toml içindeki kasa yolu mutlak değil, bu yüzden tahmin etmek yerine reddedildi",
+        ),
     }
 }
 
@@ -825,7 +843,7 @@ mod tests {
         assert_eq!(before, seen.len(), "Key::ALL contains a duplicate");
         assert_eq!(
             Key::ALL.len(),
-            125,
+            128,
             "Key::ALL is out of step with the enum — add the new key to it"
         );
     }

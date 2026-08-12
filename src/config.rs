@@ -17,6 +17,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::data;
+
 /// Window geometry the app opens at before the user has resized anything.
 /// Comfortably above the 1000×700 floor CORE §4 sets.
 const DEFAULT_WIDTH: u32 = 1280;
@@ -35,6 +37,20 @@ const DEFAULT_HEIGHT: u32 = 800;
 /// `u32` perfectly well. Before Chron8 it went straight into `set_size`.
 pub const MIN_WIDTH: u32 = 1000;
 pub const MIN_HEIGHT: u32 = 700;
+
+/// A ceiling on the other side of the same field, for the same reason.
+///
+/// `window_width = 300` parsing fine is the floor's problem;
+/// `window_width = 4000000000` parsing exactly as fine is this one's. That
+/// value reaches `slint::LogicalSize::new` as a `u32 as f32` with nothing
+/// between it and the windowing backend, which is asked to size a window (or
+/// its backing buffer) accordingly — on a hand-edited or corrupted
+/// `config.toml`, the difference between "resize the window" and "exhaust
+/// memory allocating one" is only this clamp. 10000 is comfortably past any
+/// real display or multi-monitor span in logical pixels, the same way 1000 is
+/// comfortably past any window nobody could use.
+pub const MAX_WIDTH: u32 = 10_000;
+pub const MAX_HEIGHT: u32 = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -121,36 +137,78 @@ impl Config {
         };
         let mut config: Self =
             toml::from_str(&text).map_err(|e| crate::data::first_line(&e.to_string()))?;
-        config.clamp_to_floor();
+        config.clamp_window_size();
         Ok(config)
     }
 
-    /// Raise a stored window size up to CORE §4's floor.
+    /// Bring a stored window size back within CORE §4's floor and this
+    /// module's ceiling.
     ///
-    /// A pure function of two numbers, which is the point: the floor becomes
+    /// A pure function of two numbers, which is the point: the bounds become
     /// something a test can check without a display, a window manager or a
     /// screenshot. Three milestones have now written down that the 1000×700
     /// minimum is enforced by a window manager the test harness does not have —
     /// this is the half of it that no longer needs one.
     ///
-    /// It clamps up and never down. A window larger than the floor is the user
-    /// having resized it, which is theirs to decide.
-    fn clamp_to_floor(&mut self) {
-        self.window_width = self.window_width.max(MIN_WIDTH);
-        self.window_height = self.window_height.max(MIN_HEIGHT);
+    /// It clamps toward the nearer bound and otherwise leaves the value alone.
+    /// Anything between 1000×700 and 10000×10000 is the user having resized
+    /// the window, which is theirs to decide.
+    fn clamp_window_size(&mut self) {
+        self.window_width = self.window_width.clamp(MIN_WIDTH, MAX_WIDTH);
+        self.window_height = self.window_height.clamp(MIN_HEIGHT, MAX_HEIGHT);
     }
 
     /// Write `config.toml`. Returns the OS message on failure so the caller can
     /// report it — a config that will not save must not take the app down.
+    ///
+    /// Routed through [`data::write_atomic`] rather than a plain `fs::write`,
+    /// which is what every product manifest already goes through and for the
+    /// same reason: `fs::write` truncates the existing file before it writes a
+    /// single byte of the new one, so an interruption between the two — and
+    /// `save` runs during shutdown, exactly when a machine is likeliest to be
+    /// powered off or a session killed — used to leave `config.toml` empty or
+    /// half-written. That file holds the `vault` key: the only pointer to
+    /// where the user's documents are, not just a theme.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let text = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(path, text).map_err(|e| e.to_string())
+        data::write_atomic(path, &text).map_err(|e| match e {
+            data::DataError::Unreadable(detail) => detail,
+            other => format!("{other:?}"),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `save` is now the same atomic write every product manifest already uses:
+    /// this pins that the round trip still works, and that it leaves no
+    /// `.config.toml.tmp` litter behind — the temp file `write_atomic` cleans up
+    /// on success, unlike the old `fs::write` which never created one at all
+    /// but also never protected the file it wrote either.
+    #[test]
+    fn save_round_trips_through_load_and_leaves_no_temporary_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let config = Config {
+            lang: "tr".to_string(),
+            vault: Some("/mnt/ironwolf/parachron".to_string()),
+            ..Config::default()
+        };
+        config.save(&path).expect("a fresh config.toml must save");
+
+        assert_eq!(Config::load(&path).unwrap(), config);
+
+        let strays: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .filter(|name| name != "config.toml")
+            .collect();
+        assert!(strays.is_empty(), "temporary left behind: {strays:?}");
+    }
 
     #[test]
     fn defaults_match_core() {
@@ -325,5 +383,31 @@ mod tests {
         // also fail if the file went unread — no separate guard needed here.
         assert_eq!(config.window_width, 1600);
         assert_eq!(config.window_height, 1000);
+    }
+
+    /// The other side of the same clamp: `window_width` parses as a plain
+    /// `u32`, so a hand-edited or corrupted config naming a value near
+    /// `u32::MAX` reaches `set_size` just as readily as `300` used to — as a
+    /// window (or a backing buffer) the display cannot show and the process
+    /// may not be able to allocate. Mirrors
+    /// `a_stored_window_below_the_floor_is_raised_to_it_when_the_config_loads`
+    /// on the ceiling instead of the floor.
+    #[test]
+    fn a_stored_window_above_the_ceiling_is_lowered_to_it_when_the_config_loads() {
+        assert_eq!((MAX_WIDTH, MAX_HEIGHT), (10_000, 10_000));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "theme = \"noctalia\"\nwindow_width = 4000000000\nwindow_height = 3000000000\n",
+        )
+        .unwrap();
+
+        let config = Config::load(&path).expect("a valid config must load");
+
+        assert_eq!(config.theme, "noctalia");
+        assert_eq!(config.window_width, MAX_WIDTH);
+        assert_eq!(config.window_height, MAX_HEIGHT);
     }
 }

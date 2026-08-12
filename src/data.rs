@@ -11,7 +11,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -48,12 +48,35 @@ pub enum DataError {
     /// on "`/mnt/ironwolf/parachron` is not there" and cannot act on "no
     /// products found".
     VaultMissing(String),
+    /// `config.toml` names a vault by a relative path.
+    ///
+    /// Every `vault` key this app has ever written came from a folder picker,
+    /// which always hands back an absolute path — so a relative one is always
+    /// a hand-edited (or otherwise foreign) file. Resolving it would mean
+    /// resolving against the process's current directory, which depends on
+    /// how Parachron happened to be launched (a terminal, a desktop entry, an
+    /// autostart entry all differ) and can silently land on a real, unrelated
+    /// directory instead of failing loudly. So this is refused rather than
+    /// guessed at, the same way a missing vault is refused rather than
+    /// defaulted.
+    VaultNotAbsolute(String),
     /// `config.toml` itself could not be parsed, so the vault it names is
     /// unknown (Chron9).
     ///
     /// Distinct from a config with no `vault` key, which is the ordinary case
     /// and means the default. See `config::Config::load`.
     ConfigUnreadable(String),
+    /// A folder under `products/` has a name that is not valid UTF-8.
+    ///
+    /// Never something Parachron itself wrote — `folder_slug` is ASCII-only —
+    /// so this is only ever a foreign or hand-crafted vault. Carries the OS's
+    /// best (lossy) rendering of the name for the message; [`Entry::folder`]
+    /// for one of these is never that same lossy string unmodified, because
+    /// two different invalid byte sequences can render to the identical
+    /// replacement-character text, and a folder's display identity has to be
+    /// unique or the second of a colliding pair becomes permanently
+    /// unreachable in the product list.
+    NameNotUtf8(String),
 }
 
 /// Where the vault lives.
@@ -157,10 +180,40 @@ impl Paths {
     /// default is created because its parent is the platform's own data
     /// directory, which exists on any machine that has a home at all, and
     /// creating it on first run is what Parachron has always done.
+    ///
+    /// For a configured vault, only `products` itself is ever created, and
+    /// only with `create_dir` rather than `create_dir_all`. The check above
+    /// and this call are not one atomic step — a drive can still unmount in
+    /// between, a window as narrow as it is real on a machine that was just
+    /// started — and `create_dir_all` cannot tell "the vault is still there
+    /// and just needs its `products/` folder" apart from "the vault just
+    /// vanished", in which case it would happily rebuild the whole chain,
+    /// vault included, on whatever filesystem is under the mount point: the
+    /// exact hazard this function exists to refuse, reintroduced one call
+    /// later. `create_dir` cannot rebuild an ancestor that is not there.
     pub fn ensure(&self) -> Result<(), DataError> {
-        if self.configured && !self.vault.is_dir() {
-            return Err(DataError::VaultMissing(self.vault.display().to_string()));
+        if self.configured {
+            if !self.vault.is_absolute() {
+                return Err(DataError::VaultNotAbsolute(
+                    self.vault.display().to_string(),
+                ));
+            }
+            if !self.vault.is_dir() {
+                return Err(DataError::VaultMissing(self.vault.display().to_string()));
+            }
+            return match fs::create_dir(&self.products) {
+                Ok(()) => Ok(()),
+                // The ordinary case after a first run: `products` is already
+                // there, which `create_dir_all` would also treat as success.
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::AlreadyExists && self.products.is_dir() =>
+                {
+                    Ok(())
+                }
+                Err(e) => Err(DataError::Unreadable(e.to_string())),
+            };
         }
+
         fs::create_dir_all(&self.products).map_err(|e| DataError::Unreadable(e.to_string()))
     }
 }
@@ -265,12 +318,32 @@ pub fn scan(products: &Path) -> Vec<Entry> {
     };
 
     let mut entries: Vec<Entry> = Vec::new();
+    // Every folder identity handed out below passes through here first, so a
+    // lossy-converted name that collides with one already seen — the one way
+    // two distinct directory entries can compare equal, since the filesystem
+    // itself already guarantees a byte-exact name is unique within one
+    // directory — gets a suffix instead of silently doubling up. Selection
+    // and sorting both key on `Entry::folder()`, so a repeat here is not a
+    // display nuisance: it is the second product becoming unreachable, opening
+    // the first one every time its own row is clicked.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for dirent in listing.flatten() {
         let path = dirent.path();
         if !path.is_dir() {
             continue;
         }
-        let folder = dirent.file_name().to_string_lossy().into_owned();
+
+        let raw = dirent.file_name();
+        let Some(folder) = raw.to_str() else {
+            let lossy = raw.to_string_lossy().into_owned();
+            entries.push(Entry::Broken {
+                folder: disambiguate(&mut seen, lossy.clone()),
+                reason: DataError::NameNotUtf8(lossy),
+            });
+            continue;
+        };
+        let folder = disambiguate(&mut seen, folder.to_string());
+
         entries.push(match load(&path, &folder) {
             Ok(product) => Entry::Ok(product),
             Err(reason) => Entry::Broken { folder, reason },
@@ -278,6 +351,52 @@ pub fn scan(products: &Path) -> Vec<Entry> {
     }
 
     entries
+}
+
+/// Make `folder` unique against every identity already handed out, appending
+/// a counted suffix if it is not. A no-op for the overwhelming majority of
+/// calls — every name this app itself ever wrote is already unique by
+/// construction — so the ordinary path costs one hash-set lookup.
+fn disambiguate(seen: &mut std::collections::HashSet<String>, folder: String) -> String {
+    if seen.insert(folder.clone()) {
+        return folder;
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{folder} ({n})");
+        if seen.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Whether a manifest-supplied `pdfs` entry is safe to join onto a product's
+/// directory.
+///
+/// `import::run` only ever writes a bare file name (`destination_name`), so a
+/// legitimate entry is exactly one `Normal` path component. A vault is a plain
+/// folder that outlives the app (CORE §3), so `product.toml` is not a trusted
+/// input: a hand-edited or foreign-written manifest can carry `..` or an
+/// absolute path in `pdfs`. Every consumer of [`Product::pdfs`] — the viewer's
+/// tab paths, the exporter's source list, the editor's removal list — joins
+/// these names straight onto a directory with [`Path::join`], which does not
+/// confine a `..` and is *replaced entirely* by an absolute path. Filtering
+/// once here is what keeps every one of those joins inside the product folder
+/// instead of repeating the check at each call site.
+///
+/// Checked structurally (component count) rather than only by character, since
+/// `Path::components()` already knows what counts as a separator or a prefix
+/// on the platform Parachron is actually running on; the explicit `/`/`\`
+/// check on top of it is what stops a `\`-separated Windows traversal string
+/// written into a manifest on Linux (where `\` is not a separator) from
+/// surviving unmolested into a vault that later opens on Windows, where it is.
+fn is_safe_pdf_name(name: &str) -> bool {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
+        return false;
+    }
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 /// Parse and validate one product folder.
@@ -291,12 +410,21 @@ fn load(dir: &Path, folder: &str) -> Result<Product, DataError> {
     let raw: Manifest =
         toml::from_str(&text).map_err(|e| DataError::Malformed(first_line(&e.to_string())))?;
 
-    // Files the manifest promises but the folder does not hold.
-    let missing_pdfs: Vec<String> = raw
+    // A `pdfs` entry that is not a bare file name is never something the app
+    // wrote and must never be joined onto `dir`. It is folded into
+    // `missing_pdfs` rather than dropped outright, so it is still reported —
+    // CORE §3's "broken is shown, never hidden" — just never opened.
+    let (pdfs, unsafe_pdfs): (Vec<String>, Vec<String>) = raw
         .pdfs
+        .into_iter()
+        .partition(|name| is_safe_pdf_name(name));
+
+    // Files the manifest promises but the folder does not hold.
+    let missing_pdfs: Vec<String> = pdfs
         .iter()
         .filter(|name| !dir.join(name).is_file())
         .cloned()
+        .chain(unsafe_pdfs)
         .collect();
 
     Ok(Product {
@@ -308,7 +436,7 @@ fn load(dir: &Path, folder: &str) -> Result<Product, DataError> {
         warranty_start: to_date(&raw.warranty_start, "warranty_start")?,
         warranty_end: to_date(&raw.warranty_end, "warranty_end")?,
         added: to_date(&raw.added, "added")?,
-        pdfs: raw.pdfs,
+        pdfs,
         missing_pdfs,
         extra: raw.extra,
     })
@@ -436,7 +564,18 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<(), DataError> {
 
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let tmp = dir.join(format!(".{name}.tmp"));
+    // Unique per call, not just per target file: two writers racing on the
+    // same fixed `.{name}.tmp` — two Parachron instances open on the same
+    // synced vault, nothing here prevents that — could have one's
+    // `File::create` truncate the other's still-being-written temporary out
+    // from under it, and the rename that followed would publish whichever
+    // writer finished last as if it were whole. Process id plus a
+    // never-repeating counter is enough to keep concurrent writers apart
+    // without reaching for a dependency for something this small; the file
+    // being replaced is still only ever touched by the final `rename`.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.{}.{unique}.tmp", std::process::id()));
 
     // Leaving a temporary behind would be litter in somebody's product folder,
     // so every failure below clears up after itself.
@@ -495,9 +634,14 @@ fn fold(ch: char) -> Option<char> {
 }
 
 /// Windows reserves these as device names and refuses to create a directory
-/// using one. CORE §7 ships a Windows binary, so a vault that syncs onto one
-/// must not contain a folder it cannot open.
-fn is_reserved(slug: &str) -> bool {
+/// or a file using one, regardless of extension. CORE §7 ships a Windows
+/// binary, so a vault that syncs onto one must not contain a folder — or,
+/// per `import::destination_name`, a file — it cannot open. `slug` must
+/// already be lowercase; callers with mixed-case input fold it themselves,
+/// so a folder name (already lowercase by construction) and a file stem
+/// (folded only for this check, so its displayed case is untouched) can
+/// share one comparison.
+pub(crate) fn is_reserved(slug: &str) -> bool {
     const RESERVED: [&str; 24] = [
         "con", "prn", "aux", "nul", "com0", "com1", "com2", "com3", "com4", "com5", "com6", "com7",
         "com8", "com9", "lpt0", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8",
@@ -682,6 +826,75 @@ mod tests {
         assert!(paths.products.is_dir());
     }
 
+    /// The ordinary case for a configured vault: `vault` exists but has never
+    /// held a `products/` folder before (a fresh drive, or one just pointed
+    /// at for the first time). `ensure()` must still create it — the guard
+    /// above only refuses a vault that is *missing*, not one that has simply
+    /// not been used yet — and now does so with `create_dir` rather than
+    /// `create_dir_all`, which this pins by name as much as by behaviour.
+    #[test]
+    fn a_configured_vault_gets_its_products_folder_created_on_first_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().join("mnt/ironwolf/parachron");
+        fs::create_dir_all(&vault).unwrap();
+
+        let paths =
+            Paths::for_test(dir.path().join("data")).with_vault(Some(vault.to_str().unwrap()));
+
+        paths
+            .ensure()
+            .expect("a vault that exists must get its products folder");
+        assert!(paths.products.is_dir());
+    }
+
+    /// A hand-edited `config.toml` naming a relative vault path. Every path
+    /// this app has ever written came from a folder picker and is absolute,
+    /// so a relative one only reaches here by hand-editing — and resolving it
+    /// against the process's current directory would land on whatever
+    /// happens to sit at that relative location under wherever Parachron was
+    /// launched from, silently, which is exactly the kind of wrong-directory
+    /// hazard [`Paths::ensure`] already refuses for a missing configured
+    /// vault. It must be refused the same way, not resolved.
+    #[test]
+    fn a_relative_configured_vault_is_refused_not_resolved_against_the_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::for_test(dir.path().join("data")).with_vault(Some("relative/vault"));
+
+        let failure = paths
+            .ensure()
+            .expect_err("a relative vault path must be refused");
+        assert!(
+            matches!(&failure, DataError::VaultNotAbsolute(named) if named == "relative/vault"),
+            "the message must name the path so a user can act on it: {failure:?}"
+        );
+        assert!(
+            !paths.products.exists(),
+            "nothing must be created against a refused relative path"
+        );
+    }
+
+    /// A second launch against the same configured vault: `products/` is
+    /// already there. `create_dir` alone fails with `AlreadyExists` on
+    /// this — the case `ensure()` has to go on treating as success, the same
+    /// as `create_dir_all` always did, or every ordinary relaunch would
+    /// report the ready vault it just found as an error.
+    #[test]
+    fn a_configured_vault_whose_products_folder_already_exists_is_still_a_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().join("mnt/ironwolf/parachron");
+        fs::create_dir_all(vault.join("products")).unwrap();
+
+        let paths =
+            Paths::for_test(dir.path().join("data")).with_vault(Some(vault.to_str().unwrap()));
+
+        paths
+            .ensure()
+            .expect("an already-existing products folder is not an error");
+        paths
+            .ensure()
+            .expect("ensure must be idempotent across repeated launches");
+    }
+
     /// **The test this milestone turns on.**
     ///
     /// If `vault` names a path under a mount point and the drive is not there,
@@ -819,6 +1032,53 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// The second call with the same identity is the one that used to make a
+    /// product permanently unreachable: two folders that agree on display
+    /// name — which only really happens once a lossy UTF-8 conversion has
+    /// thrown information away — must not agree on the identity `vault` keys
+    /// selection and sorting on.
+    #[test]
+    fn disambiguate_gives_a_repeated_identity_a_counted_suffix() {
+        let mut seen = std::collections::HashSet::new();
+        assert_eq!(disambiguate(&mut seen, "camera".to_string()), "camera");
+        assert_eq!(disambiguate(&mut seen, "camera".to_string()), "camera (2)");
+        assert_eq!(disambiguate(&mut seen, "camera".to_string()), "camera (3)");
+        // A name that was never repeated is untouched.
+        assert_eq!(disambiguate(&mut seen, "drive".to_string()), "drive");
+    }
+
+    /// The real trigger: two folders whose raw bytes differ but whose lossy
+    /// UTF-8 conversion lands on the same `char::REPLACEMENT_CHARACTER`
+    /// string. Built with real non-UTF-8 directory names (Unix allows any
+    /// byte sequence except `/` and NUL) rather than a synthetic collision,
+    /// so this exercises `scan` end to end, not just the helper.
+    #[cfg(unix)]
+    #[test]
+    fn two_non_utf8_folder_names_that_collide_when_made_lossy_both_stay_reachable() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        for raw in [&[0xFFu8, b'x'][..], &[0xFEu8, b'x'][..]] {
+            let name = std::ffi::OsStr::from_bytes(raw);
+            fs::create_dir(dir.path().join(name)).unwrap();
+        }
+
+        let entries = scan(dir.path());
+        assert_eq!(entries.len(), 2);
+
+        let folders: Vec<&str> = entries.iter().map(|e| e.folder()).collect();
+        assert_ne!(
+            folders[0], folders[1],
+            "two distinct directories must not share one identity: {folders:?}"
+        );
+        // Both display the replacement character; the fix is that only one of
+        // them keeps the un-suffixed name.
+        for folder in &folders {
+            assert!(folder.contains(char::REPLACEMENT_CHARACTER));
+        }
+        assert!(folders.iter().any(|f| f.ends_with(" (2)")));
     }
 
     // ── The write half (Chron3) ──────────────────────────────────────────
@@ -1055,6 +1315,51 @@ last_checked = 2026-07-01
         assert!(strays.is_empty(), "temporary left behind: {strays:?}");
     }
 
+    /// Two writers racing on the same target file used to race on the same
+    /// fixed temporary too — see `write_atomic`'s own comment. With that
+    /// shared path, one writer's `File::create` can truncate the other's
+    /// still-being-written temporary, and the rename that follows publishes
+    /// whichever half-written bytes were left. With a temp name unique per
+    /// call, the two can never collide: whichever writer's rename lands
+    /// last, what is on disk afterward is always one writer's *complete*
+    /// content, never a mix of the two and never a partial write.
+    #[test]
+    fn two_writers_racing_on_the_same_file_never_produce_a_mixed_or_partial_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("product.toml");
+
+        // Large enough, and different enough, that a byte-level splice
+        // between the two would be visible rather than coincidentally still
+        // looking like one of them.
+        let a = "A".repeat(200_000);
+        let b = "B".repeat(200_000);
+
+        let path_a = path.clone();
+        let content_a = a.clone();
+        let handle = std::thread::spawn(move || write_atomic(&path_a, &content_a));
+
+        let result_b = write_atomic(&path, &b);
+        let result_a = handle.join().unwrap();
+        assert!(
+            result_a.is_ok() && result_b.is_ok(),
+            "{result_a:?} / {result_b:?}"
+        );
+
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk == a || on_disk == b,
+            "the file must hold exactly one writer's complete content, never a mix of the two"
+        );
+
+        let strays: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(strays.is_empty(), "temporary left behind: {strays:?}");
+    }
+
     /// The round trip that matters: what the form writes is what the list reads.
     #[test]
     fn a_written_product_scans_back_as_the_same_product() {
@@ -1086,6 +1391,57 @@ last_checked = 2026-07-01
             product.missing_pdfs.is_empty(),
             "the file is on disk, so nothing is missing"
         );
+    }
+
+    /// A manifest this app did not write can name anything it likes in `pdfs`
+    /// — `..` traversal, an absolute path, a Windows drive or UNC form. None of
+    /// that may ever reach a [`Path::join`] in the viewer, the exporter or the
+    /// editor's removal list; it must come back folded into `missing_pdfs`
+    /// instead, exactly like a name that is simply not on disk.
+    #[test]
+    fn manifest_pdfs_entries_that_are_not_bare_file_names_are_treated_as_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let products = dir.path().join("products");
+        let home = products.join("monitor");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("invoice.pdf"), b"%PDF-1.4\n").unwrap();
+
+        // A file that genuinely sits outside the product folder, so a
+        // traversal that "worked" would be observable in the test.
+        fs::write(dir.path().join("secret.pdf"), b"%PDF-1.4\n").unwrap();
+
+        let manifest = r#"
+name = "Monitor"
+serial = ""
+link = ""
+purchase_date = 2026-01-01
+warranty_start = 2026-01-01
+warranty_end = 2027-01-01
+added = 2026-01-01
+pdfs = ["invoice.pdf", "../../secret.pdf", "/etc/passwd", "..", "."]
+"#;
+        fs::write(home.join("product.toml"), manifest).unwrap();
+
+        let entries = scan(&products);
+        assert_eq!(entries.len(), 1);
+        let Entry::Ok(product) = &entries[0] else {
+            panic!(
+                "a manifest with a bad pdfs entry must still parse: {:?}",
+                entries[0]
+            );
+        };
+
+        assert_eq!(
+            product.pdfs,
+            vec!["invoice.pdf".to_string()],
+            "only the bare, on-disk file name may survive into Product::pdfs"
+        );
+        for bad in ["../../secret.pdf", "/etc/passwd", "..", "."] {
+            assert!(
+                product.missing_pdfs.iter().any(|m| m == bad),
+                "{bad:?} must be reported as missing rather than silently dropped"
+            );
+        }
     }
 
     /// A crash between copying the PDFs and writing the manifest has to leave

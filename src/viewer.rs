@@ -13,7 +13,7 @@ use slint::{
 };
 
 use crate::data::Product;
-use crate::render::{Renderer, Response, ViewError};
+use crate::render::{self, Renderer, Response, ViewError};
 use crate::strings::{self, Key, Lang};
 use crate::{AppWindow, DocTab};
 
@@ -149,7 +149,17 @@ impl State {
     /// tab or of product, so CORE §4's reset rule does not apply to them. A
     /// fresh click passes `false` and starts at page one, fitted.
     fn show(&mut self, doc: Option<DocSet>, keep_view: bool) {
-        let showing = if keep_view {
+        // `keep_view` only means "stay on the same file" when it is also the
+        // same product — matching on the file name alone let a save or a
+        // re-sort that actually switched to a *different* product carry over
+        // its page and zoom whenever the two happened to share a file name,
+        // which `invoice.pdf` and `garanti.pdf` (this app's own wireframe and
+        // test data) make the common case rather than the exotic one.
+        let same_product = keep_view
+            && doc
+                .as_ref()
+                .is_some_and(|doc| self.folder.as_deref() == Some(doc.folder.as_str()));
+        let showing = if same_product {
             self.tabs.get(self.active_tab).map(|tab| tab.file.clone())
         } else {
             None
@@ -280,6 +290,23 @@ impl State {
     }
 }
 
+/// Lock `state`, recovering from poison instead of propagating it.
+///
+/// `state` is shared with the render worker thread (see [`Viewer::set_products_root`]'s
+/// doc comment), so a panic anywhere while either side holds this lock would
+/// otherwise poison it for both — turning one transient bug into a viewer
+/// that panics on every subsequent click, tab, page turn or zoom for the rest
+/// of the session. Every field `State` carries is a plain snapshot the next
+/// [`apply`] recomputes wholesale, so a guard recovered from a poisoned lock
+/// is no more likely to be wrong than one that was never poisoned — and
+/// continuing with it is strictly better than the alternative for an app with
+/// nothing behind this boundary to protect but its own UI state.
+fn lock(state: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
+    state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Tab text for a file name: the stem, first letter raised.
 ///
 /// `invoice.pdf` → `Invoice`, `garanti.pdf` → `Garanti` — the labels CORE §4's
@@ -333,7 +360,7 @@ impl Viewer {
     /// listens for the click itself, because a Slint callback holds exactly one
     /// handler and the vault needs that one.
     pub fn show(&self, app: &AppWindow, doc: Option<DocSet>, keep_view: bool) {
-        self.state.lock().unwrap().show(doc, keep_view);
+        lock(&self.state).show(doc, keep_view);
         apply(app, &self.state, &self.renderer);
     }
 
@@ -342,13 +369,22 @@ impl Viewer {
         self.renderer.invalidate(path);
     }
 
+    /// A cloneable handle for invalidating a path from another thread — see
+    /// [`render::Renderer::invalidator`]. `import::run` uses this to release
+    /// the worker's open handle on a file *before* deleting it, rather than
+    /// after, which on Windows is the difference between an ordinary delete
+    /// and a sharing violation.
+    pub fn invalidator(&self) -> render::Invalidator {
+        self.renderer.invalidator()
+    }
+
     /// Chron6. Nothing is re-pushed here: the error text on screen was composed
     /// from a `ViewError` this module no longer holds — only the window property
     /// does — so re-translating it means re-planning, which the vault's own
     /// re-push does a moment later. Setting the language and repainting are
     /// therefore two calls rather than one, in that order.
     pub fn set_lang(&self, lang: Lang) {
-        self.state.lock().unwrap().lang = lang;
+        lock(&self.state).lang = lang;
     }
 
     /// Chron9. The vault moved, so every path this composes is now under a
@@ -361,7 +397,7 @@ impl Viewer {
     /// plain copy and gains a setter, and the risk of a forgotten copy is
     /// answered by there being exactly one caller — `relocate::retarget`.
     pub fn set_products_root(&self, root: PathBuf) {
-        self.state.lock().unwrap().products_root = root;
+        lock(&self.state).products_root = root;
     }
 }
 
@@ -398,7 +434,7 @@ pub fn install(app: &AppWindow, products_root: PathBuf, lang: Lang) -> Viewer {
         move |index| {
             let Some(app) = weak.upgrade() else { return };
             {
-                let mut state = state.lock().unwrap();
+                let mut state = lock(&state);
                 if index < 0 || index as usize >= state.tabs.len() {
                     return;
                 }
@@ -417,7 +453,7 @@ pub fn install(app: &AppWindow, products_root: PathBuf, lang: Lang) -> Viewer {
         move |page| {
             let Some(app) = weak.upgrade() else { return };
             {
-                let mut state = state.lock().unwrap();
+                let mut state = lock(&state);
                 if page < 0 || page as usize >= state.pages {
                     return;
                 }
@@ -435,7 +471,7 @@ pub fn install(app: &AppWindow, products_root: PathBuf, lang: Lang) -> Viewer {
         move |zoom| {
             let Some(app) = weak.upgrade() else { return };
             {
-                let mut state = state.lock().unwrap();
+                let mut state = lock(&state);
                 let zoom = zoom.clamp(ZOOM_MIN, ZOOM_MAX);
                 if (zoom - state.zoom).abs() < f32::EPSILON {
                     return;
@@ -462,7 +498,7 @@ pub fn install(app: &AppWindow, products_root: PathBuf, lang: Lang) -> Viewer {
         let resize = Rc::clone(&resize);
         move |width, height| {
             let first = {
-                let mut state = state.lock().unwrap();
+                let mut state = lock(&state);
                 let was_unset = state.viewport.0 < 1.0 || state.viewport.1 < 1.0;
                 state.viewport = (width, height);
                 was_unset
@@ -493,7 +529,7 @@ pub fn install(app: &AppWindow, products_root: PathBuf, lang: Lang) -> Viewer {
         let copied = Rc::clone(&copied);
         move || {
             let Some(app) = weak.upgrade() else { return };
-            let serial = state.lock().unwrap().serial.clone();
+            let serial = lock(&state).serial.clone();
             if serial.is_empty() {
                 return;
             }
@@ -532,7 +568,7 @@ fn apply(app: &AppWindow, state: &Arc<Mutex<State>>, renderer: &Renderer) {
     // Take the lock only long enough to decide; Slint setters below can run
     // bindings that call straight back into these callbacks.
     let (snapshot, plan, lang) = {
-        let mut state = state.lock().unwrap();
+        let mut state = lock(state);
         if state.viewport.0 < 1.0 || state.viewport.1 < 1.0 {
             let fallback = fallback_viewport(app);
             // Only if it is worth having. The vault fills the window before it
@@ -593,7 +629,7 @@ fn fallback_viewport(app: &AppWindow) -> (f32, f32) {
 /// Apply one render result, ignoring anything the user has already moved past.
 fn receive(app: &AppWindow, state: &Arc<Mutex<State>>, response: Response) {
     let (current, lang) = {
-        let state = state.lock().unwrap();
+        let state = lock(state);
         (state.token, state.lang)
     };
 
@@ -607,10 +643,17 @@ fn receive(app: &AppWindow, state: &Arc<Mutex<State>>, response: Response) {
             if token != current {
                 return;
             }
+            // Defensive, not load-bearing: `render::serve` already reports the
+            // page it actually rasterized rather than the one requested, but
+            // the window must never be told an index the state has rejected —
+            // clamped once here and used for every property below, so the two
+            // cannot drift apart the way they did when this only clamped
+            // `state.page` and pushed the unclamped `page` to the UI.
+            let page = page.min(pages.saturating_sub(1));
             {
-                let mut state = state.lock().unwrap();
+                let mut state = lock(state);
                 state.pages = pages;
-                state.page = page.min(pages.saturating_sub(1));
+                state.page = page;
             }
 
             let scale = app.window().scale_factor().max(0.1);
@@ -868,6 +911,33 @@ mod tests {
         assert_eq!(state.zoom, 2.5, "still at the same zoom");
     }
 
+    /// `monitor()` and `drive()` both open on a file named "invoice.pdf" —
+    /// matching this app's own wireframe and test data, where that collision
+    /// is the common case rather than the exotic one. `keep_view` is what an
+    /// add or a save asks for after selecting the just-written product, and it
+    /// must mean "same product, same file", not "a tab anywhere happens to be
+    /// named the same thing".
+    #[test]
+    fn keeping_the_view_resets_when_a_different_product_happens_to_share_a_file_name() {
+        let mut state = state();
+        state.show(Some(monitor()), false);
+        state.page = 4;
+        state.pages = 9;
+        state.zoom = 2.5;
+
+        state.show(Some(drive()), true);
+
+        assert_eq!(state.active_tab, 0);
+        assert_eq!(
+            state.page, 0,
+            "a different product must not inherit the last page"
+        );
+        assert_eq!(
+            state.zoom, ZOOM_MIN,
+            "a different product must not inherit the last zoom"
+        );
+    }
+
     #[test]
     fn keeping_the_view_falls_back_to_page_one_when_the_file_is_gone() {
         let mut state = state();
@@ -965,5 +1035,34 @@ mod tests {
     fn diagnostic_detail_is_appended_not_swallowed() {
         let text = describe(Lang::En, &ViewError::Unreadable("no such device".into()));
         assert!(text.contains("no such device"));
+    }
+
+    /// `state` is shared with the render worker thread, so a panic on either
+    /// side while holding the lock poisons it for both. Every call site goes
+    /// through `lock`, which must recover a usable guard rather than turn
+    /// that one panic into every later click, tab, page turn or zoom
+    /// panicking too for the rest of the session.
+    #[test]
+    fn a_poisoned_lock_still_yields_a_usable_guard() {
+        let mutex = Mutex::new(state());
+
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = mutex.lock().unwrap();
+            panic!("simulated panic while the lock is held");
+        }));
+        assert!(poisoned.is_err(), "the panic must actually have happened");
+        assert!(
+            mutex.is_poisoned(),
+            "a panic while holding the lock must poison it — otherwise this \
+             test is not exercising what `lock` guards against"
+        );
+
+        // The real assertion: recovery, not a second panic.
+        let guard = lock(&mutex);
+        assert_eq!(
+            guard.viewport,
+            (600.0, 800.0),
+            "the data behind a poisoned lock is still there"
+        );
     }
 }

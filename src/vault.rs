@@ -479,6 +479,15 @@ fn matches(entry: &Entry, needle: &str) -> bool {
             data::search_fold(&product.name).contains(needle)
                 || data::search_fold(&product.serial).contains(needle)
         }
+        // A folder-less broken entry (`open_vault` synthesises exactly one
+        // when the vault could not even be resolved, e.g. no home directory)
+        // has nothing to fold and search — `search_fold("")` cannot contain
+        // any non-empty needle, so it used to vanish the moment anything was
+        // typed. `row` already gives this same case a generic heading rather
+        // than hiding it; the filter has to make the same exception, or
+        // typing into the search box hides the one row on screen that
+        // explains why the list is otherwise empty.
+        Entry::Broken { folder, .. } if folder.is_empty() => true,
         Entry::Broken { folder, .. } => data::search_fold(folder).contains(needle),
     }
 }
@@ -596,6 +605,12 @@ pub fn describe(lang: Lang, error: &DataError) -> String {
         }
         DataError::ConfigUnreadable(detail) => {
             format!("{}: {detail}", strings::get(lang, Key::ErrConfigUnreadable))
+        }
+        DataError::NameNotUtf8(detail) => {
+            format!("{}: {detail}", strings::get(lang, Key::ErrNameNotUtf8))
+        }
+        DataError::VaultNotAbsolute(path) => {
+            format!("{}: {path}", strings::get(lang, Key::ErrVaultNotAbsolute))
         }
     }
 }
@@ -740,6 +755,25 @@ mod tests {
         let update = vault.plan_query("broken".to_string());
         assert_eq!(update.rows.len(), 1);
         assert_eq!(shown(&mut vault), ["test-broken"]);
+    }
+
+    /// The one row with no folder name at all — `main` synthesises it when the
+    /// vault cannot be resolved, and it is the only row that explains why the
+    /// list is otherwise empty. A folder-name search has nothing to match it
+    /// against, so before this fix it vanished the instant anyone typed a
+    /// single character, hiding the one row a confused user most needs to see.
+    #[test]
+    fn the_no_folder_broken_entry_survives_any_search_query() {
+        let mut vault = a_vault(vec![
+            Entry::Broken {
+                folder: String::new(),
+                reason: DataError::NoHome,
+            },
+            product("drive", "IronWolf Pro", 1, 1),
+        ]);
+        let update = vault.plan_query("xyz-does-not-match-anything".to_string());
+        assert_eq!(update.rows.len(), 1);
+        assert_eq!(shown(&mut vault), [""]);
     }
 
     /// Both sides are folded, so any casing or accenting of the query finds the

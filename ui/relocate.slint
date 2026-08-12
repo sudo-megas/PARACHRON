@@ -174,7 +174,7 @@ export component RelocateSheet inherits Sheet {
         // Nothing to press while files are in flight. There is no half of this
         // that is safe to abandon: the copy is recoverable only by finishing or
         // by failing, and a Cancel that did neither would be a button that lies.
-        if !root.running: Btn {
+        if !root.running: cancel-or-close := Btn {
             // "Close" once the move has landed — there is nothing left to
             // cancel, and a button reading Cancel over a finished move invites
             // the reading that it might undo one.
@@ -185,7 +185,7 @@ export component RelocateSheet inherits Sheet {
             }
         }
 
-        if !root.running && !root.failed && !root.done: Btn {
+        if !root.running && !root.failed && !root.done: move-btn := Btn {
             label: Strings.action-move;
             primary: true;
             clicked => {

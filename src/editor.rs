@@ -15,6 +15,7 @@ use time::{Date, OffsetDateTime};
 
 use crate::data::{self, Draft, Product};
 use crate::import::{self, Job, Outcome};
+use crate::render::Invalidator;
 use crate::strings::{self, Key, Lang};
 use crate::vault::{self, Vault};
 use crate::viewer::Viewer;
@@ -83,6 +84,9 @@ impl Report {
 
 struct Editor {
     products_root: PathBuf,
+    /// Lets a commit ask the render worker to release its handle on a removed
+    /// file before deleting it, rather than after (see [`Job::invalidator`]).
+    invalidator: Invalidator,
     lang: Lang,
     /// The folder being edited. `None` means a new product.
     editing: Option<String>,
@@ -183,6 +187,18 @@ impl Editor {
             report.end = text(Key::ErrWarrantyBackwards);
         }
 
+        // A warranty that starts before the item was purchased is not a real
+        // warranty — almost always a typo'd year in one of the two fields —
+        // and nothing else here or in `Draft`/`Manifest` catches it. Checked
+        // against `start` rather than `end`: a warranty is allowed to start
+        // the same day it is purchased, and `end < start` above already
+        // covers the case where `end` alone is the one out of order.
+        if let (Some(purchase), Some(start)) = (purchase, start)
+            && start < purchase
+        {
+            report.purchase = text(Key::ErrPurchaseAfterWarranty);
+        }
+
         if let (true, Some(purchase_date), Some(warranty_start), Some(warranty_end)) =
             (report.clean(), purchase, start, end)
         {
@@ -216,6 +232,7 @@ impl Editor {
                 })
                 .collect(),
             removals: self.removals.clone(),
+            invalidator: Some(self.invalidator.clone()),
         }
     }
 
@@ -280,6 +297,7 @@ pub fn install(
 ) -> Editors {
     let editor = Rc::new(RefCell::new(Editor {
         products_root,
+        invalidator: viewer.invalidator(),
         lang,
         editing: None,
         docs: Vec::new(),
@@ -378,6 +396,19 @@ pub fn install(
             let Some(app) = weak.upgrade() else { return };
             {
                 let mut editor = editor.borrow_mut();
+                if editor.busy {
+                    // A commit already has this editor's `removals` — and
+                    // everything else about this draft — copied into a `Job`
+                    // on its way to another thread. Changing it now would be
+                    // invisible to that commit: the row would disappear from
+                    // the sheet as if the removal had been saved, while the
+                    // file it named stays on disk untouched, because the
+                    // `Job` already in flight has no way to learn of it. The
+                    // form.slint side of this disables the button for the
+                    // same reason; this is the guard that holds even if that
+                    // one is ever bypassed.
+                    return;
+                }
                 if index < 0 || index as usize >= editor.docs.len() {
                     return;
                 }
@@ -557,6 +588,11 @@ mod tests {
     fn editor() -> Editor {
         Editor {
             products_root: PathBuf::from("/vault/products"),
+            // A real, momentarily-live channel handle is simpler than a mock:
+            // the worker it points at shuts down the instant this temporary
+            // `Renderer` is dropped, and `Invalidator::invalidate` already
+            // ignores a send to nobody, so this behaves as a harmless no-op.
+            invalidator: crate::render::Renderer::spawn(|_| {}).invalidator(),
             lang: Lang::En,
             editing: None,
             docs: Vec::new(),
@@ -628,6 +664,28 @@ mod tests {
     fn a_warranty_may_start_and_end_on_the_same_day() {
         let report = editor().check(&typed("Monitor", "14-03-2026", "14-03-2026", "14-03-2026"));
         assert!(report.clean(), "a one-day warranty is odd, not invalid");
+    }
+
+    /// A warranty starting years before the item was purchased is a typo, not
+    /// a real product — and until now nothing here or in `Draft`/`Manifest`
+    /// caught it.
+    #[test]
+    fn a_warranty_cannot_start_before_the_item_was_purchased() {
+        let report = editor().check(&typed("Monitor", "14-03-2026", "14-03-2020", "14-03-2027"));
+        assert_eq!(
+            report.purchase,
+            strings::get(Lang::En, Key::ErrPurchaseAfterWarranty)
+        );
+        assert!(report.draft.is_none());
+    }
+
+    #[test]
+    fn a_warranty_may_start_the_same_day_the_item_was_purchased() {
+        let report = editor().check(&typed("Monitor", "14-03-2026", "14-03-2026", "14-03-2027"));
+        assert!(
+            report.clean(),
+            "buying and activating on the same day is ordinary"
+        );
     }
 
     #[test]

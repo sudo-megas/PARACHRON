@@ -138,37 +138,63 @@ export component FormSheet inherits Sheet {
         font-size: 13px;
     }
 
-    for doc[idx] in root.docs: Rectangle {
-        height: 30px;
+    // Capped and scrolled rather than left to grow with the list: past a
+    // handful of documents this used to push the Save/Cancel row below the
+    // card's clipped bounds (`sheet.slint` caps the card at
+    // `parent.height - 60px`), with no way left to reach either button.
+    // Six rows is enough to show what is attached without the sheet growing
+    // past the common case, and a bounded height is what lets `Flickable`
+    // handle the rest internally instead of the whole card overflowing.
+    Rectangle {
+        height: min(root.docs.length * 30px, 180px);
+        clip: true;
 
-        HorizontalLayout {
-            spacing: 8px;
+        Flickable {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            viewport-width: parent.width;
+            viewport-height: doc-rows.preferred-height;
 
-            Text {
-                text: doc.label;
-                color: doc.failed ? Palette.danger : Palette.text;
-                font-size: 13px;
-                vertical-alignment: center;
-                overflow: elide;
-            }
+            doc-rows := VerticalLayout {
+                width: parent.width;
 
-            Text {
-                text: doc.detail;
-                color: doc.failed ? Palette.danger : Palette.muted;
-                font-size: 12px;
-                vertical-alignment: center;
-                overflow: elide;
-            }
+                for doc[idx] in root.docs: Rectangle {
+                    height: 30px;
 
-            Rectangle {
-                horizontal-stretch: 1;
-            }
+                    HorizontalLayout {
+                        spacing: 8px;
 
-            remove-doc := GlyphBtn {
-                glyph: Strings.remove-glyph;
-                accessible-label: Strings.remove-glyph;
-                clicked => {
-                    root.remove-pdf(idx);
+                        Text {
+                            text: doc.label;
+                            color: doc.failed ? Palette.danger : Palette.text;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: doc.detail;
+                            color: doc.failed ? Palette.danger : Palette.muted;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        remove-doc := GlyphBtn {
+                            glyph: Strings.remove-glyph;
+                            accessible-label: Strings.remove-glyph;
+                            enabled: !root.busy;
+                            clicked => {
+                                root.remove-pdf(idx);
+                            }
+                        }
+                    }
                 }
             }
         }

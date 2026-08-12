@@ -248,6 +248,12 @@ export component AppWindow inherits Window {
     // reads them back when Save is pressed. Everything else is pushed from
     // Rust, already composed — the `.slint` side works out no messages of its
     // own.
+    /// False when the vault could not be resolved at startup at all — no home
+    /// directory, an unreadable `config.toml`, or a configured vault that is
+    /// not there. There is no `products/` for an add to write into, and
+    /// without this the button stayed live and let a save land relative to
+    /// wherever the process happened to be launched from instead.
+    in property <bool> vault-ready: true;
     in property <bool> form-open;
     in property <string> form-heading;
     in-out property <string> form-name;
@@ -462,6 +468,7 @@ export component AppWindow inherits Window {
                 add-button := Btn {
                     label: Strings.action-add-document;
                     y: (parent.height - self.height) / 2;
+                    enabled: root.vault-ready;
                     clicked => {
                         root.menu-open = false;
                         root.add-document();
@@ -609,7 +616,7 @@ export component AppWindow inherits Window {
                             width: parent.width;
                             height: parent.height;
 
-                            for item[idx] in root.products: Rectangle {
+                            for item[idx] in root.products: row := Rectangle {
                                 height: root.row-height;
                                 background: idx == root.selected-index
                                     ? Palette.selection
@@ -647,34 +654,40 @@ export component AppWindow inherits Window {
                                     }
                                 }
 
+                                // The click handler and the keyboard/screen-reader
+                                // activation handler below must select the same
+                                // row the same way — a mouse click and pressing
+                                // Enter on a focused row are two doors to one
+                                // action, not two actions that happen to agree
+                                // today. One function shared by both is what
+                                // keeps them from drifting apart the next time
+                                // either grows a field.
+                                function select() {
+                                    root.selected-index = idx;
+                                    root.selected-open = true;
+                                    root.selected-name = item.name;
+                                    root.selected-detail = item.detail;
+                                    root.selected-broken = item.broken;
+                                    // Choosing a product is choosing to look
+                                    // at it, so About steps out of the way.
+                                    // Otherwise the click lands, the
+                                    // selection changes, and nothing visible
+                                    // happens — a list that looks broken.
+                                    root.about-open = false;
+                                    root.product-selected(idx);
+                                }
+
                                 row-touch := TouchArea {
                                     mouse-cursor: MouseCursor.pointer;
                                     clicked => {
-                                        root.selected-index = idx;
-                                        root.selected-open = true;
-                                        root.selected-name = item.name;
-                                        root.selected-detail = item.detail;
-                                        root.selected-broken = item.broken;
-                                        // Choosing a product is choosing to look
-                                        // at it, so About steps out of the way.
-                                        // Otherwise the click lands, the
-                                        // selection changes, and nothing visible
-                                        // happens — a list that looks broken.
-                                        root.about-open = false;
-                                        root.product-selected(idx);
+                                        row.select();
                                     }
                                 }
 
                                 accessible-role: button;
                                 accessible-label: item.label;
                                 accessible-action-default => {
-                                    root.selected-index = idx;
-                                    root.selected-open = true;
-                                    root.selected-name = item.name;
-                                    root.selected-detail = item.detail;
-                                    root.selected-broken = item.broken;
-                                    root.about-open = false;
-                                    root.product-selected(idx);
+                                    row.select();
                                 }
                             }
                         }
@@ -1008,6 +1021,7 @@ export component AppWindow inherits Window {
 
                 menu-add := MenuRow {
                     label: Strings.action-add-document;
+                    enabled: root.vault-ready;
                     clicked => {
                         root.menu-open = false;
                         root.add-document();

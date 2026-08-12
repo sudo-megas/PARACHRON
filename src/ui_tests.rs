@@ -17,7 +17,7 @@ use crate::data::{DataError, Entry, Product};
 use crate::strings::{Key, Lang};
 use crate::theme::{Theme, Themes};
 use crate::vault::{SortMode, Vault};
-use crate::{AppWindow, Palette, ProductItem};
+use crate::{AppWindow, FormDoc, Palette, ProductItem};
 
 /// Widths must land exactly on 25 / 50 / 25 (CORE §4), so no tolerance here
 /// beyond float noise.
@@ -917,6 +917,86 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     );
     search("");
 
+    // ── Final hardening pass: sort-by-purchase-date's own chip ────────────
+    //
+    // `sort-name` gets exercised above (Chron7's running-export block and the
+    // restore right after it); `sort-purchase` — the other half of CORE §4's
+    // two-chip toggle — has never been clicked by any test, so a break in
+    // `app.slint`'s `clicked => { root.sort-toggled(root.sort-mode == 2 ? 0 :
+    // 2); }` would have gone unnoticed. What only this element tree can prove
+    // is that the chip is still wired through to `SortMode::Purchase` and
+    // that a second click still clears it, the same round trip already
+    // pinned for `sort-name`; the date arithmetic itself is `vault.rs`'s own
+    // `purchase_order_puts_the_oldest_first`.
+    click(&elements(&app, "AppWindow::sort-purchase")[0]);
+    assert_eq!(stack.vault.borrow().sort(), SortMode::Purchase);
+    // Every entry shares one purchase date, so `sort_entries`' own tie-break —
+    // folder name, not insertion order — is what actually decides this order:
+    // charger, drive, monitor, then the broken folder last as always.
+    assert_eq!(
+        names(),
+        [
+            "Şarj Cihazı".to_string(),
+            "IronWolf Pro".to_string(),
+            "QD-OLED Monitor".to_string(),
+            broken_name.clone(),
+        ]
+    );
+    click(&elements(&app, "AppWindow::sort-purchase")[0]);
+    assert_eq!(
+        stack.vault.borrow().sort(),
+        SortMode::Added,
+        "clicking the active chip again clears it, same as sort-name"
+    );
+
+    // ── Final hardening pass: the viewer's own controls ────────────────────
+    //
+    // Neither `page-requested` nor `zoom-changed` — the callbacks behind the
+    // control row's ‹/› buttons and the zoom slider — has ever been invoked
+    // by this test. The seeded vault has no real PDF behind any product, so
+    // there is no page count to navigate through, which is exactly what
+    // makes `page-requested`'s bounds guard worth pinning: a request for any
+    // page while `state.pages` is 0 must be a silent no-op, not a panic and
+    // not an out-of-range index handed to the renderer.
+    click(&elements(&app, "AppWindow::row-touch")[0]);
+    assert!(
+        app.get_selected_open(),
+        "a product is open for this section"
+    );
+    let page_before = app.get_page_index();
+    app.invoke_page_requested(-1);
+    assert_eq!(
+        app.get_page_index(),
+        page_before,
+        "a negative page is refused"
+    );
+    app.invoke_page_requested(999);
+    assert_eq!(
+        app.get_page_index(),
+        page_before,
+        "a page past the (empty) document is refused"
+    );
+
+    // `zoom-changed` carries no such guard — it applies even before a
+    // document has finished opening — but it is debounced (`RESIZE_SETTLE`)
+    // so dragging the slider re-renders once rather than on every step.
+    // `mock_elapsed_time` both advances the testing backend's virtual clock
+    // and fires whatever timers are now due, so this proves the callback
+    // reaches `app.set_zoom` at all, and that it arrives clamped to CORE's
+    // 1×–4× range regardless of what a hand-crafted call passes in.
+    app.invoke_zoom_changed(9.0);
+    testing::mock_elapsed_time(std::time::Duration::from_millis(200));
+    assert_eq!(
+        app.get_zoom(),
+        crate::viewer::ZOOM_MAX,
+        "a zoom past the slider's own maximum is still clamped when it \
+         comes from Rust rather than a drag"
+    );
+
+    app.invoke_zoom_changed(0.1);
+    testing::mock_elapsed_time(std::time::Duration::from_millis(200));
+    assert_eq!(app.get_zoom(), crate::viewer::ZOOM_MIN);
+
     // ── Chron8: the About strip, criteria 1 and 8 ─────────────────────────
     //
     // `about-open` is a private property — whether a pane is on screen is the
@@ -1029,6 +1109,127 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
         Some(strings_get(Lang::Tr, Key::ActionVaultLocation)),
     );
     click(&elements(&app, "AppWindow::menu-lang-en")[0]);
+
+    // ── The add/edit sheet (FormSheet) ─────────────────────────────────────
+    //
+    // `add-document()` itself opens nothing that needs a person — the picker
+    // only shows up behind `add-pdf`, which this does not touch — so this
+    // exercises the real callback rather than driving `form-open` by hand.
+    app.invoke_add_document();
+    assert!(app.get_form_open(), "add-document() did not open the sheet");
+    assert_eq!(
+        app.get_form_heading(),
+        strings_get(Lang::En, Key::FormAddTitle)
+    );
+    assert_eq!(app.get_form_name(), "", "a fresh add starts blank");
+
+    let save = || elements(&app, "FormSheet::save");
+    let add_pdf = || elements(&app, "FormSheet::add-pdf");
+    assert_eq!(save().len(), 1);
+    assert_eq!(
+        save()[0].accessible_enabled(),
+        Some(true),
+        "nothing is running yet"
+    );
+    assert_eq!(add_pdf()[0].accessible_enabled(), Some(true));
+
+    // `form-busy` and `form-docs` are driven by hand rather than through a
+    // real `form-save()` — that call dispatches a commit onto a thread of its
+    // own, which needs the event loop this test does not run to ever report
+    // back. What is asserted here is the sheet's own rendering: whether it
+    // disables the right things while `busy` is true, which is plain
+    // property-to-element wiring and does not need the thread that flips the
+    // property for real.
+    app.set_form_docs(ModelRc::new(VecModel::from(vec![FormDoc {
+        label: "invoice.pdf".into(),
+        detail: "".into(),
+        failed: false,
+    }])));
+    assert_eq!(
+        elements(&app, "FormSheet::remove-doc")[0].accessible_enabled(),
+        Some(true)
+    );
+
+    app.set_form_busy(true);
+    assert_eq!(
+        save()[0].accessible_enabled(),
+        Some(false),
+        "Save must not be pressable a second time while a commit is in flight"
+    );
+    assert_eq!(add_pdf()[0].accessible_enabled(), Some(false));
+    assert_eq!(
+        elements(&app, "FormSheet::remove-doc")[0].accessible_enabled(),
+        Some(false),
+        "a document removed while a save is in flight is not seen by the \
+         commit already under way — see editor::on_form_remove_pdf"
+    );
+
+    // Left as it was found: `busy` reset before `cancel()`, because the real
+    // guard behind that callback also checks it, and a stray `true` here
+    // would make the very next call a silent no-op instead of closing the
+    // sheet.
+    app.set_form_busy(false);
+    app.set_form_docs(ModelRc::new(VecModel::from(Vec::<FormDoc>::new())));
+    app.invoke_form_cancel();
+    assert!(!app.get_form_open(), "cancel did not close the sheet");
+
+    // ── The vault relocation sheet (RelocateSheet) ──────────────────────────
+    //
+    // `relocate::install`'s own `running` guard lives behind a picker-filled
+    // `Option<PathBuf>` that only a real folder dialog can set, so — same
+    // reasoning as the form above — this drives the sheet's properties by
+    // hand and checks what it renders, which is the half of Chron9's own
+    // finding that does not need the portal.
+    let cancel_or_close = || elements(&app, "RelocateSheet::cancel-or-close");
+    let move_btn = || elements(&app, "RelocateSheet::move-btn");
+
+    app.set_relocate_open(true);
+    app.set_relocate_running(true);
+    assert!(
+        cancel_or_close().is_empty(),
+        "nothing must be pressable while files are in flight"
+    );
+    assert!(move_btn().is_empty());
+
+    app.set_relocate_running(false);
+    assert_eq!(cancel_or_close().len(), 1);
+    assert_eq!(
+        cancel_or_close()[0].accessible_label().as_deref(),
+        Some(strings_get(Lang::En, Key::ActionCancel)),
+        "before a move finishes, the button reads Cancel"
+    );
+    assert_eq!(
+        move_btn().len(),
+        1,
+        "not running, not failed, not done: Move is offered"
+    );
+
+    app.set_relocate_done(true);
+    assert_eq!(
+        cancel_or_close()[0].accessible_label().as_deref(),
+        Some(strings_get(Lang::En, Key::ActionClose)),
+        "a button reading Cancel over a finished move invites undoing one"
+    );
+    assert!(
+        move_btn().is_empty(),
+        "a finished move does not offer to start another over the same click"
+    );
+
+    app.set_relocate_done(false);
+    app.set_relocate_failed(true);
+    assert_eq!(
+        cancel_or_close()[0].accessible_label().as_deref(),
+        Some(strings_get(Lang::En, Key::ActionCancel)),
+        "a refusal is not a finished move"
+    );
+    assert!(
+        move_btn().is_empty(),
+        "the failed destination is not retried by the same button"
+    );
+
+    // Left closed, the same way the sheets above were.
+    app.set_relocate_failed(false);
+    app.set_relocate_open(false);
 }
 
 /// The Slint colour `theme.rs` would have pushed for an `0xRRGGBB` value.
