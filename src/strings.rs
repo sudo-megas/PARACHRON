@@ -245,6 +245,7 @@ pub enum Key {
     ErrVaultVerify,
     ErrVaultMissing,
     ErrConfigUnreadable,
+    ErrNameNotUtf8,
 }
 
 impl Key {
@@ -381,6 +382,7 @@ impl Key {
         Key::ErrVaultVerify,
         Key::ErrVaultMissing,
         Key::ErrConfigUnreadable,
+        Key::ErrNameNotUtf8,
     ];
 }
 
@@ -673,6 +675,10 @@ fn table(key: Key) -> (&'static str, &'static str) {
             "config.toml could not be read, so the vault it names is unknown",
             "config.toml okunamadı, bu yüzden gösterdiği kasa bilinmiyor",
         ),
+        ErrNameNotUtf8 => (
+            "this folder's name cannot be displayed correctly",
+            "bu klasörün adı doğru şekilde görüntülenemiyor",
+        ),
     }
 }
 
@@ -831,7 +837,7 @@ mod tests {
         assert_eq!(before, seen.len(), "Key::ALL contains a duplicate");
         assert_eq!(
             Key::ALL.len(),
-            126,
+            127,
             "Key::ALL is out of step with the enum — add the new key to it"
         );
     }

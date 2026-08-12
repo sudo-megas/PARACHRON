@@ -54,6 +54,17 @@ pub enum DataError {
     /// Distinct from a config with no `vault` key, which is the ordinary case
     /// and means the default. See `config::Config::load`.
     ConfigUnreadable(String),
+    /// A folder under `products/` has a name that is not valid UTF-8.
+    ///
+    /// Never something Parachron itself wrote — `folder_slug` is ASCII-only —
+    /// so this is only ever a foreign or hand-crafted vault. Carries the OS's
+    /// best (lossy) rendering of the name for the message; [`Entry::folder`]
+    /// for one of these is never that same lossy string unmodified, because
+    /// two different invalid byte sequences can render to the identical
+    /// replacement-character text, and a folder's display identity has to be
+    /// unique or the second of a colliding pair becomes permanently
+    /// unreachable in the product list.
+    NameNotUtf8(String),
 }
 
 /// Where the vault lives.
@@ -290,12 +301,32 @@ pub fn scan(products: &Path) -> Vec<Entry> {
     };
 
     let mut entries: Vec<Entry> = Vec::new();
+    // Every folder identity handed out below passes through here first, so a
+    // lossy-converted name that collides with one already seen — the one way
+    // two distinct directory entries can compare equal, since the filesystem
+    // itself already guarantees a byte-exact name is unique within one
+    // directory — gets a suffix instead of silently doubling up. Selection
+    // and sorting both key on `Entry::folder()`, so a repeat here is not a
+    // display nuisance: it is the second product becoming unreachable, opening
+    // the first one every time its own row is clicked.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for dirent in listing.flatten() {
         let path = dirent.path();
         if !path.is_dir() {
             continue;
         }
-        let folder = dirent.file_name().to_string_lossy().into_owned();
+
+        let raw = dirent.file_name();
+        let Some(folder) = raw.to_str() else {
+            let lossy = raw.to_string_lossy().into_owned();
+            entries.push(Entry::Broken {
+                folder: disambiguate(&mut seen, lossy.clone()),
+                reason: DataError::NameNotUtf8(lossy),
+            });
+            continue;
+        };
+        let folder = disambiguate(&mut seen, folder.to_string());
+
         entries.push(match load(&path, &folder) {
             Ok(product) => Entry::Ok(product),
             Err(reason) => Entry::Broken { folder, reason },
@@ -303,6 +334,24 @@ pub fn scan(products: &Path) -> Vec<Entry> {
     }
 
     entries
+}
+
+/// Make `folder` unique against every identity already handed out, appending
+/// a counted suffix if it is not. A no-op for the overwhelming majority of
+/// calls — every name this app itself ever wrote is already unique by
+/// construction — so the ordinary path costs one hash-set lookup.
+fn disambiguate(seen: &mut std::collections::HashSet<String>, folder: String) -> String {
+    if seen.insert(folder.clone()) {
+        return folder;
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{folder} ({n})");
+        if seen.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 /// Whether a manifest-supplied `pdfs` entry is safe to join onto a product's
@@ -938,6 +987,53 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// The second call with the same identity is the one that used to make a
+    /// product permanently unreachable: two folders that agree on display
+    /// name — which only really happens once a lossy UTF-8 conversion has
+    /// thrown information away — must not agree on the identity `vault` keys
+    /// selection and sorting on.
+    #[test]
+    fn disambiguate_gives_a_repeated_identity_a_counted_suffix() {
+        let mut seen = std::collections::HashSet::new();
+        assert_eq!(disambiguate(&mut seen, "camera".to_string()), "camera");
+        assert_eq!(disambiguate(&mut seen, "camera".to_string()), "camera (2)");
+        assert_eq!(disambiguate(&mut seen, "camera".to_string()), "camera (3)");
+        // A name that was never repeated is untouched.
+        assert_eq!(disambiguate(&mut seen, "drive".to_string()), "drive");
+    }
+
+    /// The real trigger: two folders whose raw bytes differ but whose lossy
+    /// UTF-8 conversion lands on the same `char::REPLACEMENT_CHARACTER`
+    /// string. Built with real non-UTF-8 directory names (Unix allows any
+    /// byte sequence except `/` and NUL) rather than a synthetic collision,
+    /// so this exercises `scan` end to end, not just the helper.
+    #[cfg(unix)]
+    #[test]
+    fn two_non_utf8_folder_names_that_collide_when_made_lossy_both_stay_reachable() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        for raw in [&[0xFFu8, b'x'][..], &[0xFEu8, b'x'][..]] {
+            let name = std::ffi::OsStr::from_bytes(raw);
+            fs::create_dir(dir.path().join(name)).unwrap();
+        }
+
+        let entries = scan(dir.path());
+        assert_eq!(entries.len(), 2);
+
+        let folders: Vec<&str> = entries.iter().map(|e| e.folder()).collect();
+        assert_ne!(
+            folders[0], folders[1],
+            "two distinct directories must not share one identity: {folders:?}"
+        );
+        // Both display the replacement character; the fix is that only one of
+        // them keeps the un-suffixed name.
+        for folder in &folders {
+            assert!(folder.contains(char::REPLACEMENT_CHARACTER));
+        }
+        assert!(folders.iter().any(|f| f.ends_with(" (2)")));
     }
 
     // ── The write half (Chron3) ──────────────────────────────────────────
