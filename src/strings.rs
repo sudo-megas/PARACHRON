@@ -132,6 +132,7 @@ pub enum Key {
     ErrNameRequired,
     ErrDateInvalid,
     ErrWarrantyBackwards,
+    ErrPurchaseAfterWarranty,
     ErrSaveFailed,
 
     // Details column and sorting (Chron4)
@@ -295,6 +296,7 @@ impl Key {
         Key::ErrNameRequired,
         Key::ErrDateInvalid,
         Key::ErrWarrantyBackwards,
+        Key::ErrPurchaseAfterWarranty,
         Key::ErrSaveFailed,
         Key::WarrantyLeft,
         Key::DayUnit,
@@ -454,6 +456,10 @@ fn table(key: Key) -> (&'static str, &'static str) {
         ErrWarrantyBackwards => (
             "The warranty ends before it starts.",
             "Garanti, başlamadan bitiyor.",
+        ),
+        ErrPurchaseAfterWarranty => (
+            "The warranty starts before the purchase date.",
+            "Garanti, satın alma tarihinden önce başlıyor.",
         ),
         ErrSaveFailed => ("Could not save", "Kaydedilemedi"),
 
@@ -825,7 +831,7 @@ mod tests {
         assert_eq!(before, seen.len(), "Key::ALL contains a duplicate");
         assert_eq!(
             Key::ALL.len(),
-            125,
+            126,
             "Key::ALL is out of step with the enum — add the new key to it"
         );
     }
