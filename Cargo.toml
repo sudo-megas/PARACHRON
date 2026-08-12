@@ -1,6 +1,6 @@
 [package]
 name = "parachron"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2024"
 authors = ["sudo-megas"]
 description = "A desktop vault for purchases: invoices, warranty documents, serial numbers and a warranty countdown, kept together."
