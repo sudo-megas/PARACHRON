@@ -917,6 +917,83 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     );
     search("");
 
+    // ── Final hardening pass: sort-by-purchase-date's own chip ────────────
+    //
+    // `sort-name` gets exercised above (Chron7's running-export block and the
+    // restore right after it); `sort-purchase` — the other half of CORE §4's
+    // two-chip toggle — has never been clicked by any test, so a break in
+    // `app.slint`'s `clicked => { root.sort-toggled(root.sort-mode == 2 ? 0 :
+    // 2); }` would have gone unnoticed. What only this element tree can prove
+    // is that the chip is still wired through to `SortMode::Purchase` and
+    // that a second click still clears it, the same round trip already
+    // pinned for `sort-name`; the date arithmetic itself is `vault.rs`'s own
+    // `purchase_order_puts_the_oldest_first`.
+    click(&elements(&app, "AppWindow::sort-purchase")[0]);
+    assert_eq!(stack.vault.borrow().sort(), SortMode::Purchase);
+    // Every entry shares one purchase date, so `sort_entries`' own tie-break —
+    // folder name, not insertion order — is what actually decides this order:
+    // charger, drive, monitor, then the broken folder last as always.
+    assert_eq!(
+        names(),
+        [
+            "Şarj Cihazı".to_string(),
+            "IronWolf Pro".to_string(),
+            "QD-OLED Monitor".to_string(),
+            broken_name.clone(),
+        ]
+    );
+    click(&elements(&app, "AppWindow::sort-purchase")[0]);
+    assert_eq!(
+        stack.vault.borrow().sort(),
+        SortMode::Added,
+        "clicking the active chip again clears it, same as sort-name"
+    );
+
+    // ── Final hardening pass: the viewer's own controls ────────────────────
+    //
+    // Neither `page-requested` nor `zoom-changed` — the callbacks behind the
+    // control row's ‹/› buttons and the zoom slider — has ever been invoked
+    // by this test. The seeded vault has no real PDF behind any product, so
+    // there is no page count to navigate through, which is exactly what
+    // makes `page-requested`'s bounds guard worth pinning: a request for any
+    // page while `state.pages` is 0 must be a silent no-op, not a panic and
+    // not an out-of-range index handed to the renderer.
+    click(&elements(&app, "AppWindow::row-touch")[0]);
+    assert!(app.get_selected_open(), "a product is open for this section");
+    let page_before = app.get_page_index();
+    app.invoke_page_requested(-1);
+    assert_eq!(
+        app.get_page_index(),
+        page_before,
+        "a negative page is refused"
+    );
+    app.invoke_page_requested(999);
+    assert_eq!(
+        app.get_page_index(),
+        page_before,
+        "a page past the (empty) document is refused"
+    );
+
+    // `zoom-changed` carries no such guard — it applies even before a
+    // document has finished opening — but it is debounced (`RESIZE_SETTLE`)
+    // so dragging the slider re-renders once rather than on every step.
+    // `mock_elapsed_time` both advances the testing backend's virtual clock
+    // and fires whatever timers are now due, so this proves the callback
+    // reaches `app.set_zoom` at all, and that it arrives clamped to CORE's
+    // 1×–4× range regardless of what a hand-crafted call passes in.
+    app.invoke_zoom_changed(9.0);
+    testing::mock_elapsed_time(std::time::Duration::from_millis(200));
+    assert_eq!(
+        app.get_zoom(),
+        crate::viewer::ZOOM_MAX,
+        "a zoom past the slider's own maximum is still clamped when it \
+         comes from Rust rather than a drag"
+    );
+
+    app.invoke_zoom_changed(0.1);
+    testing::mock_elapsed_time(std::time::Duration::from_millis(200));
+    assert_eq!(app.get_zoom(), crate::viewer::ZOOM_MIN);
+
     // ── Chron8: the About strip, criteria 1 and 8 ─────────────────────────
     //
     // `about-open` is a private property — whether a pane is on screen is the
