@@ -205,8 +205,8 @@ impl Paths {
                 Ok(()) => Ok(()),
                 // The ordinary case after a first run: `products` is already
                 // there, which `create_dir_all` would also treat as success.
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists
-                    && self.products.is_dir() =>
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::AlreadyExists && self.products.is_dir() =>
                 {
                     Ok(())
                 }
@@ -414,8 +414,10 @@ fn load(dir: &Path, folder: &str) -> Result<Product, DataError> {
     // wrote and must never be joined onto `dir`. It is folded into
     // `missing_pdfs` rather than dropped outright, so it is still reported —
     // CORE §3's "broken is shown, never hidden" — just never opened.
-    let (pdfs, unsafe_pdfs): (Vec<String>, Vec<String>) =
-        raw.pdfs.into_iter().partition(|name| is_safe_pdf_name(name));
+    let (pdfs, unsafe_pdfs): (Vec<String>, Vec<String>) = raw
+        .pdfs
+        .into_iter()
+        .partition(|name| is_safe_pdf_name(name));
 
     // Files the manifest promises but the folder does not hold.
     let missing_pdfs: Vec<String> = pdfs
@@ -1423,7 +1425,10 @@ pdfs = ["invoice.pdf", "../../secret.pdf", "/etc/passwd", "..", "."]
         let entries = scan(&products);
         assert_eq!(entries.len(), 1);
         let Entry::Ok(product) = &entries[0] else {
-            panic!("a manifest with a bad pdfs entry must still parse: {:?}", entries[0]);
+            panic!(
+                "a manifest with a bad pdfs entry must still parse: {:?}",
+                entries[0]
+            );
         };
 
         assert_eq!(

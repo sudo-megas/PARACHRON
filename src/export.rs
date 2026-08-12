@@ -198,7 +198,11 @@ pub fn run(job: Job) -> Outcome {
     // temporary could not be created, the bytes could not be got into it, or
     // the finished file could not be put where it was asked to go.
     let dir = job.destination.parent().unwrap_or_else(|| Path::new("."));
-    let name = job.destination.file_name().unwrap_or_default().to_string_lossy();
+    let name = job
+        .destination
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
     let tmp = dir.join(format!(".{name}.tmp"));
 
     let mut file = match File::create(&tmp) {
@@ -934,7 +938,10 @@ mod tests {
         fs::write(out.join("marker"), b"the previous export's stand-in").unwrap();
 
         let outcome = export(&folder, product(&["invoice.pdf"]), &out, Lang::En);
-        assert!(matches!(outcome, Outcome::Failed(Failure::Write(_))), "{outcome:?}");
+        assert!(
+            matches!(outcome, Outcome::Failed(Failure::Write(_))),
+            "{outcome:?}"
+        );
 
         assert!(
             out.join("marker").is_file(),

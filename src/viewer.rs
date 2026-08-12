@@ -302,7 +302,9 @@ impl State {
 /// continuing with it is strictly better than the alternative for an app with
 /// nothing behind this boundary to protect but its own UI state.
 fn lock(state: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
-    state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Tab text for a file name: the stem, first letter raised.
@@ -926,7 +928,10 @@ mod tests {
         state.show(Some(drive()), true);
 
         assert_eq!(state.active_tab, 0);
-        assert_eq!(state.page, 0, "a different product must not inherit the last page");
+        assert_eq!(
+            state.page, 0,
+            "a different product must not inherit the last page"
+        );
         assert_eq!(
             state.zoom, ZOOM_MIN,
             "a different product must not inherit the last zoom"

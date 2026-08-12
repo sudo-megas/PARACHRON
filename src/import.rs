@@ -135,9 +135,7 @@ pub fn run(job: Job) -> Outcome {
     // the one check that holds regardless of whether the UI remembered to
     // disable Add Document for that state.
     if !job.products_root.is_absolute() {
-        return Outcome::Failed(DataError::Unreadable(
-            "no vault is open".to_string(),
-        ));
+        return Outcome::Failed(DataError::Unreadable("no vault is open".to_string()));
     }
 
     for (source, name) in &job.imports {
@@ -181,8 +179,10 @@ pub fn run(job: Job) -> Outcome {
                     if attempt + 1 == MAX_COLLISION_ATTEMPTS {
                         return Outcome::Failed(unreadable(e));
                     }
-                    folder =
-                        data::unique_folder(&job.products_root, &data::folder_slug(&job.draft.name));
+                    folder = data::unique_folder(
+                        &job.products_root,
+                        &data::folder_slug(&job.draft.name),
+                    );
                     home = job.products_root.join(&folder);
                 }
                 Err(e) => return Outcome::Failed(unreadable(e)),
@@ -326,7 +326,10 @@ pub fn destination_name(source: &Path, taken: &[String]) -> String {
     // it cannot open any more than a folder it cannot open — rather than only
     // the two characters that would otherwise break a path.
     const ILLEGAL: [char; 9] = ['/', '\\', ':', '?', '*', '<', '>', '|', '"'];
-    let cleaned: String = raw.chars().filter(|c| !c.is_control() && !ILLEGAL.contains(c)).collect();
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| !c.is_control() && !ILLEGAL.contains(c))
+        .collect();
     let cleaned = cleaned.trim().trim_matches('.').trim().to_string();
     let cleaned = if cleaned.is_empty() {
         format!("{FILE_FALLBACK}.pdf")
@@ -371,7 +374,10 @@ pub fn destination_name(source: &Path, taken: &[String]) -> String {
 
     for n in 2..=9999 {
         let candidate = format!("{stem}-{n}{extension}");
-        if !taken.iter().any(|name| name.eq_ignore_ascii_case(&candidate)) {
+        if !taken
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&candidate))
+        {
             return candidate;
         }
     }
@@ -441,16 +447,18 @@ mod tests {
     /// `taken`-comparison layer so the common case never needs the fallback.
     #[test]
     fn destination_name_treats_names_as_taken_regardless_of_ascii_case() {
-        let name = destination_name(
-            Path::new("/tmp/invoice.pdf"),
-            &["Invoice.pdf".to_string()],
-        );
+        let name = destination_name(Path::new("/tmp/invoice.pdf"), &["Invoice.pdf".to_string()]);
         assert_eq!(name, "invoice-2.pdf");
     }
 
     #[test]
     fn destination_name_avoids_windows_reserved_device_names() {
-        for raw in ["/tmp/nul.pdf", "/tmp/NUL.pdf", "/tmp/con.pdf", "/tmp/COM1.pdf"] {
+        for raw in [
+            "/tmp/nul.pdf",
+            "/tmp/NUL.pdf",
+            "/tmp/con.pdf",
+            "/tmp/COM1.pdf",
+        ] {
             let name = destination_name(Path::new(raw), &[]);
             let stem = name.split('.').next().unwrap().to_ascii_lowercase();
             assert!(
@@ -517,8 +525,7 @@ mod tests {
     /// explicitly rather than left to a `fs::create_dir` that would often
     /// succeed there too.
     #[test]
-    fn a_relative_products_root_is_refused_rather_than_written_relative_to_the_working_directory()
-    {
+    fn a_relative_products_root_is_refused_rather_than_written_relative_to_the_working_directory() {
         let outcome = run(Job {
             products_root: PathBuf::new(),
             folder: None,

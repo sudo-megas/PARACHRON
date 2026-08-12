@@ -959,7 +959,10 @@ fn the_window_meets_the_criteria_that_need_a_real_element_tree() {
     // page while `state.pages` is 0 must be a silent no-op, not a panic and
     // not an out-of-range index handed to the renderer.
     click(&elements(&app, "AppWindow::row-touch")[0]);
-    assert!(app.get_selected_open(), "a product is open for this section");
+    assert!(
+        app.get_selected_open(),
+        "a product is open for this section"
+    );
     let page_before = app.get_page_index();
     app.invoke_page_requested(-1);
     assert_eq!(
