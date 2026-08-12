@@ -609,6 +609,9 @@ pub fn describe(lang: Lang, error: &DataError) -> String {
         DataError::NameNotUtf8(detail) => {
             format!("{}: {detail}", strings::get(lang, Key::ErrNameNotUtf8))
         }
+        DataError::VaultNotAbsolute(path) => {
+            format!("{}: {path}", strings::get(lang, Key::ErrVaultNotAbsolute))
+        }
     }
 }
 

@@ -246,6 +246,7 @@ pub enum Key {
     ErrVaultMissing,
     ErrConfigUnreadable,
     ErrNameNotUtf8,
+    ErrVaultNotAbsolute,
 }
 
 impl Key {
@@ -383,6 +384,7 @@ impl Key {
         Key::ErrVaultMissing,
         Key::ErrConfigUnreadable,
         Key::ErrNameNotUtf8,
+        Key::ErrVaultNotAbsolute,
     ];
 }
 
@@ -679,6 +681,10 @@ fn table(key: Key) -> (&'static str, &'static str) {
             "this folder's name cannot be displayed correctly",
             "bu klasörün adı doğru şekilde görüntülenemiyor",
         ),
+        ErrVaultNotAbsolute => (
+            "The vault path in config.toml is not absolute, so it is refused rather than guessed at",
+            "config.toml içindeki kasa yolu mutlak değil, bu yüzden tahmin etmek yerine reddedildi",
+        ),
     }
 }
 
@@ -837,7 +843,7 @@ mod tests {
         assert_eq!(before, seen.len(), "Key::ALL contains a duplicate");
         assert_eq!(
             Key::ALL.len(),
-            127,
+            128,
             "Key::ALL is out of step with the enum — add the new key to it"
         );
     }
