@@ -37,6 +37,7 @@ use std::sync::{Arc, Mutex};
 use slint::ComponentHandle;
 
 use crate::AppWindow;
+use crate::config::Config;
 use crate::data::Paths;
 use crate::editor::Editors;
 use crate::export::Exports;
@@ -211,21 +212,47 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<Item>, bytes: &mut u64) -> Result
 
     for path in paths {
         // Symlinks are copied as whatever they point at rather than followed
-        // into a loop: `metadata` follows, and a vault is not a place anybody
-        // should have built a cycle, but a cycle would otherwise hang the
-        // survey rather than fail it.
-        let meta = fs::symlink_metadata(&path).map_err(|e| Failure::Read(e.to_string()))?;
-        if meta.is_dir() {
+        // into a loop: `symlink_metadata` decides *that* without following, so
+        // a symlink to a directory is recorded as a leaf here rather than
+        // recursed into forever.
+        let link_meta = fs::symlink_metadata(&path).map_err(|e| Failure::Read(e.to_string()))?;
+        if link_meta.is_dir() {
             walk(root, &path, out, bytes)?;
-        } else {
-            let len = meta.len();
+            continue;
+        }
+
+        let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+        if link_meta.is_file() {
+            let len = link_meta.len();
             *bytes += len;
-            let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
             out.push(Item {
                 relative,
                 bytes: len,
             });
+            continue;
         }
+
+        // Whatever is left is a symlink to a file (a symlink to a directory
+        // was handled above), a dangling symlink, a FIFO, a socket or a device
+        // node. A symlink's own `symlink_metadata` length is the byte length of
+        // the link's *target text*, not of the file it points at — recording
+        // that and then having the copy step follow the link, which it must to
+        // actually copy the file the link stands in for, would hand `verify` a
+        // number that can never match what was really written. Resolving once,
+        // here, is what makes the size this function records the same number
+        // the copy step produces; and it is also what turns a symlink into
+        // `/dev/zero` or a FIFO that would otherwise hang or fill the disk
+        // into a refusal before a single byte moves.
+        let real = fs::metadata(&path).map_err(|e| Failure::Read(format!("{}: {e}", path.display())))?;
+        if !real.is_file() {
+            return Err(Failure::Read(format!(
+                "{}: not a plain file or a symlink to one — move it out of the vault by hand first",
+                path.display()
+            )));
+        }
+        let len = real.len();
+        *bytes += len;
+        out.push(Item { relative, bytes: len });
     }
     Ok(())
 }
@@ -235,9 +262,16 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<Item>, bytes: &mut u64) -> Result
 /// The window is rung on every file rather than only at the end, which is the
 /// one way this differs from `export.rs`'s worker — an export produces a file
 /// and says so, a move produces minutes of silence unless it reports itself.
-pub fn commit(job: Job, survey: Survey, shared: Arc<Mutex<Shared>>, weak: slint::Weak<AppWindow>) {
+pub fn commit(
+    job: Job,
+    survey: Survey,
+    config_path: PathBuf,
+    data_dir: PathBuf,
+    shared: Arc<Mutex<Shared>>,
+    weak: slint::Weak<AppWindow>,
+) {
     std::thread::spawn(move || {
-        let outcome = run(job, survey, &|progress| {
+        let outcome = run(job, survey, &config_path, &data_dir, &|progress| {
             if let Ok(mut shared) = shared.lock() {
                 shared.progress = progress;
             }
@@ -254,12 +288,13 @@ pub fn commit(job: Job, survey: Survey, shared: Arc<Mutex<Shared>>, weak: slint:
     });
 }
 
-/// Move a vault. A plain function of a [`Job`], so the whole of it is testable
-/// by handing it two directories — the same shape `export::run` has.
+/// Move a vault. A plain function of a [`Job`] plus where `config.toml` lives,
+/// so the move itself is testable by handing it two directories — the same
+/// shape `export::run` has — while still being able to record the result.
 ///
 /// `report` is called once per file. In a test it collects; in the app it fills
 /// the shared slot and rings the window.
-pub fn run(job: Job, survey: Survey, report: &dyn Fn(Progress)) -> Outcome {
+pub fn run(job: Job, survey: Survey, config_path: &Path, data_dir: &Path, report: &dyn Fn(Progress)) -> Outcome {
     let Job { from, to } = job;
     let files = survey.files;
 
@@ -277,6 +312,7 @@ pub fn run(job: Job, survey: Survey, report: &dyn Fn(Progress)) -> Outcome {
             bytes_total: survey.bytes,
             current: String::new(),
         });
+        persist_vault(config_path, data_dir, &to);
         return Outcome::Moved { to, files };
     }
 
@@ -292,6 +328,13 @@ pub fn run(job: Job, survey: Survey, report: &dyn Fn(Progress)) -> Outcome {
         }
     }
 
+    // The new location is committed to disk now, while the old vault — the
+    // only copy that could contradict it — still exists as a fallback if this
+    // fails. Doing this after removing the source (the previous order) left a
+    // window, sometimes hours wide until the next clean exit, where
+    // `config.toml` named a vault whose `products/` had already been deleted.
+    persist_vault(config_path, data_dir, &to);
+
     // Only now. Everything above this line is recoverable by doing nothing.
     if let Err(e) = fs::remove_dir_all(&source_products) {
         // The copy is verified and complete, so the documents are safe in the
@@ -303,6 +346,44 @@ pub fn run(job: Job, survey: Survey, report: &dyn Fn(Progress)) -> Outcome {
     Outcome::Moved { to, files }
 }
 
+/// Record the vault's new location in `config.toml`, right after the copy (or
+/// rename) verifies and before the old vault is touched.
+///
+/// A read-modify-write of the file already on disk, rather than a value
+/// threaded down from the live session: everything else `config.toml` holds —
+/// theme, language, sort, window size — is only ever saved when the window
+/// closes (`main::persist`), so reading what is already there and changing
+/// only `vault` matches that design exactly, and does not need the running
+/// session's in-memory state — which lives behind `Rc`s a background thread
+/// cannot reach — passed down here at all. The window-close save still runs
+/// and still writes the fully current session afterwards; this is only the
+/// safety net for a crash or a kill in between.
+///
+/// Best-effort: a failure here is logged, not propagated. The move has
+/// already copied and verified the documents into `to` (or renamed them
+/// there); refusing to finish it because this one file could not be updated
+/// would trade a recoverable inconvenience — `config.toml` catches up at the
+/// next clean exit, exactly as it always has — for leaving a good copy of the
+/// vault sitting unused while the original is kept past the point it needed
+/// to be.
+fn persist_vault(config_path: &Path, data_dir: &Path, to: &Path) {
+    let mut config = match Config::load(config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!(
+                "parachron: could not read config.toml to record the new vault location ({e}); it will be written when the window closes instead"
+            );
+            return;
+        }
+    };
+    config.vault = to.to_str().filter(|_| to != data_dir).map(str::to_string);
+    if let Err(e) = config.save(config_path) {
+        eprintln!(
+            "parachron: could not record the new vault location in config.toml ({e}); it will be written when the window closes instead"
+        );
+    }
+}
+
 /// Copy every surveyed file, then check the result before anybody deletes
 /// anything.
 fn copy_all(
@@ -311,7 +392,25 @@ fn copy_all(
     survey: &Survey,
     report: &dyn Fn(Progress),
 ) -> Result<(), Failure> {
-    fs::create_dir_all(target).map_err(|e| Failure::Write {
+    // `target`'s parent — the folder the user chose — must already exist.
+    // `create_dir_all` would happily rebuild a chain of missing ancestors, and
+    // a drive that came unmounted between the picker and this call presents
+    // exactly that way: an ordinary, empty, *creatable* directory at the mount
+    // point, on the root filesystem. Building the vault there would put it
+    // where its owner never looked, and plugging the drive back in afterwards
+    // would hide the lot underneath it — on disk, invisible, and impossible to
+    // explain to somebody who did nothing wrong. Requiring the destination to
+    // already be there turns that into a loud failure instead.
+    let destination = target
+        .parent()
+        .expect("target is always <destination>/products");
+    if !destination.is_dir() {
+        return Err(Failure::Write {
+            file: destination.display().to_string(),
+            detail: "the destination no longer exists".to_string(),
+        });
+    }
+    fs::create_dir(target).map_err(|e| Failure::Write {
         file: target.display().to_string(),
         detail: e.to_string(),
     })?;
@@ -322,17 +421,61 @@ fn copy_all(
         let to = target.join(&item.relative);
         let name = item.relative.display().to_string();
 
-        if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent).map_err(|e| Failure::Write {
+        if let Some(parent) = item.relative.parent().filter(|p| !p.as_os_str().is_empty()) {
+            create_dir_without_following_symlinks(target, parent).map_err(|e| Failure::Write {
                 file: name.clone(),
                 detail: e.to_string(),
             })?;
         }
 
-        fs::copy(&from, &to).map_err(|e| Failure::Write {
+        // An exclusive create, not `fs::copy`: `fs::copy` opens the destination
+        // for writing however it finds it, symlink included, and a symlink
+        // planted at exactly this name by another local user (or process) with
+        // write access to the destination — in the moment between this move
+        // creating the product folder and reaching this particular file within
+        // it — would be written through rather than refused. `create_new`
+        // fails on anything already there, symlink or not, and every file this
+        // loop writes is one that should not already exist in a destination
+        // this move itself is populating.
+        let mut writer = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&to)
+            .map_err(|e| Failure::Write {
+                file: name.clone(),
+                detail: e.to_string(),
+            })?;
+        let mut reader = fs::File::open(&from).map_err(|e| Failure::Write {
             file: name.clone(),
             detail: e.to_string(),
         })?;
+        std::io::copy(&mut reader, &mut writer).map_err(|e| Failure::Write {
+            file: name.clone(),
+            detail: e.to_string(),
+        })?;
+        // Without this the file can look copied — `verify` reads it straight
+        // back through the same page cache the write went into — while the
+        // bytes are still only in memory. `write_atomic` in `data.rs` takes
+        // this precaution for a single manifest already, for the same
+        // reason spelled out there: `run` deletes the only other copy right
+        // after this succeeds, and a crash or a pulled drive between "the
+        // kernel says this is written" and "the kernel actually wrote it" is
+        // exactly what turns a reported-successful move into a vault that
+        // is truncated in its new home and already gone from its old one.
+        writer.sync_all().map_err(|e| Failure::Write {
+            file: name.clone(),
+            detail: e.to_string(),
+        })?;
+
+        // Best-effort, unlike the file sync above: this is the directory
+        // entry, not the document's own bytes, and no test in this module —
+        // nor `write_atomic`'s own precedent — treats losing it as the same
+        // class of failure as losing data.
+        if let Some(parent) = to.parent()
+            && let Ok(dir) = fs::File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
 
         bytes_done += item.bytes;
         // After the copy, not before: a bar that reaches 100% and then sits
@@ -346,7 +489,41 @@ fn copy_all(
         });
     }
 
+    // Same best-effort directory sync as inside the loop, for the one
+    // directory the loop never opens on its own: `target` itself.
+    if let Ok(dir) = fs::File::open(target) {
+        let _ = dir.sync_all();
+    }
+
     verify(source, target, survey)
+}
+
+/// Create `target/relative`, refusing to treat a symlink as though it were one
+/// of the directories along the way.
+///
+/// `fs::create_dir_all` does not distinguish a directory this move created a
+/// moment ago (for an earlier file in the same product) from a symlink
+/// planted at that exact path since — both simply "already exist", and
+/// `create_dir_all` walks straight through either. Checking each level with
+/// `symlink_metadata`, which does not follow a link, is what tells them apart.
+fn create_dir_without_following_symlinks(target: &Path, relative: &Path) -> std::io::Result<()> {
+    let mut built = target.to_path_buf();
+    for component in relative.components() {
+        built.push(component);
+        match fs::create_dir(&built) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if !fs::symlink_metadata(&built)?.is_dir() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        format!("{} exists and is not a directory", built.display()),
+                    ));
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 /// Confirm the copy before the source is deleted.
@@ -370,30 +547,41 @@ fn verify(source: &Path, target: &Path, survey: &Survey) -> Result<(), Failure> 
         }
     }
 
-    // A file added to the source while the move was running is not copied, and
-    // silently leaving it behind is the one way this can lose a document without
-    // any step having failed. Parachron does not write to the vault while a move
-    // is in flight — the UI is blocked on it — but nothing else on the machine is
-    // stopped from doing so.
-    let after = survey_count(source)?;
-    if after != survey.files {
-        return Err(Failure::Verify(format!(
-            "the vault changed while it was being moved: {} files now, {} when it started",
-            after, survey.files
-        )));
+    // A file modified, added or removed in the source while the move was
+    // running is invisible to a copy already taken. Comparing only *counts*
+    // (the previous check) misses the shape a sync client's own replace
+    // pattern takes — delete an old name, create the final one — because the
+    // count balances while the actual set of names does not, and the file
+    // that was never copied is deleted for good the moment this trusts that
+    // check. Comparing the full set of names and sizes is what actually proves
+    // nothing changed underneath the move. Parachron does not write to the
+    // vault while a move is in flight — the UI is blocked on it — but nothing
+    // else on the machine is stopped from doing so.
+    let after = resurvey(source)?;
+    let changed = after.len() != survey.items.len()
+        || after.iter().any(|item| {
+            !survey
+                .items
+                .iter()
+                .any(|before| before.relative == item.relative && before.bytes == item.bytes)
+        });
+    if changed {
+        return Err(Failure::Verify(
+            "the vault changed while it was being moved".to_string(),
+        ));
     }
     Ok(())
 }
 
-/// Count the files under a directory, for the changed-underneath check.
-fn survey_count(dir: &Path) -> Result<usize, Failure> {
+/// Re-walk a directory for the changed-underneath check in [`verify`].
+fn resurvey(dir: &Path) -> Result<Vec<Item>, Failure> {
     if !dir.is_dir() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
     let mut items = Vec::new();
     let mut bytes = 0;
     walk(dir, dir, &mut items, &mut bytes)?;
-    Ok(items.len())
+    Ok(items)
 }
 
 // ── Wiring ───────────────────────────────────────────────────────────────
@@ -672,6 +860,20 @@ pub fn install(
             };
             let from = borrowed.paths.vault.clone();
 
+            // Checked again, not only when the folder was picked: the sheet can
+            // sit open indefinitely, and a destination that gained its own
+            // `products/` in that window — a sync client materialising another
+            // machine's vault, a second Parachron instance — must not be
+            // silently merged into.
+            if let Err(refusal) = vet(&from, &to) {
+                let lang = borrowed.lang;
+                borrowed.chosen = None;
+                drop(borrowed);
+                app.set_relocate_status(describe_refusal(lang, &refusal).into());
+                app.set_relocate_failed(true);
+                return;
+            }
+
             // Surveyed again rather than reused: the sheet may have been sitting
             // open, and the worker's totals are what the progress bar divides by.
             let survey = match survey(&from) {
@@ -693,6 +895,8 @@ pub fn install(
             }
             let shared = Arc::clone(&borrowed.shared);
             let lang = borrowed.lang;
+            let config_path = borrowed.paths.config.clone();
+            let data_dir = borrowed.paths.data.clone();
             drop(borrowed);
 
             app.set_relocate_running(true);
@@ -702,7 +906,14 @@ pub fn install(
             app.set_relocate_status(strings::get(lang, Key::RelocateMoving).into());
             app.set_relocate_failed(false);
 
-            commit(Job { from, to }, survey, shared, app.as_weak());
+            commit(
+                Job { from, to },
+                survey,
+                config_path,
+                data_dir,
+                shared,
+                app.as_weak(),
+            );
         }
     });
 
@@ -755,11 +966,15 @@ pub fn install(
 
             match outcome {
                 Outcome::Moved { to, .. } => {
-                    // The config is written only now, and only through the
-                    // session — `main` reads `Relocations::current` on the way
-                    // out. A vault moved back to the default writes no key at
-                    // all rather than the default path longhand.
-                    let default = !borrowed.paths.is_configured() && to == borrowed.paths.data;
+                    // The session's own copy of the config is updated only now
+                    // — `main` reads `Relocations::current` on the way out, and
+                    // `run` has separately already written `config.toml` itself
+                    // as a crash-safety net. A vault moved back to the default
+                    // writes no key at all rather than the default path
+                    // longhand, whether it started as the default or was a
+                    // configured vault moved back — the destination is what
+                    // decides this, not where the vault happened to start.
+                    let default = to == borrowed.paths.data;
                     borrowed.paths = borrowed
                         .paths
                         .clone()
@@ -865,6 +1080,12 @@ mod tests {
         (seen, |_p: Progress| {})
     }
 
+    /// A harmless place for `persist_vault` to write during a test: inside a
+    /// tempdir that outlives the move and is never inspected by these tests.
+    fn no_config(root: &Path) -> (PathBuf, PathBuf) {
+        (root.join("config.toml"), root.join("unused-data-dir"))
+    }
+
     // -- vet -------------------------------------------------------------
 
     #[test]
@@ -960,12 +1181,15 @@ mod tests {
         let survey = survey(from.path()).unwrap();
 
         let (_seen, report) = collector();
+        let (config_path, data_dir) = no_config(from.path());
         let outcome = run(
             Job {
                 from: from.path().to_path_buf(),
                 to: to.path().to_path_buf(),
             },
             survey,
+            &config_path,
+            &data_dir,
             &report,
         );
 
@@ -1081,12 +1305,15 @@ mod tests {
         fs::set_permissions(&target, fs::Permissions::from_mode(0o555)).unwrap();
 
         let (_seen, report) = collector();
+        let (config_path, data_dir) = no_config(from.path());
         let outcome = run(
             Job {
                 from: from.path().to_path_buf(),
                 to: target.clone(),
             },
             survey,
+            &config_path,
+            &data_dir,
             &report,
         );
 
@@ -1127,12 +1354,15 @@ mod tests {
         fs::set_permissions(&target, fs::Permissions::from_mode(0o555)).unwrap();
 
         let (_seen, report) = collector();
+        let (config_path, data_dir) = no_config(from.path());
         let _ = run(
             Job {
                 from: from.path().to_path_buf(),
                 to: target.clone(),
             },
             survey,
+            &config_path,
+            &data_dir,
             &report,
         );
         fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
@@ -1235,12 +1465,15 @@ mod tests {
 
         let survey = survey(from.path()).unwrap();
         let seen = RefCell::new(Vec::new());
+        let (config_path, data_dir) = no_config(from.path());
         let outcome = run(
             Job {
                 from: from.path().to_path_buf(),
                 to: to.path().to_path_buf(),
             },
             survey,
+            &config_path,
+            &data_dir,
             &|p| seen.borrow_mut().push(p),
         );
 
@@ -1272,16 +1505,217 @@ mod tests {
         let survey = survey(from.path()).unwrap();
 
         let (_seen, report) = collector();
+        let (config_path, data_dir) = no_config(from.path());
         let outcome = run(
             Job {
                 from: from.path().to_path_buf(),
                 to: to.path().to_path_buf(),
             },
             survey,
+            &config_path,
+            &data_dir,
             &report,
         );
 
         assert!(matches!(outcome, Outcome::Moved { files: 0, .. }));
         assert!(to.path().join("products").is_dir());
+    }
+
+    // -- config persistence -----------------------------------------------
+
+    /// The bug this module used to have: a crash between a successful move and
+    /// the next clean exit left `config.toml` naming a vault whose `products/`
+    /// had already been deleted. `run` now writes the new location itself,
+    /// before the old vault is touched, rather than relying solely on the
+    /// window-close save.
+    #[test]
+    fn a_successful_move_records_the_new_vault_before_the_source_is_removed() {
+        let from = tempfile::tempdir().unwrap();
+        let to = tempfile::tempdir().unwrap();
+        seed(from.path());
+        let survey = survey(from.path()).unwrap();
+
+        let config_path = from.path().join("config.toml");
+        // Anything other than `to` — a real install's data directory does not
+        // move, so a distinct path here matches every genuine relocation.
+        let data_dir = from.path().to_path_buf();
+
+        let (_seen, report) = collector();
+        let outcome = run(
+            Job {
+                from: from.path().to_path_buf(),
+                to: to.path().to_path_buf(),
+            },
+            survey,
+            &config_path,
+            &data_dir,
+            &report,
+        );
+        assert!(matches!(outcome, Outcome::Moved { .. }));
+
+        let saved = Config::load(&config_path).unwrap();
+        assert_eq!(saved.vault.as_deref(), to.path().to_str());
+    }
+
+    /// A move that lands exactly on the platform's data directory writes no
+    /// `vault` key at all — the same thing an absent key already means — rather
+    /// than the default path spelled out longhand.
+    #[test]
+    fn a_move_to_the_platform_default_records_no_vault_key() {
+        let from = tempfile::tempdir().unwrap();
+        let to = tempfile::tempdir().unwrap();
+        seed(from.path());
+        let survey = survey(from.path()).unwrap();
+
+        let config_path = from.path().join("config.toml");
+
+        let (_seen, report) = collector();
+        let outcome = run(
+            Job {
+                from: from.path().to_path_buf(),
+                to: to.path().to_path_buf(),
+            },
+            survey,
+            &config_path,
+            to.path(),
+            &report,
+        );
+        assert!(matches!(outcome, Outcome::Moved { .. }));
+
+        let saved = Config::load(&config_path).unwrap();
+        assert_eq!(saved.vault, None);
+    }
+
+    // -- the destination must already exist --------------------------------
+
+    /// `create_dir_all` would rebuild a chain of missing ancestors without
+    /// complaint, and a drive that came unmounted between the picker and the
+    /// move presents exactly that way: an ordinary, creatable directory at the
+    /// mount point. `copy_all` must refuse rather than build the vault there.
+    #[test]
+    fn copy_all_refuses_a_destination_whose_parent_does_not_exist() {
+        let from = tempfile::tempdir().unwrap();
+        let to = tempfile::tempdir().unwrap();
+        seed(from.path());
+        let survey = survey(from.path()).unwrap();
+
+        let unmounted = to.path().join("not-actually-mounted");
+        let (_seen, report) = collector();
+        let failure = copy_all(
+            &from.path().join("products"),
+            &unmounted.join("products"),
+            &survey,
+            &report,
+        )
+        .expect_err("a destination that does not exist must not be created");
+        assert!(matches!(failure, Failure::Write { .. }), "{failure:?}");
+        assert!(
+            !unmounted.exists(),
+            "the missing mount point must not have been resurrected as an ordinary directory"
+        );
+    }
+
+    // -- symlink-safe directory creation ------------------------------------
+
+    #[cfg(unix)]
+    #[test]
+    fn create_dir_without_following_symlinks_refuses_a_symlink_standing_in_for_a_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        symlink(elsewhere.path(), root.path().join("sarj-cihazi")).unwrap();
+
+        let err = create_dir_without_following_symlinks(root.path(), Path::new("sarj-cihazi"))
+            .expect_err("a symlink standing in for the directory must be refused, not trusted");
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+    }
+
+    /// A product with more than one document calls this twice for the same
+    /// folder — the second call must not fail just because the first already
+    /// created it.
+    #[test]
+    fn create_dir_without_following_symlinks_is_idempotent_for_a_real_directory() {
+        let root = tempfile::tempdir().unwrap();
+        create_dir_without_following_symlinks(root.path(), Path::new("sarj-cihazi")).unwrap();
+        create_dir_without_following_symlinks(root.path(), Path::new("sarj-cihazi")).unwrap();
+        assert!(root.path().join("sarj-cihazi").is_dir());
+    }
+
+    // -- symlinks in the source vault ---------------------------------------
+
+    /// A symlink's own `symlink_metadata` length is the byte length of the
+    /// link's target *text*, not of the file it points at. Recording that and
+    /// then having the copy follow the link — which it must, to copy the file
+    /// the link stands in for — would hand `verify` a number that can never
+    /// match what was actually written.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_a_file_surveys_at_the_size_of_what_it_points_to() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let products = dir.path().join("products");
+        fs::create_dir_all(products.join("sarj-cihazi")).unwrap();
+        let real = dir.path().join("real-invoice.pdf");
+        fs::write(&real, "abcdefghij").unwrap();
+        symlink(&real, products.join("sarj-cihazi/invoice.pdf")).unwrap();
+
+        let survey = survey(dir.path()).unwrap();
+        assert_eq!(survey.files, 1);
+        assert_eq!(
+            survey.bytes, 10,
+            "the symlink's own path length was recorded instead of its target's size"
+        );
+    }
+
+    /// A link to nothing cannot be "copied as whatever it points at" — the one
+    /// thing this module's own doc comment says a symlink in the vault gets.
+    /// Refusing it up front is the same choice this module makes everywhere
+    /// else a move cannot proceed safely: loud, and before a byte moves.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_in_the_vault_is_refused_rather_than_silently_mis_measured() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let products = dir.path().join("products");
+        fs::create_dir_all(products.join("sarj-cihazi")).unwrap();
+        symlink(
+            dir.path().join("nowhere.pdf"),
+            products.join("sarj-cihazi/invoice.pdf"),
+        )
+        .unwrap();
+
+        let Err(failure) = survey(dir.path()) else {
+            panic!("a link to nothing must not be silently sized as zero");
+        };
+        assert!(matches!(failure, Failure::Read(_)));
+    }
+
+    // -- verify sees more than a count ---------------------------------------
+
+    /// A file replaced by a same-sized, differently-named one leaves the count
+    /// unchanged — exactly what a sync client's own replace pattern (delete an
+    /// old temp name, create the final one) looks like. The count-only check
+    /// this module used to have would sail straight through it.
+    #[test]
+    fn verification_catches_a_same_count_replacement_underneath_the_move() {
+        let from = tempfile::tempdir().unwrap();
+        let to = tempfile::tempdir().unwrap();
+        seed(from.path());
+        let survey = survey(from.path()).unwrap();
+
+        let source = from.path().join("products");
+        let target = to.path().join("products");
+        let (_seen, report) = collector();
+        copy_all(&source, &target, &survey, &report).unwrap();
+
+        fs::remove_file(source.join("sarj-cihazi/warranty.pdf")).unwrap();
+        fs::write(source.join("sarj-cihazi/warranty-2.pdf"), "xxx").unwrap();
+
+        let failure = verify(&source, &target, &survey)
+            .expect_err("a same-sized file under a different name must not verify");
+        assert!(matches!(failure, Failure::Verify(_)), "{failure:?}");
     }
 }
