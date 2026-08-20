@@ -6,20 +6,23 @@
 <h1 align="center">PARACHRON</h1>
 <p align="center"><strong>A desktop vault for your purchases.</strong></p>
 
-<div align="center">
-
-<a href="https://github.com/sudo-megas/PARACHRON/releases/latest"><img src="https://img.shields.io/github/v/release/sudo-megas/PARACHRON?label=latest&color=6c8cd5&style=for-the-badge" height="60" alt="Latest version"></a>
-<a href="https://github.com/sudo-megas/PARACHRON/releases/latest"><img src="https://img.shields.io/github/release-date/sudo-megas/PARACHRON?label=released&color=6c8cd5&style=for-the-badge" height="60" alt="Release date"></a>
-<a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-green?style=for-the-badge" height="60" alt="License"></a>
-
-</div>
+<p align="center">
+  <a href="https://github.com/sudo-megas/PARACHRON/actions/workflows/ci.yml"><img src="https://github.com/sudo-megas/PARACHRON/actions/workflows/ci.yml/badge.svg" height="60" alt="CI"></a>
+</p>
 
 <p align="center">
   <img alt="Arch Linux package" src="https://img.shields.io/badge/Arch%20Linux-13.2%20MB-1793D1?style=for-the-badge&logo=archlinux&logoColor=white">
   <img alt="Debian package"     src="https://img.shields.io/badge/Debian-9.95%20MB-A80030?style=for-the-badge&logo=debian&logoColor=white">
   <img alt="Windows installer"  src="https://img.shields.io/badge/Windows-23.9%20MB-0078D6?style=for-the-badge&logo=windows&logoColor=white">
-  <a href="https://github.com/sudo-megas/PARACHRON/actions/workflows/ci.yml"><img src="https://github.com/sudo-megas/PARACHRON/actions/workflows/ci.yml/badge.svg" height="60" alt="CI"></a>
+
 </p>
+
+<p align="center">
+  <img alt="Version"      src="https://img.shields.io/badge/version-v1.1.0-37D9F1?style=for-the-badge">
+  <img alt="Release date" src="https://img.shields.io/badge/released-13--08--2026-5F4590?style=for-the-badge">
+  <img alt="Licence"      src="https://img.shields.io/badge/license-Affero GPL--3.0-82ABBD?style=for-the-badge">
+</p>
+
 
 ---
 
