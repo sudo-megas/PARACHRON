@@ -11,9 +11,9 @@
 </p>
 
 <p align="center">
-  <img alt="Arch Linux package" src="https://img.shields.io/badge/Arch%20Linux-13.2%20MB-1793D1?style=for-the-badge&logo=archlinux&logoColor=white">
-  <img alt="Debian package"     src="https://img.shields.io/badge/Debian-9.95%20MB-A80030?style=for-the-badge&logo=debian&logoColor=white">
-  <img alt="Windows installer"  src="https://img.shields.io/badge/Windows-23.9%20MB-0078D6?style=for-the-badge&logo=windows&logoColor=white">
+  <img alt="Arch Linux package" src="https://img.shields.io/badge/Arch%20Linux-13.3%20MB-1793D1?style=for-the-badge&logo=archlinux&logoColor=white">
+  <img alt="Debian package"     src="https://img.shields.io/badge/Debian-9.97%20MB-A80030?style=for-the-badge&logo=debian&logoColor=white">
+  <img alt="Windows installer"  src="https://img.shields.io/badge/Windows-24%20MB-0078D6?style=for-the-badge&logo=windows&logoColor=white">
 
 </p>
 
